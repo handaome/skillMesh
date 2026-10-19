@@ -11,6 +11,7 @@ import (
 func newSearchCmd() *cobra.Command {
 	var visibility, tag string
 	var limit int
+	var mine bool
 	cmd := &cobra.Command{
 		Use:   "search [关键字]",
 		Short: "搜索可见的 Skill",
@@ -24,7 +25,7 @@ func newSearchCmd() *cobra.Command {
 			if len(args) == 1 {
 				keyword = args[0]
 			}
-			page, err := client.Search(cmd.Context(), keyword, visibility, tag, limit, "")
+			page, err := client.Search(cmd.Context(), keyword, visibility, tag, mine, limit, "")
 			if err != nil {
 				return err
 			}
@@ -54,5 +55,6 @@ func newSearchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&visibility, "visibility", "", "按可见性过滤：private/team/organization/public")
 	cmd.Flags().StringVar(&tag, "tag", "", "按标签过滤")
 	cmd.Flags().IntVar(&limit, "limit", 20, "返回条数")
+	cmd.Flags().BoolVar(&mine, "mine", false, "只搜我名下的 Skill（个人私有空间）")
 	return cmd
 }

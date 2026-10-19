@@ -119,6 +119,29 @@ class SkillControllerTest {
             .andExpect(status().isNotFound());
     }
 
+    @Test
+    void mine只看自己名下换设备恢复用() throws Exception {
+        create("mine-private", "Mine Private", "d", "x");
+        UUID othersPublic = create("others-public", "Others Public", "d", "x");
+        jdbc.update("update skills set owner_user_id = ?, visibility = 'public' where id = ?",
+            otherUserId(), othersPublic);
+
+        // 默认搜索能看到别人的 public
+        assertThat(slugsOf(get("/api/v1/skills"))).contains("others-public");
+        // mine=true 只留自己的，换设备恢复时不该把别人的东西装回来
+        assertThat(slugsOf(get("/api/v1/skills").param("mine", "true")))
+            .containsExactly("mine-private");
+    }
+
+    private Set<String> slugsOf(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder
+                                request) throws Exception {
+        String body = mockMvc.perform(request.header("Authorization", auth))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        Set<String> slugs = new HashSet<>();
+        json.readTree(body).path("items").forEach(n -> slugs.add(n.path("slug").asText()));
+        return slugs;
+    }
+
     private UUID otherUserId() {
         UUID id = UUID.randomUUID();
         jdbc.update("insert into users (id, oidc_issuer, oidc_subject, display_name, status) "

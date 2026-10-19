@@ -22,7 +22,7 @@ func TestSearch透传查询参数并解析游标(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	page, err := New(srv.URL, "tok", 0).Search(context.Background(), "java", "private", "", 10, "")
+	page, err := New(srv.URL, "tok", 0).Search(context.Background(), "java", "private", "", false, 10, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func Test请求带上Bearer令牌(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL, "secret-token", 0).Search(context.Background(), "", "", "", 0, ""); err != nil {
+	if _, err := New(srv.URL, "secret-token", 0).Search(context.Background(), "", "", "", false, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	if gotAuth != "Bearer secret-token" {

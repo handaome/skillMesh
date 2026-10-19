@@ -85,7 +85,7 @@ func (c *Client) CreateSkill(ctx context.Context, req CreateSkillRequest) (Skill
 func (c *Client) FindSkillBySlug(ctx context.Context, slug string) (Skill, bool, error) {
 	cursor := ""
 	for {
-		page, err := c.Search(ctx, slug, "", "", 100, cursor)
+		page, err := c.Search(ctx, slug, "", "", false, 100, cursor)
 		if err != nil {
 			return Skill{}, false, err
 		}

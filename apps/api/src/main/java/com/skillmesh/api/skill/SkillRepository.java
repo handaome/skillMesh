@@ -32,6 +32,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
                or lower(s.slug) like :q or lower(s.description) like :q)
           and (cast(:visibility as text) is null or s.visibility = :visibility)
           and (cast(:tag as text) is null or :tag = any(s.tags))
+          and (not cast(:mine as boolean) or s.owner_user_id = :owner)
           and s.status = 'active'
           and (cast(:cursorTime as timestamptz) is null
                or (s.updated_at, s.id) < (:cursorTime, :cursorId))
@@ -41,6 +42,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
                              @Param("q") String q,
                              @Param("visibility") String visibility,
                              @Param("tag") String tag,
+                             @Param("mine") boolean mine,
                              @Param("cursorTime") OffsetDateTime cursorTime,
                              @Param("cursorId") UUID cursorId,
                              Pageable pageable);

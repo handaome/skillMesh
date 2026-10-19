@@ -63,7 +63,7 @@ public class SkillService {
 
     @Transactional(readOnly = true)
     public SkillPage search(CurrentUser user, String q, String visibility, String tag,
-                            Integer limit, String cursor) {
+                            boolean mine, Integer limit, String cursor) {
         int size = limit == null ? 20 : Math.clamp(limit, 1, MAX_LIMIT);
         OffsetDateTime cursorTime = null;
         UUID cursorId = null;
@@ -73,7 +73,7 @@ public class SkillService {
             cursorId = UUID.fromString(parts[1]);
         }
         List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibility, tag,
-            cursorTime, cursorId, PageRequest.of(0, size + 1));
+            mine, cursorTime, cursorId, PageRequest.of(0, size + 1));
         boolean hasMore = rows.size() > size;
         List<SkillEntity> page = hasMore ? rows.subList(0, size) : rows;
         List<SkillResponse> items = new ArrayList<>(page.size());

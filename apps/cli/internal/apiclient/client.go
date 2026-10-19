@@ -79,7 +79,8 @@ func (c *Client) Me(ctx context.Context) (MeResponse, error) {
 	return out, c.do(ctx, http.MethodGet, "/me", nil, &out)
 }
 
-func (c *Client) Search(ctx context.Context, q, visibility, tag string, limit int, cursor string) (SkillPage, error) {
+func (c *Client) Search(ctx context.Context, q, visibility, tag string, mine bool,
+	limit int, cursor string) (SkillPage, error) {
 	query := url.Values{}
 	if q != "" {
 		query.Set("q", q)
@@ -89,6 +90,9 @@ func (c *Client) Search(ctx context.Context, q, visibility, tag string, limit in
 	}
 	if tag != "" {
 		query.Set("tag", tag)
+	}
+	if mine {
+		query.Set("mine", "true")
 	}
 	if limit > 0 {
 		query.Set("limit", strconv.Itoa(limit))

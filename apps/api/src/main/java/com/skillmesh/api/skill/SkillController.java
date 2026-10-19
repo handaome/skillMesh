@@ -42,9 +42,10 @@ public class SkillController {
                           @RequestParam(required = false) String q,
                           @RequestParam(required = false) String visibility,
                           @RequestParam(required = false) String tag,
+                          @RequestParam(defaultValue = "false") boolean mine,
                           @RequestParam(required = false) Integer limit,
                           @RequestParam(required = false) String cursor) {
-        return skills.search(currentUserService.current(jwt), q, visibility, tag, limit, cursor);
+        return skills.search(currentUserService.current(jwt), q, visibility, tag, mine, limit, cursor);
     }
 
     @GetMapping("/{skillId}")
