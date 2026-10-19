@@ -17,6 +17,7 @@ import com.skillmesh.api.version.dto.VersionPage;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -60,7 +61,7 @@ public class SkillVersionService {
         version.setChannel(req.channel());
         version.setSourceCommit(req.source_commit());
         version.setChangelog(req.changelog() == null ? "" : req.changelog());
-        version.setManifestJson(Map.of());
+        version.setManifestJson(toManifestJson(req.manifest()));
         version.setStatus("draft");
         version.setCreatedBy(user.id());
         version.setCreatedAt(now);
@@ -101,10 +102,39 @@ public class SkillVersionService {
             }
             items.add(new SkillVersionResponse(version.getId(), version.getSkillId(),
                 version.getVersion(), version.getChannel(), version.getStatus(),
-                version.getSourceCommit(), summary, version.getPublishedAt(),
-                version.getCreatedAt()));
+                version.getSourceCommit(), summary, manifestOf(version),
+                version.getPublishedAt(), version.getCreatedAt()));
         }
         return new VersionPage(items, null, false);
+    }
+
+    /**
+     * 逐文件清单随版本一起存（skill_versions.manifest_json）。
+     * 客户端靠它判断内容是否真的变了——只比 zip 摘要，会把「文件权限位不同、
+     * 内容一样」误判成变更（设计文档 §6.2 的规范化摘要）。
+     */
+    private List<SkillVersionResponse.ManifestEntry> manifestOf(SkillVersionEntity version) {
+        List<SkillVersionResponse.ManifestEntry> entries = new ArrayList<>();
+        for (Map<String, Object> item : version.getManifestJson()) {
+            entries.add(new SkillVersionResponse.ManifestEntry(
+                String.valueOf(item.get("path")),
+                String.valueOf(item.get("sha256")),
+                ((Number) item.getOrDefault("size_bytes", 0)).longValue()));
+        }
+        return entries;
+    }
+
+    /** 请求里的 manifest 是 record，转成能存进 jsonb 的 Map 列表。 */
+    private List<Map<String, Object>> toManifestJson(List<CreateVersionRequest.ManifestEntry> manifest) {
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (CreateVersionRequest.ManifestEntry item : manifest) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("path", item.path());
+            entry.put("sha256", item.sha256());
+            entry.put("size_bytes", item.size_bytes());
+            entries.add(entry);
+        }
+        return entries;
     }
 
     SkillEntity requireVisibleSkill(CurrentUser user, UUID skillId) {

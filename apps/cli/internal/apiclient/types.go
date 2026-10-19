@@ -37,6 +37,7 @@ type SkillVersion struct {
 	Status       string           `json:"status"`
 	SourceCommit *string          `json:"source_commit"`
 	Artifact     *ArtifactSummary `json:"artifact"`
+	Manifest     []ManifestEntry  `json:"manifest"`
 	PublishedAt  *string          `json:"published_at"`
 	CreatedAt    string           `json:"created_at"`
 }

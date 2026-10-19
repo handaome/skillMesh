@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -40,7 +41,7 @@ public class SkillVersionEntity {
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "manifest_json", columnDefinition = "jsonb", nullable = false)
-    private Map<String, Object> manifestJson;
+    private List<Map<String, Object>> manifestJson;
 
     @Column(nullable = false)
     private String status;
@@ -127,11 +128,11 @@ public class SkillVersionEntity {
         this.changelog = changelog;
     }
 
-    public Map<String, Object> getManifestJson() {
+    public List<Map<String, Object>> getManifestJson() {
         return manifestJson;
     }
 
-    public void setManifestJson(Map<String, Object> manifestJson) {
+    public void setManifestJson(List<Map<String, Object>> manifestJson) {
         this.manifestJson = manifestJson;
     }
 

@@ -123,6 +123,26 @@ func Test隐藏文件不进包(t *testing.T) {
 	}
 }
 
+// 同步靠制品摘要判重：同一份内容重复打包必须得到同一个 sha256，
+// 否则「内容没变」也会被当成新版本反复上传。
+func Test同一内容重复打包摘要一致(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "SKILL.md"), "# Demo\n", 0o644)
+	write(t, filepath.Join(dir, "references", "a.md"), "a\n", 0o644)
+
+	first, err := Pack(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Pack(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SHA256 != second.SHA256 {
+		t.Fatalf("两次打包摘要不同：%s vs %s", first.SHA256, second.SHA256)
+	}
+}
+
 func Test空目录报错(t *testing.T) {
 	if _, err := Pack(t.TempDir()); err == nil {
 		t.Fatal("期望空目录报错")
