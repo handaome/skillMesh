@@ -50,8 +50,7 @@ func Clone(ctx context.Context, repo, ref, dest string) (string, error) {
 		cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("git %s 失败: %w\n%s",
-				strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+			return "", gitError(args, err, string(out))
 		}
 		return strings.TrimSpace(string(out)), nil
 	}
@@ -93,7 +92,7 @@ func LsRemote(ctx context.Context, repo, ref string) (string, error) {
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git ls-remote 失败: %w\n%s", err, strings.TrimSpace(string(out)))
+		return "", gitError(args, err, string(out))
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
