@@ -15,6 +15,7 @@ public record SkillVersionResponse(
         @JsonProperty("source_commit") String sourceCommit,
         ArtifactSummary artifact,
         List<ManifestEntry> manifest,
+        ScanSummary scan,
         @JsonProperty("published_at") OffsetDateTime publishedAt,
         @JsonProperty("created_at") OffsetDateTime createdAt) {
 
@@ -26,4 +27,16 @@ public record SkillVersionResponse(
 
     /** 逐文件清单。客户端用它算规范化摘要，判断内容是否真的变了。 */
     public record ManifestEntry(String path, String sha256, @JsonProperty("size_bytes") long sizeBytes) {}
+
+    /** 最近一次扫描结论：装之前给用户看的风险来源。 */
+    public record ScanSummary(
+            @JsonProperty("scanner_name") String scannerName,
+            @JsonProperty("scanner_version") String scannerVersion,
+            String status,
+            String summary,
+            @JsonProperty("completed_at") OffsetDateTime completedAt,
+            List<Finding> findings) {
+
+        public record Finding(String path, int line, String rule, String detail) {}
+    }
 }

@@ -5,14 +5,23 @@ import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.scan.ArtifactScanner;
+import com.skillmesh.api.scan.ScanEntity;
+import com.skillmesh.api.scan.ScanRepository;
+import com.skillmesh.api.scan.ScanResult;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.dto.UploadSession;
+import java.io.InputStream;
+import com.skillmesh.api.artifact.ArtifactStorage;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,13 +37,20 @@ public class UploadService {
     private final SkillVersionRepository versions;
     private final SkillRepository skills;
     private final ArtifactService artifacts;
+    private final ArtifactStorage storage;
+    private final ArtifactScanner scanner;
+    private final ScanRepository scans;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
-                         SkillRepository skills, ArtifactService artifacts) {
+                         SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
+                         ArtifactScanner scanner, ScanRepository scans) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
         this.artifacts = artifacts;
+        this.storage = storage;
+        this.scanner = scanner;
+        this.scans = scans;
     }
 
     @Transactional
@@ -79,16 +95,21 @@ public class UploadService {
             promoted.sizeBytes(), 1, List.of());
 
         version.setArtifactId(artifact.getId());
-        version.setStatus("published");
-        version.setPublishedBy(user.id());
-        version.setPublishedAt(now);
+        ScanResult scan = runScan(version, storage.get(finalKey));
+        version.setStatus(scan.blocked() ? "rejected" : "published");
+        if (!scan.blocked()) {
+            version.setPublishedBy(user.id());
+            version.setPublishedAt(now);
+        }
         versions.save(version);
 
-        skills.findById(version.getSkillId()).ifPresent(skill -> {
-            skill.setLatestVersion(version.getVersion());
-            skill.setUpdatedAt(now);
-            skills.save(skill);
-        });
+        if (!scan.blocked()) {
+            skills.findById(version.getSkillId()).ifPresent(skill -> {
+                skill.setLatestVersion(version.getVersion());
+                skill.setUpdatedAt(now);
+                skills.save(skill);
+            });
+        }
 
         session.setStatus("completed");
         session.setVerifiedAt(now);
@@ -97,5 +118,39 @@ public class UploadService {
 
         return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
             session.getExpiresAt(), promoted.sha256(), null);
+    }
+
+    /**
+     * 制品定版之后立刻扫一遍，结论落 skill_scans。
+     * 命中阻断规则就不发布——服务端这份才是准的，绕开 CLI 上传也一样（设计文档 §10）。
+     */
+    private ScanResult runScan(SkillVersionEntity version, InputStream content) {
+        ScanResult result = scanner.scan(content);
+        OffsetDateTime completed = OffsetDateTime.now(ZoneOffset.UTC);
+        ScanEntity row = new ScanEntity();
+        row.setId(UUID.randomUUID());
+        row.setSkillVersionId(version.getId());
+        row.setScannerName(ArtifactScanner.NAME);
+        row.setScannerVersion(ArtifactScanner.VERSION);
+        row.setStatus(result.status());
+        row.setFindingsJson(toJson(result.findings()));
+        row.setSummary(result.summary());
+        row.setStartedAt(completed.minusNanos(result.durationMs() * 1_000_000L));
+        row.setCompletedAt(completed);
+        scans.save(row);
+        return result;
+    }
+
+    private List<Map<String, Object>> toJson(List<ScanResult.Finding> findings) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ScanResult.Finding finding : findings) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("path", finding.path());
+            entry.put("line", finding.line());
+            entry.put("rule", finding.rule());
+            entry.put("detail", finding.detail());
+            out.add(entry);
+        }
+        return out;
     }
 }

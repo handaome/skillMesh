@@ -154,6 +154,48 @@ class VersionFlowTest {
         assertThat(downloaded).isEqualTo(zip);
     }
 
+    /**
+     * 服务端独立扫描：含真实凭据的包不能发布（详细设计 §10、§15.1）。
+     * 这条不依赖客户端——绕开 CLI 直接 POST 也得被拦。
+     */
+    @Test
+    void 含凭据的包被服务端扫描拦下() throws Exception {
+        UUID skillId = createSkill("leaky");
+        byte[] zip = zipOf("SKILL.md", "# Leaky\n\nexport AWS_KEY=AKIAIOSFODNN7EXAMPLE\n");
+
+        String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(versionBody("1.0.0", zip)))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        var node = json.readTree(created);
+        putToStorage(node.path("upload").path("url").asText(), zip);
+        mockMvc.perform(post("/api/v1/uploads/{id}/complete",
+                node.path("upload").path("session_id").asText())
+                .header("Authorization", auth))
+            .andExpect(status().isAccepted());
+
+        mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items[0].status").value("rejected"))
+            .andExpect(jsonPath("$.items[0].scan.status").value("failed"))
+            .andExpect(jsonPath("$.items[0].scan.scanner_name").value("skillmesh-server-scan"))
+            .andExpect(jsonPath("$.items[0].scan.findings[0].rule").value("AWS Access Key"));
+    }
+
+    /** 干净包扫描通过，版本照常发布。 */
+    @Test
+    void 干净包扫描通过照常发布() throws Exception {
+        UUID skillId = createSkill("clean");
+        byte[] zip = zipOf("SKILL.md", "# Clean\n\n用 your-key-here 这种占位符没问题。\n");
+        publishVersion(skillId, "1.0.0", zip);
+        mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth))
+            .andExpect(jsonPath("$.items[0].status").value("published"))
+            .andExpect(jsonPath("$.items[0].scan.status").value("passed"));
+    }
+
     /** 发布一个版本并完成上传，返回版本列表里该版本那一项的 JSON。 */
     private String publishVersion(UUID skillId, String version, byte[] zip) throws Exception {
         String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)

@@ -12,6 +12,8 @@ import com.skillmesh.api.upload.UploadSessionRepository;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionResponse.UploadTarget;
+import com.skillmesh.api.scan.ScanEntity;
+import com.skillmesh.api.scan.ScanRepository;
 import com.skillmesh.api.version.dto.SkillVersionResponse;
 import com.skillmesh.api.version.dto.VersionPage;
 import java.time.OffsetDateTime;
@@ -32,12 +34,14 @@ public class SkillVersionService {
     private final UploadSessionRepository uploads;
     private final ArtifactService artifacts;
     private final ArtifactStorage storage;
+    private final ScanRepository scans;
 
-    public SkillVersionService(SkillVersionRepository versions, SkillRepository skills,
+    public SkillVersionService(ScanRepository scans, SkillVersionRepository versions, SkillRepository skills,
                                UploadSessionRepository uploads, ArtifactService artifacts,
                                ArtifactStorage storage) {
         this.versions = versions;
         this.skills = skills;
+        this.scans = scans;
         this.uploads = uploads;
         this.artifacts = artifacts;
         this.storage = storage;
@@ -102,7 +106,7 @@ public class SkillVersionService {
             }
             items.add(new SkillVersionResponse(version.getId(), version.getSkillId(),
                 version.getVersion(), version.getChannel(), version.getStatus(),
-                version.getSourceCommit(), summary, manifestOf(version),
+                version.getSourceCommit(), summary, manifestOf(version), scanOf(version),
                 version.getPublishedAt(), version.getCreatedAt()));
         }
         return new VersionPage(items, null, false);
@@ -122,6 +126,13 @@ public class SkillVersionService {
                 ((Number) item.getOrDefault("size_bytes", 0)).longValue()));
         }
         return entries;
+    }
+
+    /** 最近一次扫描结论，没有就返回 null——没扫过和扫过是两回事，不能混。 */
+    private SkillVersionResponse.ScanSummary scanOf(SkillVersionEntity version) {
+        return scans.findFirstBySkillVersionIdOrderByStartedAtDesc(version.getId())
+            .map(ScanEntity::toSummary)
+            .orElse(null);
     }
 
     /** 请求里的 manifest 是 record，转成能存进 jsonb 的 Map 列表。 */
