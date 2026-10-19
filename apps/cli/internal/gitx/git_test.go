@@ -33,6 +33,7 @@ func TestNormalizeURL接受合法地址(t *testing.T) {
 	for _, good := range []string{
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
+		"ssh://git@github.com/owner/repo.git",
 		"https://git.example.com/team/skills.git",
 	} {
 		got, err := NormalizeURL(good)

@@ -85,7 +85,7 @@ cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 # 登录（浏览器授权码 + PKCE，令牌存进系统凭据管理器）
 ./skillmesh.exe login --issuer http://127.0.0.1:8180/kc/realms/skillmesh
 
-# 搜索与查看
+# 搜索与查看（search 最后一列是完整 ID，直接喂给 install）
 ./skillmesh.exe search java
 ./skillmesh.exe info <skill-id>
 
@@ -96,6 +96,10 @@ cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 
 # 从注册中心安装（SkillMesh 云端已发布的版本）
 ./skillmesh.exe install <skill-id> --agent claude-code --scope user
+
+# 发布本地 Skill
+./skillmesh.exe publish ./skills/java-debug
+./skillmesh.exe rollback java-debug --to 1.0.0
 
 # 本地项目状态
 ./skillmesh.exe list
@@ -218,6 +222,8 @@ Skill java-debug
 
 从 SkillMesh 云端拉已发布的版本。`--version` 指定版本（不填取最新已发布的），`--dry-run` 只演练不落盘。
 
+装完会写进 `skillmesh.lock.yaml`（Skill ID、版本号、制品 SHA-256、作用域、目标 Agent），所以 `list` 立刻能看到它，CI 的 `--locked` 才有东西可比对。装完还会打印一行许可证识别结果和密钥风险提示——识别只是粗匹配，**不代表可以再分发**，条款要自己看。
+
 CI 里没有浏览器也没有凭据管理器，用环境变量传令牌：
 
 ```bash
@@ -240,7 +246,7 @@ export SKILLMESH_TOKEN=<access-token>
 流程：
 
 ```text
-校验本地目录 → 打成 zip（SKILL.md 在包根）→ 算整包 SHA-256 与逐文件 manifest
+校验本地目录 → 扫密钥 → 打成 zip（SKILL.md 在包根）→ 算整包 SHA-256 与逐文件 manifest
   → 按 slug 查云端，没有就建（建完直接就是 published）
   → 建版本 → 拿 presigned URL 直传对象存储
   → 服务端重算 SHA-256、比对、转正为不可变制品、置 published
@@ -248,7 +254,7 @@ export SKILLMESH_TOKEN=<access-token>
 
 | 参数 | 作用 |
 | --- | --- |
-| `<path>` | 本地 Skill 目录 |
+| `<path>` | 本地 Skill 目录。**在 Skill 目录里敲 `publish .` 就行**，slug 取目录名 |
 | `--all` | 发布目录树里的**全部** Skill |
 | `--version` | 版本号。不填就在云端已有版本上**累加 patch 位**（1.0.0 → 1.0.1） |
 | `--visibility` | `private`（默认）或 `public`。v1 不支持 team/organization（需要组织概念） |
@@ -257,28 +263,44 @@ export SKILLMESH_TOKEN=<access-token>
 | `--name` | 覆盖展示名。默认取 `SKILL.md` frontmatter 的 `name` |
 | `--description` | 覆盖描述。默认取 `SKILL.md` frontmatter 的 `description` |
 | `--dry-run` | 只走完流程不真的发布 |
+| `--skip-secret-scan` | 跳过密钥扫描。**只在确认命中是占位符时用** |
 
 **v1 是「创建即发布」**——没有 `draft → scanning → pending_review → published` 的审批流（那是 v2 的团队治理）。这是 spec 里明确标注的有意偏离。
 
 几个注意点：
 
+- **密钥会挡住上传**。扫到 AWS Key、GitHub Token、OpenAI Key、Slack Token、Google API Key 或私钥正文时直接拒绝发布，并指出文件:行号和命中规则。文档里的占位符（`your-key-here`、`<your-token>`）不误伤；真被误伤时确认一遍再用 `--skip-secret-scan`。
 - **版本号自动累加依赖已有版本是语义化版本**。云端已有 `2024-01-01` 这种非语义化版本时，会报错让你用 `--version` 显式指定，不会瞎猜。
 - **隐藏文件不进包**。`.skillmesh-install`（本机状态标记）、`.git` 之类不会发到云端。
 - **Windows 上发布的包会丢掉脚本的可执行位**。Windows 没有 Unix 可执行位，Go 一律报 0666；Skill 里如果有 shell 脚本，在 Unix 上装完可能需要 `chmod +x`。
+
+### 回滚到旧版本
+
+```bash
+./skillmesh.exe rollback <skill-name> --to 1.0.0
+```
+
+版本制品不可变，所以回滚不是"改回去"，而是**再装一次更早的版本**——服务端那份旧制品一直原样留着，随时能装回去。装完锁文件里的版本号、摘要一起回退。
+
+只支持注册中心来源（`install` 装的）。Git 来源要固定版本用 `skillmesh add <url> --ref <tag>`，或 `update` 之后手动 checkout 到指定 commit。
 
 ### 本地项目状态
 
 | 命令 | 作用 |
 | --- | --- |
-| `list` | 列出本项目锁文件里登记的**本地安装**：Skill、Agent、commit、安装路径、是否受管 |
+| `list` | 列出本项目锁文件里登记的**本地安装**：Skill、Agent、版本/commit、安装路径、是否受管 |
 | `status` | 同上，但输出 JSON（`status <name>` 只看某一个），适合脚本消费 |
 | `update --check` | 检查远端有没有新 commit，**只报告不改动** |
+| `update --dry-run` | 同上，指定单个 Skill 时用（`update <name>` 默认是真更新） |
 | `update --all` | 应用全部更新 |
 | `update <name>` | 只更新某一个 |
+| `rollback <name> --to <version>` | 回滚到指定版本（仅注册中心来源） |
 | `lock refresh` | 重新解析来源并刷新锁文件 |
 | `uninstall <name>` | 移除安装内容与锁文件记录 |
 
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。
+
+作用域（`user` 还是 `project`）记在锁文件里，`update`/`uninstall`/`list` 都以记录为准，不会把项目级安装误当成用户级。
 
 **`list` 和 `search` 看的不是一回事**：
 
@@ -531,4 +553,6 @@ cd apps/web && pnpm test          # 前端组件
 
 v1 做：本地基础设施、数据库迁移、OIDC 鉴权、Skill 元数据与搜索、MinIO 制品存储与不可变版本、授权下载、CLI 全套命令、前端搜索与详情两页。
 
-v1 不做（推迟到 v2，表结构已按最终设计建好）：本地同步引擎与 daemon、发布审批流、团队角色矩阵、审计事件、制品签名、Cursor 适配器、`rollback` 命令（用 `install --version` 替代）。
+v1 不做（推迟到 v2，表结构已按最终设计建好）：本地同步引擎与 daemon、发布审批流、团队角色矩阵、审计事件、制品签名、Cursor 适配器。
+
+密钥扫描（发布阻断）与许可证识别（安装后展示）在 v1 已做，但都只是**本地粗匹配**：扫描在 CLI 侧、规则是固定的高置信度特征；许可证识别不做法律判断。要变成服务端强制，得等 v2 的 `skill_scans` 表和审核流。

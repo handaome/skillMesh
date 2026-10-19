@@ -68,7 +68,7 @@ skillmesh/
 - 审计事件全量记录（v1 不写 `audit_events`）
 - 制品签名与供应链校验
 - Cursor 适配器（v1 做 claude-code + codex 两个，详细设计 §4 首期要求）
-- `rollback` 命令——v1 用 `install --version` 固定版本替代
+- （已补）`rollback` 命令——版本不可变，回滚就是再装一次旧版本，`install --version` 之外的显式入口
 - 服务端 `POST /sources/resolve` 与 `POST /sources/check-updates`——v1 的 `source resolve` 与 `update --check` 完全在 CLI 本地完成（clone 到临时目录探测 `SKILL.md`、`git ls-remote` 取 ref）。详细设计 §3.5 允许「本地直接 clone 模式」，故非偏离
 - 风险扫描阻断安装（详细设计 §3.5 步骤 4）——v1 只做路径穿越/大小/`SKILL.md` 存在性校验，扫描引擎进 v2
 
@@ -125,7 +125,7 @@ skillmesh/
 | 2. OIDC 登录、`GET /me`、Skill 搜索/详情和版本查询 | ✅ 切片 1 + 3 | 真 OIDC，Keycloak 自托管 |
 | 3. Git 来源解析、候选 Skill 选择、安装至 Claude Code/Codex | ✅ 切片 4 | 解析在 CLI 本地，服务端接口推迟 |
 | 4. 本地安装记录与 `list`/`status`/`doctor` | ⚠️ 部分 | `list`/`status`/`doctor` 在 v1；`installations` 表和登记 API 建表即在，注册上报推迟 |
-| 5. 检查更新、差异预览、固定 commit 和回滚 | ⚠️ 部分 | `update --check`、`--locked` 固定 commit 在 v1；差异预览和 `rollback` 推迟 |
+| 5. 检查更新、差异预览、固定 commit 和回滚 | ⚠️ 部分 | `update --check`、`rollback --to`、`--locked` 固定 commit 在 v1；差异预览推迟 |
 | 6. 私有云端备份、changeset 幂等、离线队列和基础冲突记录 | ❌ 推迟 | changeset 相关表建表即在，端点推迟到 v2 |
 | 7. 敏感信息扫描、哈希验证、审计事件与最低限度的团队权限 | ⚠️ 部分 | SHA-256 哈希验证在 v1；扫描、审计事件、团队权限推迟 |
 

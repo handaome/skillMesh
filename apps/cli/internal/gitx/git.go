@@ -35,8 +35,12 @@ func NormalizeURL(raw string) (string, error) {
 	default:
 		return "", fmt.Errorf("只允许 https/ssh/git，实际为 %s", parsed.Scheme)
 	}
-	if parsed.User != nil && parsed.User.String() != "" {
-		return "", fmt.Errorf("仓库地址不得内嵌凭据，请用 --credential-ref 引用本机凭据")
+	// ssh://git@github.com/owner/repo.git 里的 git 是用户名不是凭据，
+	// 只有带了密码/token 才该拒。
+	if parsed.User != nil {
+		if _, hasSecret := parsed.User.Password(); hasSecret {
+			return "", fmt.Errorf("仓库地址不得内嵌凭据，请用 --credential-ref 引用本机凭据")
+		}
 	}
 	parsed.Fragment = ""
 	return parsed.String(), nil
