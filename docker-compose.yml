@@ -1,0 +1,82 @@
+# 生产/集成环境编排。本机开发不用它——MinIO 与 Keycloak 走 infra/scripts 里的原生进程脚本。
+#
+# 所有凭据从环境变量读取，不写在这里。复制 .env.example 成 .env 后再起。
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${SM_DB_NAME:-skill_mesh}
+      POSTGRES_USER: ${SM_DB_USER}
+      POSTGRES_PASSWORD: ${SM_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SM_DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${SM_MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${SM_MINIO_SECRET_KEY}
+    ports:
+      - "127.0.0.1:9100:9000"
+      - "127.0.0.1:9101:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    command: start-dev --http-relative-path=/kc
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${SM_KEYCLOAK_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SM_KEYCLOAK_ADMIN_PASSWORD}
+      # 生产环境必须换成正式 OIDC provider 的 issuer，不要指向容器内的 Keycloak 地址
+      SM_KEYCLOAK_ISSUER: ${SM_KEYCLOAK_ISSUER}
+    ports:
+      - "127.0.0.1:8180:8080"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+      - keycloak-data:/opt/keycloak/data
+
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      SM_DB_URL: jdbc:postgresql://postgres:5432/${SM_DB_NAME:-skill_mesh}
+      SM_DB_USER: ${SM_DB_USER}
+      SM_DB_PASSWORD: ${SM_DB_PASSWORD}
+      SM_MINIO_ENDPOINT: http://minio:9000
+      SM_MINIO_ACCESS_KEY: ${SM_MINIO_ACCESS_KEY}
+      SM_MINIO_SECRET_KEY: ${SM_MINIO_SECRET_KEY}
+      SM_MINIO_BUCKET: ${SM_MINIO_BUCKET:-skillmesh-artifacts}
+      SM_KEYCLOAK_ISSUER: ${SM_KEYCLOAK_ISSUER}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+    ports:
+      - "127.0.0.1:5174:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  minio-data:
+  keycloak-data:

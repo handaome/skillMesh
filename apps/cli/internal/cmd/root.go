@@ -56,13 +56,20 @@ func Execute() error {
 }
 
 // newClient 用已保存的登录态建 API 客户端。
+//
+// SKILLMESH_TOKEN 是给 CI 用的入口（详细设计 §3.10 要求 CI 跑
+// `skillmesh install --locked`）：流水线里既没有浏览器也没有凭据管理器，
+// 只能靠环境变量传令牌。交互场景仍走 `skillmesh login` 存进凭据管理器，
+// 不受这个变量影响。
 func newClient() (*apiclient.Client, error) {
-	path := tokenPath()
-	tokens, err := auth.LoadTokens(path)
+	timeout := time.Duration(cfg.Network.TimeoutSeconds) * time.Second
+	if envToken := os.Getenv("SKILLMESH_TOKEN"); envToken != "" {
+		return apiclient.New(cfg.Server, envToken, timeout), nil
+	}
+	tokens, err := auth.LoadTokens(tokenPath())
 	if err != nil || !tokens.Valid() {
 		return nil, fmt.Errorf("未登录或令牌已过期，请先执行 skillmesh login")
 	}
-	timeout := time.Duration(cfg.Network.TimeoutSeconds) * time.Second
 	return apiclient.New(cfg.Server, tokens.AccessToken, timeout), nil
 }
 
