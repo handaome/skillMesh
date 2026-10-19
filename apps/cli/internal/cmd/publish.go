@@ -245,7 +245,7 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 
 	created, err := client.CreateVersion(ctx, skill.ID, apiclient.CreateVersionRequest{
 		Version:   version,
-		Channel:   options.Channel,
+		Channel:   orDefaultChannel(options.Channel),
 		SizeBytes: artifact.SizeBytes,
 		FileCount: len(artifact.Manifest),
 		SHA256:    artifact.SHA256,
@@ -271,6 +271,14 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 		Version:   version,
 		SizeBytes: artifact.SizeBytes,
 	}, nil
+}
+
+// orDefaultChannel 补上默认通道：sync 这类内部调用不一定显式指定。
+func orDefaultChannel(channel string) string {
+	if channel == "" {
+		return "stable"
+	}
+	return channel
 }
 
 func toManifest(entries []packager.Entry) []apiclient.ManifestEntry {

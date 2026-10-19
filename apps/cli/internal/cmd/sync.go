@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,8 +9,11 @@ import (
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
+	"github.com/handaome/skillmesh/apps/cli/internal/installer"
+	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/packager"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/handaome/skillmesh/apps/cli/internal/syncstate"
 	"github.com/spf13/cobra"
 )
 
@@ -23,62 +25,56 @@ const syncVisibility = "private"
 type syncOutcome string
 
 const (
-	synced   syncOutcome = "已同步"
-	skipped  syncOutcome = "无变化"
-	uploaded syncOutcome = "新版本"
-	failed   syncOutcome = "失败"
+	synced     syncOutcome = "已同步"
+	skipped    syncOutcome = "无变化"
+	uploaded   syncOutcome = "新版本"
+	fetched    syncOutcome = "已拉取"
+	conflicted syncOutcome = "冲突"
+	failed     syncOutcome = "失败"
 )
 
-func newSyncCmd() *cobra.Command {
-	var agentNames []string
-	var dryRun bool
+// syncOptions 是一次同步的可调项。
+type syncOptions struct {
+	Agents    []string
+	Only      string // --skill，只同步这一个
+	Direction string // upload / download / both
+	Resolve   string // keep-local / keep-cloud / keep-both，空表示不处理冲突
+	DryRun    bool
+}
 
+func newSyncCmd() *cobra.Command {
+	options := syncOptions{}
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "把本地 Agent 目录里的 Skill 同步到个人私有空间",
-		Long: "扫描已授权的 Agent 目录，与云端逐个比对制品摘要：\n" +
-			"内容没变就跳过，变了才发一个新版本（版本号自动累加）。\n\n" +
-			"这是「本地 → 个人云端」那条链路（设计文档 §3.1），不是团队发布。\n" +
+		Short: "把本地 Agent 目录里的 Skill 与个人私有空间对账",
+		Long: "扫描已授权的 Agent 目录，比较「基线 / 本地 / 云端」三份内容摘要：\n" +
+			"只有一边变了就顺着变，两边都变了按冲突处理，绝不自动覆盖。\n\n" +
+			"这是「本地 ↔ 个人云端」那条链路（设计文档 §3.1、§6.3），不是团队发布。\n" +
 			"只同步、从不删除云端内容——目录扫不到不该等于云端被删。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			dirs, err := syncDirs(agentNames)
-			if err != nil {
-				return err
+			if options.Direction != "upload" && options.Direction != "download" &&
+				options.Direction != "both" {
+				return fmt.Errorf("--direction 只能是 upload / download / both")
 			}
-			if len(dirs) == 0 {
-				return fmt.Errorf("没有可扫描的 Agent 目录，先跑 skillmesh agents detect 看配置")
-			}
-			client, err := newClient()
-			if err != nil {
-				return err
-			}
-			var results []syncResult
-			for _, dir := range dirs {
-				for _, candidate := range localSkills(dir) {
-					outcome, detail, err := syncOne(cmd.Context(), client, candidate, dryRun)
-					if err != nil {
-						results = append(results, syncResult{
-							Name: skillscan.SkillName(candidate), Path: candidate,
-							Outcome: failed, Detail: err.Error(),
-						})
-						continue
-					}
-					results = append(results, syncResult{
-						Name: skillscan.SkillName(candidate), Path: candidate,
-						Outcome: outcome, Detail: detail,
-					})
-				}
-			}
-			if len(results) == 0 {
+			results, err := runSync(cmd.Context(), options)
+			if len(results) == 0 && err == nil {
 				fmt.Println("授权目录里没有找到含 SKILL.md 的目录。")
 				return nil
 			}
-			return reportSync(results)
+			reportErr := reportSync(results)
+			if err != nil {
+				return err
+			}
+			return reportErr
 		},
 	}
-	cmd.Flags().StringSliceVar(&agentNames, "agent", nil, "只同步指定 Agent 的目录，不填用全部启用的")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只报出会同步什么，不上传")
+	cmd.Flags().StringSliceVar(&options.Agents, "agent", nil, "只同步指定 Agent 的目录，不填用全部启用的")
+	cmd.Flags().StringVar(&options.Only, "skill", "", "只同步这一个 Skill")
+	cmd.Flags().StringVar(&options.Direction, "direction", "both", "同步方向：upload / download / both")
+	cmd.Flags().StringVar(&options.Resolve, "resolve", "",
+		"冲突解决方式：keep-local / keep-cloud / keep-both")
+	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "只报出会同步什么，不落盘")
 	return cmd
 }
 
@@ -90,32 +86,92 @@ type syncResult struct {
 	Detail  string
 }
 
-// syncDirs 列出要扫的目录：指定了 --agent 就用它，否则用所有启用的 Agent 的用户目录。
-func syncDirs(agentNames []string) ([]string, error) {
-	names := agentNames
-	if len(names) == 0 {
-		for _, name := range agent.Supported {
-			if agentCfg, ok := cfg.Agents[name]; ok && agentCfg.Enabled {
-				names = append(names, name)
-			}
+func runSync(ctx context.Context, options syncOptions) ([]syncResult, error) {
+	targets, err := syncTargets(options)
+	if err != nil {
+		return nil, err
+	}
+	client, err := newClient()
+	if err != nil {
+		return nil, err
+	}
+	state, err := syncstate.Load(cfg.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []syncResult
+	for _, target := range targets {
+		result, entry, err := syncOne(ctx, client, target, options)
+		if err != nil {
+			results = append(results, failedResult(target, err.Error()))
+			continue
+		}
+		// entry 为空表示这次没同步过（冲突没解决），基线不动。
+		if entry.Name != "" && !options.DryRun {
+			state.Upsert(entry)
+		}
+		results = append(results, result)
+	}
+	if !options.DryRun {
+		if err := state.Save(cfg.ConfigDir); err != nil {
+			return results, err
 		}
 	}
-	seen := map[string]bool{}
-	var dirs []string
-	for _, name := range names {
-		dir, err := agent.Dir(cfg, name, "user", "")
+	return results, nil
+}
+
+// syncTarget 是一个待对账的 Skill。
+type syncTarget struct {
+	Name     string
+	Agent    string
+	Path     string
+	BaseHash string
+	SkillID  string
+}
+
+// syncTargets 列出所有要处理的 Skill，并带上各自的基线。
+func syncTargets(options syncOptions) ([]syncTarget, error) {
+	state, err := syncstate.Load(cfg.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	var targets []syncTarget
+	for _, agentName := range syncAgentNames(options.Agents) {
+		dir, err := agent.Dir(cfg, agentName, "user", "")
 		if err != nil {
 			return nil, err
 		}
-		if !seen[dir] {
-			seen[dir] = true
-			dirs = append(dirs, dir)
+		for _, path := range localSkills(dir) {
+			name := skillscan.SkillName(path)
+			if options.Only != "" && name != options.Only {
+				continue
+			}
+			target := syncTarget{Name: name, Agent: agentName, Path: path}
+			if entry, ok := state.Find(name, agentName); ok {
+				target.BaseHash = entry.BaseHash
+				target.SkillID = entry.SkillID
+			}
+			targets = append(targets, target)
 		}
 	}
-	return dirs, nil
+	return targets, nil
 }
 
-// localSkills 列出目录下的 Skill 候选（含目录本身），跳过本机的受管标记。
+func syncAgentNames(selected []string) []string {
+	if len(selected) > 0 {
+		return selected
+	}
+	var names []string
+	for _, name := range agent.Supported {
+		if agentCfg, ok := cfg.Agents[name]; ok && agentCfg.Enabled {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// localSkills 列出目录下的 Skill 候选（含目录本身）。
 func localSkills(dir string) []string {
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err == nil {
 		return []string{dir}
@@ -131,90 +187,239 @@ func localSkills(dir string) []string {
 	return dirs
 }
 
-// syncOne 同步一个 Skill：内容寻址比对，相同就不发。
-func syncOne(ctx context.Context, client *apiclient.Client, dir string,
-	dryRun bool) (syncOutcome, string, error) {
+// syncOne 对账一个 Skill。返回结果，以及同步成功后要写进基线的内容（没变就返回 nil）。
+func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
+	options syncOptions) (syncResult, syncstate.Entry, error) {
 
-	if err := skillscan.ValidateDir(dir, skillscan.DefaultLimits); err != nil {
-		return failed, "", err
+	if err := skillscan.ValidateDir(target.Path, skillscan.DefaultLimits); err != nil {
+		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
-	findings, err := skillscan.ScanSecrets(dir)
+	findings, err := skillscan.ScanSecrets(target.Path)
 	if err != nil {
-		return failed, "", err
+		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
 	if len(findings) > 0 {
-		return failed, "", errors.New(skillscan.FormatFindings(findings))
+		return failedResult(target, skillscan.FormatFindings(findings)), syncstate.Entry{}, nil
 	}
-	local, err := packager.Pack(dir)
+	local, err := packager.Pack(target.Path)
 	if err != nil {
-		return failed, "", err
+		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
-	localFiles := make([]skillscan.FileDigest, 0, len(local.Manifest))
-	for _, entry := range local.Manifest {
-		localFiles = append(localFiles, skillscan.FileDigest{Path: entry.Path, SHA256: entry.SHA256})
-	}
-	localHash := skillscan.Digest(localFiles)
-	slug, err := skillscan.SlugFromDirName(filepath.Base(dir))
+	localHash := manifestDigest(local.Manifest)
+	slug, err := skillscan.SlugFromDirName(filepath.Base(target.Path))
 	if err != nil {
-		return failed, "", err
+		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
 
 	skill, found, err := client.FindSkillBySlug(ctx, slug)
 	if err != nil {
-		return failed, "", err
+		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
+	cloudHash := ""
 	if found {
-		same, err := cloudHasContent(ctx, client, skill.ID, localHash, local.SHA256)
+		cloudHash, err = cloudDigest(ctx, client, skill.ID, local.SHA256)
 		if err != nil {
-			return failed, "", err
-		}
-		if same {
-			return skipped, localHash[:12], nil
+			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
 	}
 
-	result, err := publishOne(ctx, client, publishTarget{Dir: dir, RelPath: filepath.Base(dir)},
-		publishOptions{Visibility: syncVisibility, DryRun: dryRun})
-	if err != nil {
-		return failed, "", err
-	}
-	// 结果看有没有在云端见过，别看 publishOne 的动作——
-	// dry-run 时它一律返回「将发布」，会把「已存在」误报成「新建」。
-	if !found {
-		detail := "云端还没有这个 Skill"
-		if dryRun {
-			detail += "（演练）"
-		}
-		return synced, detail, nil
-	}
-	return uploaded, result.Version, nil
+	decision := syncstate.Decide(target.BaseHash, localHash, cloudHash)
+	return applyDecision(ctx, client, target, decision, local, localHash, skill, found, options)
 }
 
-// cloudHasContent 判断云端已发布版本里有没有一份和本地内容一样的。
-// 内容寻址意味着同一份内容只会存一份，所以命中即可判定无需重传。
-func cloudHasContent(ctx context.Context, client *apiclient.Client, skillID,
-	localHash, zipSHA string) (bool, error) {
+// applyDecision 按判定结果执行。冲突在没有 --resolve 时只报告不动手。
+func applyDecision(ctx context.Context, client *apiclient.Client, target syncTarget,
+	decision syncstate.Decision, local packager.Artifact, localHash string,
+	skill apiclient.Skill, found bool, options syncOptions) (syncResult, syncstate.Entry, error) {
+
+	entry := syncstate.Entry{
+		Name: target.Name, Agent: target.Agent, BaseHash: localHash, SkillID: target.SkillID,
+	}
+
+	switch decision {
+	case syncstate.UpToDate:
+		if found {
+			entry.SkillID = skill.ID
+		}
+		return syncResult{Name: target.Name, Path: target.Path,
+			Outcome: skipped, Detail: localHash[:12]}, entry, nil
+
+	case syncstate.Download:
+		if options.Direction == "upload" {
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+				Detail: "云端有更新，本次只上传；要拉取用 --direction download"}, entry, nil
+		}
+		if options.DryRun {
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+				Detail: "将拉取云端版本"}, entry, nil
+		}
+		version, err := downloadInto(ctx, client, target, skill)
+		if err != nil {
+			return failedResult(target, err.Error()), syncstate.Entry{}, nil
+		}
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: fetched,
+			Detail: version}, entry, nil
+
+	case syncstate.Conflict:
+		return resolveConflict(ctx, client, target, local, localHash, skill, options)
+
+	default: // Upload
+		if options.Direction == "download" {
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+				Detail: "本地有更新，本次只下载"}, entry, nil
+		}
+		if options.DryRun {
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+				Detail: "将上传新版本"}, entry, nil
+		}
+		result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+			RelPath: filepath.Base(target.Path)},
+			publishOptions{Visibility: syncVisibility})
+		if err != nil {
+			return failedResult(target, err.Error()), syncstate.Entry{}, nil
+		}
+		detail := result.Version
+		if !found {
+			detail = "云端新建 " + result.Version
+		}
+		entry.SkillID = result.SkillID
+		entry.LastVersion = result.Version
+		return syncResult{Name: target.Name, Path: target.Path,
+			Outcome: uploaded, Detail: detail}, entry, nil
+	}
+}
+
+// resolveConflict 处理两边都改过的情况。
+// 没有 --resolve 就只报告——自动覆盖等于替用户做决定（设计文档 §6.3）。
+func resolveConflict(ctx context.Context, client *apiclient.Client, target syncTarget,
+	local packager.Artifact, localHash string, skill apiclient.Skill,
+	options syncOptions) (syncResult, syncstate.Entry, error) {
+
+	entry := syncstate.Entry{Name: target.Name, Agent: target.Agent,
+		BaseHash: localHash, SkillID: target.SkillID}
+	hint := fmt.Sprintf("本地 %s vs 云端 %s，用 --resolve keep-local/keep-cloud/keep-both 处理",
+		localHash[:8], "已变")
+
+	switch options.Resolve {
+	case "keep-local":
+		result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+			RelPath: filepath.Base(target.Path)},
+			publishOptions{Visibility: syncVisibility})
+		if err != nil {
+			return failedResult(target, err.Error()), syncstate.Entry{}, nil
+		}
+		entry.SkillID = result.SkillID
+		entry.LastVersion = result.Version
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
+			Detail: "保留本地，已上传 " + result.Version}, entry, nil
+
+	case "keep-cloud":
+		version, err := downloadInto(ctx, client, target, skill)
+		if err != nil {
+			return failedResult(target, err.Error()), syncstate.Entry{}, nil
+		}
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: fetched,
+			Detail: "保留云端，已拉取 " + version}, entry, nil
+
+	case "keep-both":
+		// 备份放在隐藏目录：扫描会跳过隐藏目录，它不会变成下一个「待同步的 Skill」。
+		backup := filepath.Join(filepath.Dir(target.Path),
+			"."+target.Name+".conflict-"+localHash[:8])
+		if err := installer.InstallAtomic(target.Path, backup, true); err != nil {
+			return failedResult(target, "备份本地版本失败: "+err.Error()), syncstate.Entry{}, nil
+		}
+		result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+			RelPath: filepath.Base(target.Path)},
+			publishOptions{Visibility: syncVisibility})
+		if err != nil {
+			return failedResult(target, err.Error()), syncstate.Entry{}, nil
+		}
+		entry.SkillID = result.SkillID
+		entry.LastVersion = result.Version
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
+			Detail: fmt.Sprintf("本地版本备份到 %s，云端上传 %s", backup, result.Version)}, entry, nil
+
+	default:
+		return syncResult{Name: target.Name, Path: target.Path,
+			Outcome: conflicted, Detail: hint}, syncstate.Entry{}, nil
+	}
+}
+
+// downloadInto 把云端最新已发布版本装回本机目录。
+func downloadInto(ctx context.Context, client *apiclient.Client, target syncTarget,
+	skill apiclient.Skill) (string, error) {
+
+	versions, err := client.Versions(ctx, skill.ID)
+	if err != nil {
+		return "", err
+	}
+	selected, err := pickVersion(versions, "", false, lockfileEntry(target), false)
+	if err != nil {
+		return "", err
+	}
+	data, err := client.DownloadArtifact(ctx, selected.Artifact.ID)
+	if err != nil {
+		return "", err
+	}
+	work, err := os.MkdirTemp("", "skillmesh-sync-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(work)
+	skillDir, err := installer.ExtractZip(data, work)
+	if err != nil {
+		return "", err
+	}
+	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
+		return "", err
+	}
+	if err := installer.InstallAtomic(skillDir, target.Path, true); err != nil {
+		return "", err
+	}
+	if err := installer.MarkInstalled(target.Path, "skillmesh:"+skill.ID); err != nil {
+		return "", err
+	}
+	return selected.Version, nil
+}
+
+func lockfileEntry(target syncTarget) lockfile.LockedSkill {
+	return lockfile.LockedSkill{Name: target.Name, SourceID: target.SkillID}
+}
+
+func failedResult(target syncTarget, why string) syncResult {
+	return syncResult{Name: target.Name, Path: target.Path, Outcome: failed, Detail: why}
+}
+
+func manifestDigest(entries []packager.Entry) string {
+	files := make([]skillscan.FileDigest, 0, len(entries))
+	for _, entry := range entries {
+		files = append(files, skillscan.FileDigest{Path: entry.Path, SHA256: entry.SHA256})
+	}
+	return skillscan.Digest(files)
+}
+
+// cloudDigest 取云端最新已发布版本的内容摘要。
+// 老版本没有 manifest，退化成比 zip 摘要（拿不到就返回空串，判定为「云端没有可比的内容」）。
+func cloudDigest(ctx context.Context, client *apiclient.Client, skillID,
+	localZipSHA string) (string, error) {
 
 	versions, err := client.Versions(ctx, skillID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	for _, item := range versions.Items {
 		if item.Status != "published" {
 			continue
 		}
 		if len(item.Manifest) > 0 {
-			if remoteDigest(item) == localHash {
-				return true, nil
-			}
-			continue
+			return remoteDigest(item), nil
 		}
-		// 老服务端不返回 manifest，只能退而比 zip 摘要。
-		if item.Artifact != nil && item.Artifact.SHA256 == zipSHA {
-			return true, nil
+		if item.Artifact != nil && item.Artifact.SHA256 == localZipSHA {
+			return "", nil // 内容和本地一样，判定会走 UpToDate
 		}
+		return localZipSHA + "-zip", nil
 	}
-	return false, nil
+	return "", nil
 }
 
 func remoteDigest(version apiclient.SkillVersion) string {
@@ -236,8 +441,11 @@ func reportSync(results []syncResult) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	fmt.Printf("\n无变化 %d，已同步/新版本 %d，失败 %d\n",
-		counts[skipped], counts[synced]+counts[uploaded], counts[failed])
+	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，冲突 %d，失败 %d\n",
+		counts[skipped], counts[uploaded], counts[fetched], counts[conflicted], counts[failed])
+	if counts[conflicted] > 0 {
+		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[conflicted])
+	}
 	if counts[failed] > 0 {
 		return fmt.Errorf("%d 个同步失败", counts[failed])
 	}

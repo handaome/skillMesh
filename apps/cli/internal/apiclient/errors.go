@@ -27,7 +27,27 @@ type ProblemError struct {
 }
 
 func (e *ProblemError) Error() string {
-	return fmt.Sprintf("%s (%d): %s", e.Problem.Code, e.HTTPStatus, e.Problem.Detail)
+	if len(e.Problem.FieldErrors) == 0 {
+		return fmt.Sprintf("%s (%d): %s", e.Problem.Code, e.HTTPStatus, e.Problem.Detail)
+	}
+	// 校验失败时把具体字段带上——只说「校验失败」等于让人自己猜。
+	fields := make([]string, 0, len(e.Problem.FieldErrors))
+	for _, field := range e.Problem.FieldErrors {
+		fields = append(fields, fmt.Sprintf("%s: %s", field.Field, field.Message))
+	}
+	return fmt.Sprintf("%s (%d): %s（%s）", e.Problem.Code, e.HTTPStatus,
+		e.Problem.Detail, joinWith(fields, "；"))
+}
+
+func joinWith(items []string, sep string) string {
+	out := ""
+	for i, item := range items {
+		if i > 0 {
+			out += sep
+		}
+		out += item
+	}
+	return out
 }
 
 // CodeOf 提取服务端错误码；非 problem 响应返回 HTTP_<status>。
