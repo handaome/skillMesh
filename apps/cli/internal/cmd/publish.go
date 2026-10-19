@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
+	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/packager"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 	"github.com/spf13/cobra"
@@ -280,6 +281,46 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 		Version:   version,
 		SizeBytes: artifact.SizeBytes,
 	}, nil
+}
+
+// sourceOf 从项目锁文件里找这个目录的来源，整理成服务端要的形状（设计文档 §7.1）。
+//
+// 服务端拿不到 git 仓库和 commit——只有当初装它的那台机器知道。
+// 找不到就记 local_import，不假装有来源。
+func sourceOf(dir, license string) *apiclient.SkillSource {
+	source := &apiclient.SkillSource{
+		SourceType:    "local_import",
+		Provider:      "local",
+		LicenseStatus: "unknown",
+	}
+	if license != "" {
+		source.LicenseExpression = license
+		source.LicenseStatus = "detected"
+	}
+	entry, found := localEntryByName(skillscan.SkillName(dir))
+	if !found || entry.Repository == "" {
+		return source
+	}
+	source.SourceType = "git"
+	source.Provider = orDash(entry.Provider)
+	if source.Provider == "-" {
+		source.Provider = "generic_git"
+	}
+	source.RepositoryURL = entry.Repository
+	source.Subpath = entry.Path
+	source.RefType = orDash(entry.RefType)
+	source.RefValue = entry.Ref
+	source.ResolvedCommit = entry.ResolvedCommit
+	return source
+}
+
+// localEntryByName 在当前项目的锁文件里找一个 Skill。
+func localEntryByName(name string) (lockfile.LockedSkill, bool) {
+	lock, err := lockfile.Load(mustGetwd())
+	if err != nil {
+		return lockfile.LockedSkill{}, false
+	}
+	return lock.Find(name)
 }
 
 // orDefaultChannel 补上默认通道：sync 这类内部调用不一定显式指定。

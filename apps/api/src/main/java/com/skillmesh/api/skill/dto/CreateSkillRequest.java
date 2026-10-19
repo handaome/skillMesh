@@ -1,5 +1,6 @@
 package com.skillmesh.api.skill.dto;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -17,4 +18,6 @@ public record CreateSkillRequest(
         UUID organization_id,
         UUID owner_team_id,
         @Size(max = 30) List<@Size(max = 64) String> tags,
-        Map<String, Object> metadata) {}
+        Map<String, Object> metadata,
+        /** 可选：来源元数据。不给就记一条 local_import。 */
+        @Valid SkillSourceInput source) {}

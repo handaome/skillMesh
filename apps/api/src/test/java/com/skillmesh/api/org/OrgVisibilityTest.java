@@ -101,7 +101,7 @@ class OrgVisibilityTest {
         UUID otherOrg = orgs.createOrganization(other, "other-org", "Other Org").getId();
         UUID otherTeam = orgs.createTeam(other, otherOrg, "secret", "Secret", null).getId();
         skills.create(other, new CreateSkillRequest("not-for-me", "Not For Me", "",
-            "team", otherOrg, otherTeam, List.of(), Map.of()));
+            "team", otherOrg, otherTeam, List.of(), Map.of(), null));
 
         String body = mockMvc.perform(get("/api/v1/skills").param("limit", "50")
                 .header("Authorization", auth))
@@ -122,7 +122,7 @@ class OrgVisibilityTest {
         assertThatThrownBy(() -> orgs.addTeamMember(outsider, teamId, UUID.randomUUID(), "member"))
             .isInstanceOf(ApiException.class).hasMessageContaining("管理员");
         assertThatThrownBy(() -> skills.create(outsider, new CreateSkillRequest(
-                "nope", "Nope", "", "team", orgId, teamId, List.of(), Map.of())))
+                "nope", "Nope", "", "team", orgId, teamId, List.of(), Map.of(), null)))
             .isInstanceOf(ApiException.class).hasMessageContaining("成员");
     }
 

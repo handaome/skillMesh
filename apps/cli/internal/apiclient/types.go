@@ -16,6 +16,19 @@ type Skill struct {
 	UpdatedAt     string   `json:"updated_at"`
 }
 
+// SkillSource 是随创建请求带上的来源信息（设计文档 §7.1）。
+type SkillSource struct {
+	SourceType        string `json:"source_type"`
+	Provider          string `json:"provider"`
+	RepositoryURL     string `json:"repository_url,omitempty"`
+	Subpath           string `json:"subpath,omitempty"`
+	RefType           string `json:"ref_type,omitempty"`
+	RefValue          string `json:"ref_value,omitempty"`
+	ResolvedCommit    string `json:"resolved_commit,omitempty"`
+	LicenseExpression string `json:"license_expression,omitempty"`
+	LicenseStatus     string `json:"license_status,omitempty"`
+}
+
 type SkillPage struct {
 	Items      []Skill `json:"items"`
 	NextCursor *string `json:"next_cursor"`

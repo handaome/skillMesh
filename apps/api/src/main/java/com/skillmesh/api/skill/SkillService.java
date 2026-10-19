@@ -3,8 +3,10 @@ package com.skillmesh.api.skill;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.OrgService;
+import jakarta.validation.Valid;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
+import com.skillmesh.api.skill.dto.SkillSourceInput;
 import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillPage;
 import com.skillmesh.api.skill.dto.SkillResponse;
@@ -29,10 +31,12 @@ public class SkillService {
     private final SkillRepository skills;
 
     private final OrgService orgs;
+    private final SourceRepository sources;
 
-    public SkillService(SkillRepository skills, OrgService orgs) {
+    public SkillService(SkillRepository skills, OrgService orgs, SourceRepository sources) {
         this.skills = skills;
         this.orgs = orgs;
+        this.sources = sources;
     }
 
     @Transactional
@@ -56,7 +60,41 @@ public class SkillService {
         entity.setMetadataJson(req.metadata() == null ? Map.of() : req.metadata());
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
-        return toResponse(skills.save(entity));
+        SkillEntity saved = skills.save(entity);
+        recordSource(user, saved, req.source());
+        return toResponse(saved);
+    }
+
+    /**
+     * 记一条来源（设计文档 §7.1）。
+     * 客户端没给就记 local_import——来源不明也要留痕，不能等于没有来源。
+     */
+    private void recordSource(CurrentUser user, SkillEntity skill, SkillSourceInput source) {
+        SourceEntity row = new SourceEntity();
+        row.setId(UUID.randomUUID());
+        row.setSkillId(skill.getId());
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        row.setCreatedAt(now);
+        row.setUpdatedAt(now);
+        row.setCreatedBy(user.id());
+
+        if (source == null) {
+            row.setSourceType("local_import");
+            row.setProvider("local");
+            row.setLicenseStatus("unknown");
+            sources.save(row);
+            return;
+        }
+        row.setSourceType(source.sourceType() == null ? "local_import" : source.sourceType());
+        row.setProvider(source.provider() == null ? "local" : source.provider());
+        row.setRepositoryUrl(source.repositoryUrl());
+        row.setSubpath(source.subpath());
+        row.setRefType(source.refType());
+        row.setRefValue(source.refValue());
+        row.setResolvedCommit(source.resolvedCommit());
+        row.setLicenseExpression(source.licenseExpression());
+        row.setLicenseStatus(source.licenseStatus() == null ? "unknown" : source.licenseStatus());
+        sources.save(row);
     }
 
     @Transactional

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
@@ -181,12 +183,26 @@ func watchStopCmd() *cobra.Command {
 }
 
 // runWatchLoop 是监听主循环。
+// runWatchLoop 是监听主循环：文件事件与定时轮询都只是「触发扫描」的手段，
+// 扫描与同步逻辑共用一套（设计文档 §6.2）。
+//
+// 文件事件快但不保证不丢（编辑器批量写、网络盘、休眠唤醒都可能漏），
+// 所以轮询一直留着，兼作兜底和启动时的全量 reconcile。
 func runWatchLoop(ctx context.Context, interval time.Duration) error {
-	// 启动先全量对账：文件监听可能漏事件，基线必须自己找回来。
+	// 启动先全量对账：基线必须自己找回来，不能指望事件一条不漏。
 	if err := reconcile(ctx); err != nil {
 		logf("首次对账失败: %v", err)
 	}
 	last := skillSnapshot()
+
+	watcher, err := watchEvents(ctx)
+	var events <-chan struct{}
+	if err != nil {
+		logf("文件监听不可用（%v），只用轮询", err)
+	} else {
+		defer watcher.close()
+		events = watcher.events
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -194,6 +210,11 @@ func runWatchLoop(ctx context.Context, interval time.Duration) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-events:
+			// 事件只说明「可能有变化」，别立刻扫——连续写入时先静默一小会儿（防抖）。
+			if !sleepQuiet(ctx, debounceWindow) {
+				return nil
+			}
 		case <-ticker.C:
 		}
 		if _, paused := watchPaused(); paused {
@@ -207,7 +228,123 @@ func runWatchLoop(ctx context.Context, interval time.Duration) error {
 		if err := reconcile(ctx); err != nil {
 			logf("同步失败: %v", err)
 		}
+		if watcher != nil {
+			// 新装进来的 Skill 目录也得纳入监听
+			watcher.refresh()
+		}
 		last = skillSnapshot()
+	}
+}
+
+// debounceWindow 是事件后的静默期：编辑器写文件往往分好几次，
+// 立刻扫会扫到写了一半的内容（设计文档 §6.2 防抖）。
+const debounceWindow = 2 * time.Second
+
+// dirWatcher 是目录监听器。
+type dirWatcher struct {
+	events  <-chan struct{}
+	refresh func()
+	close   func()
+}
+
+// watchEvents 监听 Agent 目录以及其中每个 Skill 目录。
+//
+// fsnotify 不是递归的：盯着根目录只能看到「新建/删除 Skill 目录」，
+// 改 Skill 里的文件必须单独盯那个目录。
+// refresh 在每次对账后调用，把新出现的 Skill 目录纳入监听。
+func watchEvents(ctx context.Context) (*dirWatcher, error) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+	watched := map[string]bool{}
+	trigger := make(chan struct{}, 1)
+	done := make(chan struct{})
+
+	refresh := func() {
+		for _, dir := range watchedDirs() {
+			if watched[dir] {
+				continue
+			}
+			if _, err := os.Stat(dir); err != nil {
+				continue // 目录还不存在，install 之后 refresh 会补上
+			}
+			if err := watcher.Add(dir); err != nil {
+				logf("监听 %s 失败: %v", dir, err)
+				continue
+			}
+			watched[dir] = true
+		}
+	}
+	refresh()
+	if len(watched) == 0 {
+		watcher.Close()
+		return nil, fmt.Errorf("没有可监听的目录")
+	}
+
+	go func() {
+		defer close(done)
+		defer watcher.Close()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|
+					fsnotify.Rename) == 0 {
+					continue
+				}
+				select {
+				case trigger <- struct{}{}: // 已在等就跳过，合并成一次扫描
+				default:
+				}
+			case _, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+			}
+		}
+	}()
+
+	return &dirWatcher{
+		events:  trigger,
+		refresh: refresh,
+		close:   func() { watcher.Close(); <-done },
+	}, nil
+}
+
+// watchedDirs 列出该监听的目录：Agent 根目录 + 其中每个 Skill 目录。
+func watchedDirs() []string {
+	var dirs []string
+	seen := map[string]bool{}
+	for _, agentName := range syncAgentNames(nil) {
+		root, err := agent.Dir(cfg, agentName, "user", "")
+		if err != nil {
+			continue
+		}
+		for _, dir := range append([]string{root}, localSkills(root)...) {
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
+// sleepQuiet 静默一小会儿，返回 false 表示上下文已经取消。
+func sleepQuiet(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | Skill 市场 | ✅ | 搜索/筛选/详情/版本/来源/风险；后续增强（评分、收藏）未做 |
 | 本地发现 | ✅ | 分类扫描、去重、`.skillmeshignore`、首次发现策略 |
-| 同步引擎 | ◐ | 文件监听用**轮询**代替（少一个依赖，代价是空转时重复 stat）；增量按 manifest 判定，内容不变不重传 |
+| 同步引擎 | ✅ | fsnotify 文件事件 + 2 秒防抖触发扫描，轮询保留作兜底与启动全量 reconcile；增量按 manifest 判定，内容不变不重传 |
 | Git 来源 | ✅ | 公开/私有、子目录、ref 固定、更新检查 |
 | 安装适配器 | ◐ | Claude Code、Codex；Cursor 见 §8 |
 | 版本治理 | ✅ | 不可变、锁文件、差异预览、回滚 |
@@ -58,7 +58,7 @@
 | §6.1 `.skillmeshignore` 排除规则 | ✅ | `skillscan/ignore.go`，摘要与打包同口径 |
 | §6.1 默认忽略凭据文件 | ✅ | `IsSensitiveFile`：`.env*`、`*.pem`、`id_rsa` 等 |
 | §6.1 不跟随越界符号链接 | ✅ | `ValidateDir` 用 EvalSymlinks 校验 |
-| §6.2 文件事件只用于触发扫描 | ✅ | `watch` 轮询触发，扫描独立于事件 |
+| §6.2 文件事件只用于触发扫描 | ✅ | `watch` 用 fsnotify 监听 Agent 根目录与每个 Skill 目录，事件只负责唤醒扫描；连续写入先静默 2 秒 |
 | §6.2 规范化 manifest，未变不重传 | ✅ | `skillscan.Digest`（路径+摘要排序后哈希） |
 | §6.2 上传前敏感扫描、可疑默认阻止 | ✅ | 密钥阻断；可疑内容提示 |
 | §6.2 幂等任务 ID、重试队列、退避 | ✅ | `Idempotency-Key` + `syncqueue` |
@@ -71,7 +71,7 @@
 
 | 要点 | 状态 | 落地位置 |
 | --- | --- | --- |
-| §7.1 来源模型九个字段 | ✅ | 锁文件：repository/provider/path/ref_type/ref/resolved_commit/installed_hash/license/derived、update_policy |
+| §7.1 来源模型九个字段 | ✅ | 锁文件（本地）：repository/provider/path/ref_type/ref/resolved_commit/installed_hash/license、update_policy；发布时随创建请求上报，服务端写入 `skill_sources` |
 | §7.2 三种更新策略 | ✅ | `add --update-policy`；`update --auto` 与 `watch` 认 `auto_safe` |
 | §7.3 仅 HTTPS/SSH、拒 file:// | ✅ | 客户端 `NormalizeURL` + 服务端 `GitHostPolicy` |
 | §7.3 防路径穿越/归档炸弹/超大文件/符号链接 | ✅ | `ValidateDir` + 服务端扫描器的大小/文件数/解压上限 |
@@ -115,7 +115,7 @@
 
 ## §11 数据模型
 
-19 张表**全部有读写路径**（`db/migrations/V1__init.sql`）：users / organizations / organization_memberships / teams / team_memberships / skills / skill_sources（结构在，写入待来源登记）/ artifacts / skill_versions / skill_scans / skill_reviews / skill_permissions（结构在）/ devices / installations / sync_states / sync_changesets / sync_conflicts / upload_sessions / audit_events。
+19 张表**全部有读写路径**（`db/migrations/V1__init.sql`）：users / organizations / organization_memberships / teams / team_memberships / skills / skill_sources（创建 Skill 时按客户端上报的来源写入）/ artifacts / skill_versions / skill_scans / skill_reviews / skill_permissions（结构在）/ devices / installations / sync_states / sync_changesets / sync_conflicts / upload_sessions / audit_events。
 
 ## §12 API 设计
 
@@ -165,6 +165,5 @@
 | 项 | 原因 |
 | --- | --- |
 | Cursor 启用 | 文档 §4 归入后续增强；本机无法验证路径约定 |
-| 文件系统事件监听（fsnotify） | 用轮询替代，理由写在 `watch.go` 注释里 |
-| `skill_sources` 表的写入 | 来源元数据目前只落在本地锁文件；服务端侧要等来源登记接口 |
+| 目录监听的递归深度 | fsnotify 不递归，监听集合靠「Agent 根目录 + 每个 Skill 目录」维持，新增 Skill 目录在每次对账后补监听；更深层级的子目录（如 `references/`）不单独监听——内容变化会以所在 Skill 的摘要变化体现 |
 | 证书链 / PKI 供应链证明 | 文档 §10 只要求「签名 + 客户端验证」，已用 Ed25519 实现 |
