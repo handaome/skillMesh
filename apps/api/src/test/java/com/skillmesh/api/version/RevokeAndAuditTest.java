@@ -2,6 +2,7 @@ package com.skillmesh.api.version;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -25,6 +26,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.support.DatabaseCleaner;
+import com.skillmesh.api.support.TestArtifacts;
 
 /** 撤回与审计流水（设计文档 §10）。 */
 @SpringBootTest
@@ -111,11 +113,38 @@ class RevokeAndAuditTest {
             .andExpect(status().isBadRequest());
 
         // 上报的安装事件要能在流水里查到
-        var auditJson = mockMvc.perform(get("/api/v1/skills/{id}/audit", skillId)
+        mockMvc.perform(get("/api/v1/skills/{id}/audit", skillId)
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].occurred_at").exists());
+
+        // 全局查询只看得到自己可见的 Skill
+        String all = mockMvc.perform(get("/api/v1/audit-events").param("limit", "200")
                 .header("Authorization", auth))
             .andExpect(status().isOk())
             .andReturn().getResponse().getContentAsString();
-        assertThat(auditJson).contains("install.completed");
+        assertThat(all).contains("install.completed").contains("skill.publish");
+    }
+
+    /** 单版本详情与元数据修改（契约 §12）。 */
+    @Test
+    void 改元数据与看单版本详情() throws Exception {
+        UUID skillId = createSkill("meta");
+        publish(skillId, "1.0.0", TestArtifacts.zipOf("SKILL.md", "# Meta\n"));
+
+        mockMvc.perform(patch("/api/v1/skills/{id}", skillId)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"name":"改过的名字","description":"新的描述","tags":["a","b"]}"""))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.name").value("改过的名字"))
+            .andExpect(jsonPath("$.tags[0]").value("a"));
+
+        mockMvc.perform(get("/api/v1/skills/{id}/versions/{v}", skillId, "1.0.0")
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.version").value("1.0.0"))
+            .andExpect(jsonPath("$.scan.status").value("passed"));
     }
 
     private UUID createSkill(String slug) throws Exception {

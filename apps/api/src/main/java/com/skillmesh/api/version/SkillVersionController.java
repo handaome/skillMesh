@@ -2,6 +2,7 @@ package com.skillmesh.api.version;
 
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.version.dto.RevokeVersionRequest;
+import com.skillmesh.api.version.dto.SkillVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
 import com.skillmesh.api.version.dto.VersionPage;
@@ -52,6 +53,13 @@ public class SkillVersionController {
      * 撤回一个版本（设计文档 §10 撤回）。
      * 只改可用状态、留下记录；已经装在别人机器上的内容不无痕删除。
      */
+    @GetMapping("/skills/{skillId}/versions/{version}")
+    public SkillVersionResponse detail(@AuthenticationPrincipal Jwt jwt,
+                                      @PathVariable UUID skillId,
+                                      @PathVariable String version) {
+        return versions.detail(currentUserService.current(jwt), skillId, version);
+    }
+
     @PostMapping("/skills/{skillId}/versions/{version}/revoke")
     public ResponseEntity<Map<String, Object>> revoke(
             @AuthenticationPrincipal Jwt jwt,

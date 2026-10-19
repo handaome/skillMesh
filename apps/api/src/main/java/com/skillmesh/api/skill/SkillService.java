@@ -5,6 +5,7 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
+import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillPage;
 import com.skillmesh.api.skill.dto.SkillResponse;
 import java.nio.charset.StandardCharsets;
@@ -55,6 +56,28 @@ public class SkillService {
         entity.setMetadataJson(req.metadata() == null ? Map.of() : req.metadata());
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
+        return toResponse(skills.save(entity));
+    }
+
+    @Transactional
+    public SkillResponse update(CurrentUser user, UUID id, UpdateSkillRequest req) {
+        SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
+        if (!user.id().equals(entity.getOwnerUserId())) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能改这个 Skill");
+        }
+        if (req.name() != null) {
+            entity.setName(req.name());
+        }
+        if (req.description() != null) {
+            entity.setDescription(req.description());
+        }
+        if (req.tags() != null) {
+            entity.setTags(req.tags().toArray(new String[0]));
+        }
+        if (req.metadata() != null) {
+            entity.setMetadataJson(req.metadata());
+        }
+        entity.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         return toResponse(skills.save(entity));
     }
 

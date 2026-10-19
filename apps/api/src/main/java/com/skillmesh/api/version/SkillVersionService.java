@@ -141,6 +141,26 @@ public class SkillVersionService {
         return entries;
     }
 
+    /** 单个版本详情（契约里 GET /skills/{id}/versions/{version}）。 */
+    @Transactional(readOnly = true)
+    public SkillVersionResponse detail(CurrentUser user, UUID skillId, String version) {
+        list(user, skillId); // 顺带做可见性校验：看不见就 404
+        SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
+            .orElseThrow(() -> ApiException.notFound("版本"));
+        SkillVersionResponse.ArtifactSummary summary = null;
+        if (entity.getArtifactId() != null) {
+            var artifact = artifacts.require(entity.getArtifactId());
+            summary = new SkillVersionResponse.ArtifactSummary(artifact.getId(),
+                artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType(),
+                artifact.getSignature(), artifact.getSignatureKeyId(),
+                entity.getManifestJson() == null || entity.getManifestJson().isEmpty()
+                    ? "" : ContentDigest.of(entity.getManifestJson()));
+        }
+        return new SkillVersionResponse(entity.getId(), entity.getSkillId(), entity.getVersion(),
+            entity.getChannel(), entity.getStatus(), entity.getSourceCommit(), summary,
+            manifestOf(entity), scanOf(entity), entity.getPublishedAt(), entity.getCreatedAt());
+    }
+
     /** 最近一次扫描结论，没有就返回 null——没扫过和扫过是两回事，不能混。 */
     private SkillVersionResponse.ScanSummary scanOf(SkillVersionEntity version) {
         return scans.findFirstBySkillVersionIdOrderByStartedAtDesc(version.getId())

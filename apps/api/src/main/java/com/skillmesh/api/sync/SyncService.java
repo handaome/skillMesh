@@ -108,6 +108,34 @@ public class SyncService {
     }
 
     /**
+     * 标记冲突已解决。resolution 对应 sync_conflicts.status：
+     * keep-local / keep-cloud / keep-both / dismiss。
+     */
+    @Transactional
+    public SyncChangesetResponse resolve(CurrentUser user, UUID changesetId, String resolution) {
+        SyncChangesetEntity changeset = changesets.findById(changesetId)
+            .orElseThrow(() -> ApiException.notFound("变更集"));
+        devices.require(user, changeset.getDeviceId());
+        String status = switch (resolution) {
+            case "keep-local" -> "resolved_local";
+            case "keep-cloud" -> "resolved_cloud";
+            case "keep-both" -> "resolved_merged";
+            default -> "dismissed";
+        };
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        for (SyncConflictEntity conflict : conflicts.findByChangesetIdOrderByCreatedAtAsc(
+            changesetId)) {
+            conflict.setStatus(status);
+            conflict.setResolvedAt(now);
+            conflicts.save(conflict);
+        }
+        changeset.setStatus("completed");
+        changeset.setCompletedAt(now);
+        changesets.save(changeset);
+        return toResponse(changeset);
+    }
+
+    /**
      * 冲突判定：基线为空（第一次同步）不冲突；云端为空（云端还没有内容）也不冲突；
      * 否则只要云端和基线不一样，就说明别的设备动过了。
      */

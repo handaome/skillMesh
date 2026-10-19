@@ -2,7 +2,9 @@ package com.skillmesh.api.audit;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import java.time.OffsetDateTime;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** 审计流水查询。只对能看见这个 Skill 的人开放（设计文档 §10）。 */
@@ -25,15 +28,46 @@ public class AuditController {
     private final AuditService audit;
     private final SkillRepository skills;
     private final SkillService skillService;
+    private final com.skillmesh.api.skill.SkillRepository skillRepository;
     private final CurrentUserService currentUserService;
 
     public AuditController(AuditService audit, SkillRepository skills,
                            CurrentUserService currentUserService,
-                           SkillService skillService) {
+                           SkillService skillService,
+                           com.skillmesh.api.skill.SkillRepository skillRepository) {
         this.audit = audit;
         this.skills = skills;
         this.currentUserService = currentUserService;
         this.skillService = skillService;
+        this.skillRepository = skillRepository;
+    }
+
+    /**
+     * 我可见的审计流水（详细设计 §12 的 /audit-events）。
+     * 只返回我名下 Skill 的事件——审计不是所有人都能翻的。
+     */
+    @GetMapping("/audit-events")
+    public List<EventResponse> recent(@AuthenticationPrincipal Jwt jwt,
+                                      @RequestParam(required = false) String action,
+                                      @RequestParam(defaultValue = "50") int limit) {
+        CurrentUser user = currentUserService.current(jwt);
+        List<UUID> visible = skillRepository.findAll().stream()
+            .filter(skill -> skillService.canView(user, skill))
+            .map(SkillEntity::getId)
+            .toList();
+        int capped = Math.clamp(limit, 1, 200);
+        List<EventResponse> events = new java.util.ArrayList<>();
+        for (UUID skillId : visible) {
+            for (AuditEventEntity event : audit.recentForSkill(skillId, capped)) {
+                if (action != null && !action.isBlank() && !action.equals(event.getAction())) {
+                    continue;
+                }
+                events.add(EventResponse.of(event));
+            }
+        }
+        events.sort(java.util.Comparator.comparing(
+            (EventResponse event) -> event.occurredAt()).reversed());
+        return events.size() > capped ? events.subList(0, capped) : events;
     }
 
     @GetMapping("/skills/{skillId}/audit")

@@ -4,6 +4,7 @@ import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillPage;
 import com.skillmesh.api.skill.dto.SkillResponse;
+import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.UUID;
@@ -11,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -51,5 +53,15 @@ public class SkillController {
     @GetMapping("/{skillId}")
     public SkillResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID skillId) {
         return skills.get(currentUserService.current(jwt), skillId);
+    }
+
+    /**
+     * 改名称、描述、标签。slug 与可见性不在这里改——那会影响别人已经装的东西。
+     */
+    @PatchMapping("/{skillId}")
+    public SkillResponse update(@AuthenticationPrincipal Jwt jwt,
+                                @PathVariable UUID skillId,
+                                @Valid @RequestBody UpdateSkillRequest req) {
+        return skills.update(currentUserService.current(jwt), skillId, req);
     }
 }

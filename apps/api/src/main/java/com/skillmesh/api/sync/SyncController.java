@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -43,6 +44,17 @@ public class SyncController {
             sync.submit(currentUserService.current(jwt), deviceId, idempotencyKey, req);
         return ResponseEntity.created(URI.create("/api/v1/sync/changesets/" + body.changesetId()))
             .body(body);
+    }
+
+    /**
+     * 标记冲突已解决（详细设计 §12）。
+     * 只改记录状态——真正覆盖的是客户端自己的文件，服务端不碰。
+     */
+    @PostMapping("/changesets/{changesetId}/resolve")
+    public SyncChangesetResponse resolve(@AuthenticationPrincipal Jwt jwt,
+                                        @PathVariable UUID changesetId,
+                                        @RequestParam(defaultValue = "keep-local") String resolution) {
+        return sync.resolve(currentUserService.current(jwt), changesetId, resolution);
     }
 
     @GetMapping("/changesets/{changesetId}")
