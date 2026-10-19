@@ -298,7 +298,7 @@ export SKILLMESH_TOKEN=<access-token>
 | `update <name>` | 只更新某一个 |
 | `rollback <name> --to <version>` | 回滚到指定版本（仅注册中心来源） |
 | `sync` / `sync --resolve` | 与个人私有空间对账，冲突按你的选择解决 |
-| `watch start\|stop\|pause` | 后台同步监听 |
+| `watch start` / `stop` / `pause` | 后台同步监听 |
 | `lock refresh` | 重新解析来源并刷新锁文件 |
 | `uninstall <name>` | 移除安装内容与锁文件记录 |
 
