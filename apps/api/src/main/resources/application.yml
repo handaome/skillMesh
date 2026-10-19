@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: skillmesh-api
+  config:
+    # 从仓库根的 .env 读凭据。.env 是 KEY=VALUE 格式，与 properties 兼容；
+    # 显式指定 [.properties] 否则 Spring 会因扩展名不认识而报错。
+    import: "optional:file:../../.env[.properties]"
+  datasource:
+    url: ${SM_DB_URL}
+    username: ${SM_DB_USER}
+    password: ${SM_DB_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migrations
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        default_schema: public
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${SM_KEYCLOAK_ISSUER}
+
+server:
+  port: 8080
+  address: 127.0.0.1
+  error:
+    include-message: never
+
+skillmesh:
+  minio:
+    endpoint: ${SM_MINIO_ENDPOINT}
+    access-key: ${SM_MINIO_ACCESS_KEY}
+    secret-key: ${SM_MINIO_SECRET_KEY}
+    bucket: ${SM_MINIO_BUCKET}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

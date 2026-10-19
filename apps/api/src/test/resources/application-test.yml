@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://123.56.146.58:5432/skill_mesh?currentSchema=skillmesh_test
+    username: ${SM_DB_USER}
+    password: ${SM_DB_PASSWORD}
+  flyway:
+    schemas: skillmesh_test
+    default-schema: skillmesh_test
+    create-schemas: true
+    clean-disabled: false
+  jpa:
+    properties:
+      hibernate:
+        default_schema: skillmesh_test
+
+skillmesh:
+  minio:
+    endpoint: http://127.0.0.1:9100
+    access-key: skillmesh
+    secret-key: skillmesh-dev-secret
+    bucket: skillmesh-test-artifacts
+  test:
+    client-id: skillmesh-test
+    username: dev-user
+    password: dev

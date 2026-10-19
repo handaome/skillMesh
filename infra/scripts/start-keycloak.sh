@@ -31,8 +31,17 @@ fi
 export KC_BOOTSTRAP_ADMIN_USERNAME="${SM_KEYCLOAK_ADMIN_USER:-admin}"
 export KC_BOOTSTRAP_ADMIN_PASSWORD="${SM_KEYCLOAK_ADMIN_PASSWORD:-admin}"
 
-nohup "$KC/bin/kc.bat" start-dev \
-  --http-port="$PORT" --http-host=127.0.0.1 --http-relative-path=/kc --import-realm \
+# Git Bash 下直接跑 .bat 有两个坑：
+#   1) POSIX 路径会被 mangle，kc.home.dir 变成 "C:\Program Files\Git\..."
+#   2) 形如 /kc 的参数会被 MSYS 当成 Unix 路径转成 "C:\Program Files\Git\kc"
+# 两者都让 Keycloak 报 "Specified path is an invalid URI"。
+# 解法：把命令写进 .cmd 包装器，参数不再经过 MSYS 转换。
+export SKILLMESH_KC_HOME="$(cygpath -w "$KC" 2>/dev/null || echo "$KC")"
+export SKILLMESH_KC_PORT="$PORT"
+export SKILLMESH_KC_HOST="127.0.0.1"
+LAUNCHER_WIN="$(cygpath -w "$ROOT/infra/scripts/keycloak-start.cmd" 2>/dev/null || echo "$ROOT/infra/scripts/keycloak-start.cmd")"
+
+nohup cmd.exe //c "$LAUNCHER_WIN" \
   > "$LOGS/keycloak.log" 2>&1 &
 echo $! > "$LOGS/keycloak.pid"
 
