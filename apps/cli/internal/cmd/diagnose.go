@@ -1,0 +1,100 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/agent"
+	"github.com/spf13/cobra"
+)
+
+func newDoctorCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "doctor",
+		Short: "诊断配置、目录权限、认证状态与 Git 可用性",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			fmt.Printf("服务端   %s\n", cfg.Server)
+			fmt.Printf("配置目录 %s\n", cfg.ConfigDir)
+			fmt.Printf("缓存目录 %s\n", cfg.CacheDir)
+
+			if gitPath, err := exec.LookPath("git"); err != nil {
+				fmt.Println("git      未找到，来源解析不可用")
+			} else if out, err := exec.Command(gitPath, "--version").Output(); err == nil {
+				fmt.Printf("git      %s\n", strings.TrimSpace(string(out)))
+			}
+
+			if client, err := newClient(); err != nil {
+				fmt.Println("认证     未登录")
+			} else if me, err := client.Me(cmd.Context()); err != nil {
+				fmt.Printf("认证     失败: %v\n", err)
+			} else {
+				fmt.Printf("认证     已登录为 %s (%s)\n",
+					me.User.DisplayName, short(me.User.ID))
+			}
+
+			for _, name := range sortedAgentNames() {
+				agentCfg := cfg.Agents[name]
+				if !agentCfg.Enabled {
+					fmt.Printf("agent %-12s 未启用\n", name)
+					continue
+				}
+				state := "不存在，安装时创建"
+				if info, err := os.Stat(agentCfg.UserSkillsDir); err == nil && info.IsDir() {
+					state = "存在"
+				}
+				fmt.Printf("agent %-12s %s（%s）\n", name, agentCfg.UserSkillsDir, state)
+			}
+			return nil
+		},
+	}
+}
+
+func newAgentsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "agents",
+		Short: "Agent 适配器管理",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "detect",
+		Short: "检测本机各 Agent 的 Skill 目录",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			projectRoot := mustGetwd()
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "AGENT\t启用\t用户目录\t项目目录\t用户目录存在")
+			for _, name := range agent.Supported {
+				agentCfg, ok := cfg.Agents[name]
+				if !ok {
+					fmt.Fprintf(w, "%s\t无配置\t-\t-\t-\n", name)
+					continue
+				}
+				projectDir := agentCfg.ProjectSkills
+				if resolved, err := agentDirFor(name, projectRoot); err == nil {
+					projectDir = resolved
+				}
+				exists := "否"
+				if _, err := os.Stat(agentCfg.UserSkillsDir); err == nil {
+					exists = "是"
+				}
+				fmt.Fprintf(w, "%s\t%v\t%s\t%s\t%s\n",
+					name, agentCfg.Enabled, agentCfg.UserSkillsDir, projectDir, exists)
+			}
+			return w.Flush()
+		},
+	})
+	return cmd
+}
+
+func sortedAgentNames() []string {
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
