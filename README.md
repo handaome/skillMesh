@@ -397,6 +397,24 @@ skillmesh daemon logs --tail 50
 
 扫描列显示 `未扫描` 的，是 v1.1 之前发布的版本，那会儿没有服务端扫描。
 
+**制品签名**（设计文档 §10 制品完整性）：服务端在制品定版时对**清单摘要**做 Ed25519 签名，签名随版本列表返回。客户端装之前验两件事——签名对不对得上，以及装下来的内容摘要和清单对不对得上。`install` 会打印结果（`已验签（内容与签名一致）` / `未签名` / `验签失败：…`）。
+
+服务端不配密钥就不签（空签名不会被误当成验过了）：
+
+```bash
+openssl genpkey -algorithm ed25519 -out skillmesh-signing.pem
+openssl pkey -in skillmesh-signing.pem -pubout -outform DER | tail -c 32 | base64 -w0   # 公钥
+openssl pkcs8 -topk8 -nocrypt -in skillmesh-signing.pem -outform DER | base64 -w0          # 私钥
+```
+
+```bash
+SM_SIGNING_PRIVATE_KEY=<私钥 base64>
+SM_SIGNING_PUBLIC_KEY=<公钥 base64>
+SM_SIGNING_KEY_ID=2026-10
+```
+
+客户端从 `GET /api/v1/keys/verify` 取公钥。**验签证明的是「这份摘要确实出自注册中心当前的密钥」，不等于注册中心本身可信**——那需要固定公钥或证书链，目前没有。
+
 **被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
 
 ### 审计

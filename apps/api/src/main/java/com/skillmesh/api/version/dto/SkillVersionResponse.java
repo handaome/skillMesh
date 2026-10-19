@@ -23,7 +23,12 @@ public record SkillVersionResponse(
             UUID id,
             String sha256,
             @JsonProperty("size_bytes") long sizeBytes,
-            @JsonProperty("content_type") String contentType) {}
+            @JsonProperty("content_type") String contentType,
+            /** 清单摘要的签名，客户端用它验证内容没被换过。 */
+            String signature,
+            @JsonProperty("signature_key_id") String signatureKeyId,
+            /** 清单摘要本身：签名和同步判重都以它为准。 */
+            @JsonProperty("content_digest") String contentDigest) {}
 
     /** 逐文件清单。客户端用它算规范化摘要，判断内容是否真的变了。 */
     public record ManifestEntry(String path, String sha256, @JsonProperty("size_bytes") long sizeBytes) {}

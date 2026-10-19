@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/handaome/skillmesh/apps/cli/internal/verify"
 )
 
 // warnRisks 把安装内容里的风险摊开给用户看（设计文档 §3.2 第 6 步）。
@@ -17,6 +19,37 @@ func warnRisks(skillDir string) {
 		return
 	}
 	fmt.Printf("风险提示：\n%s\n", skillscan.FormatFindings(findings))
+}
+
+// verifyArtifact 验签这一份制品，并对一遍本地算出的摘要。
+//
+// 两件事都要做：签名验的是「服务端说的摘要没被换」，
+// 本地对摘要验的是「装下来的东西就是那个摘要」。
+func verifyArtifact(ctx context.Context, client *apiclient.Client, target apiclient.SkillVersion,
+	skillDir string) string {
+
+	if target.Artifact == nil || target.Artifact.ContentDigest == "" {
+		return verify.NoSignature.String()
+	}
+	key, err := client.VerifyKey(ctx)
+	if err != nil {
+		return "验签跳过（取不到公钥）"
+	}
+	outcome, err := verify.Check(key, target.Artifact.Signature, target.Artifact.ContentDigest)
+	if err != nil {
+		return string(verify.Invalid) + "：" + err.Error()
+	}
+	if outcome != verify.Verified {
+		return outcome.String()
+	}
+	local, err := skillscan.DirDigest(skillDir)
+	if err != nil {
+		return string(verify.Verified) + "（本地摘要算不出来）"
+	}
+	if local != target.Artifact.ContentDigest {
+		return string(verify.Invalid) + "：装下来的内容和清单摘要对不上"
+	}
+	return string(verify.Verified) + "（内容与签名一致）"
 }
 
 // printVersionRisks 打印服务端对这一份制品的扫描结论。

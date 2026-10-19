@@ -109,6 +109,8 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		return err
 	}
 	warnRisks(skillDir)
+	fmt.Printf("%s 验签：%s\n", req.Version.Version,
+		verifyArtifact(ctx, client, req.Version, skillDir))
 	fmt.Println(skillscan.LicenseLine(skillDir))
 	name := skillscan.SkillName(skillDir)
 

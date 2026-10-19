@@ -2,6 +2,7 @@ package com.skillmesh.api.sync;
 
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.device.DeviceEntity;
 import com.skillmesh.api.device.DeviceService;
 import com.skillmesh.api.skill.SkillEntity;
@@ -28,9 +29,6 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class SyncService {
-
-    // Path and digest separator; must match the CLI's \x00 so both sides compute the same digest.
-    private static final char FIELD_SEP = (char) 0;
 
     private final SyncChangesetRepository changesets;
     private final SyncConflictRepository conflicts;
@@ -126,16 +124,11 @@ public class SyncService {
             if (version.getArtifactId() == null) {
                 continue;
             }
-            // 云端权威摘要存在制品上；版本行上的 manifest 是同口径的副本。
+            // 版本行上的 manifest 是内容清单，与 CLI 同口径。
             if (version.getManifestJson() == null || version.getManifestJson().isEmpty()) {
                 return null;
             }
-            StringBuilder sorted = new StringBuilder();
-            version.getManifestJson().stream()
-                .sorted(java.util.Comparator.comparing(item -> String.valueOf(item.get("path"))))
-                .forEach(item -> sorted.append(item.get("path")).append(FIELD_SEP)
-                    .append(item.get("sha256")).append('\n'));
-            return sha256(sorted.toString());
+            return ContentDigest.of(version.getManifestJson());
         }
         return null;
     }
@@ -215,13 +208,4 @@ public class SyncService {
         return value == null || value.isBlank() ? null : value;
     }
 
-    private static String sha256(String text) {
-        try {
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
-                .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return java.util.HexFormat.of().formatHex(digest);
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 不可用", e);
-        }
-    }
 }

@@ -90,6 +90,11 @@ public class ArtifactService {
         });
     }
 
+    @Transactional
+    public ArtifactEntity saveArtifact(ArtifactEntity artifact) {
+        return artifacts.save(artifact);
+    }
+
     @Transactional(readOnly = true)
     public ArtifactEntity require(UUID artifactId) {
         return artifacts.findById(artifactId).orElseThrow(() -> ApiException.notFound("Artifact"));

@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/verify"
 )
 
 // Device 是注册中心认得的一台机器。同步变更集要挂在设备上。
@@ -90,4 +92,13 @@ func (c *Client) ReportAuditEvent(ctx context.Context, action, targetID, outcome
 		body["details"] = details
 	}
 	return c.doWith(ctx, http.MethodPost, "/audit/events", nil, body, nil)
+}
+
+// VerifyKey 取注册中心的验签公钥。
+func (c *Client) VerifyKey(ctx context.Context) (verify.PublicKey, error) {
+	var out verify.PublicKey
+	if err := c.doWith(ctx, http.MethodGet, "/keys/verify", nil, nil, &out); err != nil {
+		return out, err
+	}
+	return out, nil
 }

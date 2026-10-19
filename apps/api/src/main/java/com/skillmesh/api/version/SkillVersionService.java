@@ -4,6 +4,7 @@ import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.artifact.ArtifactStorage;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
@@ -14,6 +15,7 @@ import com.skillmesh.api.version.dto.CreateVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionResponse.UploadTarget;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.scan.ScanEntity;
 import com.skillmesh.api.scan.ScanRepository;
@@ -107,7 +109,10 @@ public class SkillVersionService {
             if (version.getArtifactId() != null) {
                 var artifact = artifacts.require(version.getArtifactId());
                 summary = new SkillVersionResponse.ArtifactSummary(artifact.getId(),
-                    artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType());
+                    artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType(),
+                    artifact.getSignature(), artifact.getSignatureKeyId(),
+                    version.getManifestJson() == null || version.getManifestJson().isEmpty()
+                        ? "" : ContentDigest.of(version.getManifestJson()));
             }
             items.add(new SkillVersionResponse(version.getId(), version.getSkillId(),
                 version.getVersion(), version.getChannel(), version.getStatus(),

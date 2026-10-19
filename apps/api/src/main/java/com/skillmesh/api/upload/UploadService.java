@@ -1,6 +1,8 @@
 package com.skillmesh.api.upload;
 
 import com.skillmesh.api.artifact.ArtifactEntity;
+import com.skillmesh.api.artifact.SigningService;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.auth.CurrentUser;
@@ -42,10 +44,12 @@ public class UploadService {
     private final ArtifactScanner scanner;
     private final ScanRepository scans;
     private final AuditService audit;
+    private final SigningService signing;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
                          SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
-                         ArtifactScanner scanner, ScanRepository scans, AuditService audit) {
+                         ArtifactScanner scanner, ScanRepository scans, AuditService audit,
+                         SigningService signing) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
@@ -54,6 +58,7 @@ public class UploadService {
         this.scanner = scanner;
         this.scans = scans;
         this.audit = audit;
+        this.signing = signing;
     }
 
     @Transactional
@@ -96,6 +101,7 @@ public class UploadService {
 
         ArtifactEntity artifact = artifacts.record(promoted.sha256(), finalKey,
             promoted.sizeBytes(), 1, List.of());
+        signArtifact(artifact, version);
 
         version.setArtifactId(artifact.getId());
         ScanResult scan = runScan(version, storage.get(finalKey));
@@ -147,6 +153,20 @@ public class UploadService {
         row.setCompletedAt(completed);
         scans.save(row);
         return result;
+    }
+
+    /**
+     * 给制品的清单摘要签名（设计文档 §10 制品完整性）。
+     * 没配私钥时 sign 返回空串，等于不签——空签名不会被误当成「验过了」。
+     */
+    private void signArtifact(ArtifactEntity artifact, SkillVersionEntity version) {
+        String signature = signing.sign(ContentDigest.of(version.getManifestJson()));
+        if (signature.isEmpty()) {
+            return;
+        }
+        artifact.setSignature(signature);
+        artifact.setSignatureKeyId(signing.keyId());
+        artifacts.saveArtifact(artifact);
     }
 
     private List<Map<String, Object>> toJson(List<ScanResult.Finding> findings) {

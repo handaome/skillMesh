@@ -86,6 +86,14 @@ func printVersions(versions []apiclient.SkillVersion) error {
 	return w.Flush()
 }
 
+// signatureLabel 只显示有没有签，不在这里做验签——info 不下载内容。
+func signatureLabel(artifact *apiclient.ArtifactSummary) string {
+	if artifact == nil || artifact.Signature == "" {
+		return "未签名"
+	}
+	return artifact.SignatureKeyID
+}
+
 func scanLabel(scan *apiclient.ScanSummary) string {
 	if scan == nil {
 		return "未扫描"

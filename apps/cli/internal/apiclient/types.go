@@ -23,10 +23,13 @@ type SkillPage struct {
 }
 
 type ArtifactSummary struct {
-	ID          string `json:"id"`
-	SHA256      string `json:"sha256"`
-	SizeBytes   int64  `json:"size_bytes"`
-	ContentType string `json:"content_type"`
+	ID             string `json:"id"`
+	SHA256         string `json:"sha256"`
+	SizeBytes      int64  `json:"size_bytes"`
+	ContentType    string `json:"content_type"`
+	Signature      string `json:"signature"`
+	SignatureKeyID string `json:"signature_key_id"`
+	ContentDigest  string `json:"content_digest"`
 }
 
 type SkillVersion struct {
