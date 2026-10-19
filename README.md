@@ -210,6 +210,16 @@ cd apps/web && pnpm test          # 前端组件
 5. **GitHub 不可达**时 Keycloak 走 Maven Central 的 `org.keycloak:keycloak-quarkus-dist`，Go 模块走 goproxy.cn。
 6. **github.com 的 443 不通，但 22（SSH）通**。本机已生成 `~/.ssh/id_ed25519`（无口令，注释 `skillmesh-dev`），把公钥注册到 GitHub 后，git 走 SSH 就能用，不依赖代理：
 
+   PowerShell：
+
+   ```powershell
+   cd D:\dev\MyProject\SkillMesh
+   $env:GITHUB_TOKEN = "<带 admin:public_key 权限的 PAT>"
+   .\infra\scripts\register-github-ssh-key.ps1
+   ```
+
+   Git Bash：
+
    ```bash
    export GITHUB_TOKEN=<带 admin:public_key 权限的 PAT>
    bash infra/scripts/register-github-ssh-key.sh
@@ -217,7 +227,12 @@ cd apps/web && pnpm test          # 前端组件
 
    注册后 CLI 用 `git@github.com:owner/repo.git` 形式即可（`NormalizeURL` 已支持 `git@` 写法）。注意建 PAT 和加密钥都要走 github.com 的 web UI，所以**第一次仍然需要把代理开起来**。
 
-   不想用 SSH 的话，开着代理直接 `git config --global http.proxy http://127.0.0.1:7890` 更省事。
+   不想用 SSH 的话，开着代理直接配 git 更省事：
+
+   ```powershell
+   git config --global http.proxy  http://127.0.0.1:7890
+   git config --global https.proxy http://127.0.0.1:7890
+   ```
 
 ## MVP 范围
 
