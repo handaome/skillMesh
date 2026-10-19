@@ -2,8 +2,8 @@
 
 Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本地执行：云端管元数据/权限/版本/制品，本地负责发现、校验与安装，Agent 继续读自己的原生 Skill 目录。
 
-- 产品设计：[doc/设计文档.md](doc/设计文档.md)
-- 接口与数据库规范：[doc/详细设计.md](doc/详细设计.md)
+- 产品设计：[设计文档](docs/设计文档.md)
+- 接口与数据库规范：[详细设计](docs/详细设计.md)
 - MVP 范围裁剪：[docs/superpowers/specs/2026-10-19-mvp-v1-design.md](docs/superpowers/specs/2026-10-19-mvp-v1-design.md)
 
 ## 目录结构
