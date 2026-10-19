@@ -46,8 +46,8 @@ skillmesh/
 | --- | --- | --- |
 | 1 | `infra/`：MinIO（`:9000` / 控制台 `:9001`）、Keycloak（`:8180`）启动脚本；realm 导出文件含 realm、client、用户、scope | MinIO 控制台可登录；Keycloak 能签发 access token，claims 含 subject 与组织/角色 |
 | 2 | `db/migrations/V1__init.sql` + Flyway 配置 | 远程 `skill_mesh` 库建表成功，Flyway schema history 记录 `V1` |
-| 3 | API：`GET /me`、`GET /skills`、`GET /skills/{id}`、`GET /skills/{id}/versions`、`POST /skills`、`POST /skills/{id}/versions`（上传制品）、`GET /artifacts/{id}/download` | 带 token 的 curl 跑通全链路；上传后 sha256 与 DB 记录一致；下载不返回公开 URL |
-| 4 | CLI：`login` `search` `info` `source resolve` `add` `install` `list` `status` `uninstall` `doctor` `update --check` | 从 Git 仓库指定子目录安装进 `~/.claude/skills/`；lock 文件记录 commit + sha256；`update --check` 能报出上游新 commit |
+| 3 | API（全部挂在 `/api/v1` 下，详细设计 §2.1）：`GET /me`、`GET /skills`、`GET /skills/{id}`、`GET /skills/{id}/versions`、`POST /skills`、`POST /skills/{id}/versions`（上传制品）、`GET /artifacts/{id}/download` | 带 token 的 curl 跑通全链路；上传后 sha256 与 DB 记录一致；下载不返回公开 URL |
+| 4 | CLI：`login` `search` `info` `source resolve` `add` `install` `list` `status` `uninstall` `doctor` `agents detect` `update --check` `lock refresh`；适配器 claude-code + codex | `add <url> --path <subdir> --install --agent claude-code` 装进 `~/.claude/skills/`；`--agent codex` 装进 `~/.codex/skills/`（或 `CODEX_HOME/skills`）；项目级 `skillmesh.lock.yaml` 记录 `resolved_commit` + `sha256`；`update --check` 能报出上游新 commit；`install --locked` 在 lock 不匹配时失败 |
 | 5 | Web：搜索页 + 详情页（含版本列表） | 能搜到并查看 API 创建的 Skill 及其版本 |
 
 ## 4. 第一天就做、不可推迟的约束
@@ -55,21 +55,22 @@ skillmesh/
 这三条后补会破坏已有数据或已发布制品，因此必须在切片 2/3 完成：
 
 1. **版本不可变**：`skill_versions` 的 `(skill_id, version)` 唯一约束 + 制品内容 SHA-256 校验，在首次建表时就位。
-2. **制品下载必须授权**：`GET /artifacts/{id}/download` 先鉴权再流式返回，不返回带长期权限的公开 URL（详细设计 §12）。
-3. **凭据不入库、不入日志**：数据库只存 Git 凭据的**引用**；令牌、密码只存在于 gitignore 的 `.env` / `application-local.yml` 与本机环境变量。
+2. **制品下载必须授权**：`GET /api/v1/artifacts/{id}/download` 先鉴权再流式返回，不返回带长期权限的公开 URL（详细设计 §12）。
+3. **凭据不入库、不入日志**：数据库只存 Git 凭据的**引用**；服务端凭据只存在于 gitignore 的 `.env` / `application-local.yml`，CLI 凭据交给系统 Credential Manager（详细设计 §3.1.1）。
 
 ## 5. 推迟到 v2 的范围
 
-明确不在 MVP v1：
+明确不在 MVP v1。标注「**有意偏离**」的条目是本 spec 与详细设计不一致的地方，v2 必须回归：
 
 - 本地同步引擎：daemon / `watch` / changeset 双向合并 / 离线队列 / 冲突解决
-- 发布审批流：`submit` → `review` → `publish` 状态机（v1 的版本创建即发布）
+- **有意偏离**：发布审批流 `submit` → `review` → `publish` 状态机（详细设计 §10.1）。v1 中 `POST /skills/{id}/versions` 创建即 `published`，跳过 `draft`/`scanning`/`pending_review`。v2 回归完整状态机，**表结构在 v1 就按最终状态机建**，避免事后改列
 - 团队角色矩阵与组织/团队管理（v1 只有单用户 + 一个个人空间）
-- 审计事件全量记录
+- 审计事件全量记录（v1 不写 `audit_events`）
 - 制品签名与供应链校验
-- Cursor 适配器
-- `rollback` 命令——v1 用 `install <skill>@<version>` 固定版本替代
-- 服务端 `POST /sources/resolve` 与 `POST /sources/check-updates`——v1 的 `source resolve` 与 `update --check` 完全在 CLI 本地完成（clone 到临时目录探测 `SKILL.md`、`git ls-remote` 取 ref）
+- Cursor 适配器（v1 做 claude-code + codex 两个，详细设计 §4 首期要求）
+- `rollback` 命令——v1 用 `install --version` 固定版本替代
+- 服务端 `POST /sources/resolve` 与 `POST /sources/check-updates`——v1 的 `source resolve` 与 `update --check` 完全在 CLI 本地完成（clone 到临时目录探测 `SKILL.md`、`git ls-remote` 取 ref）。详细设计 §3.5 允许「本地直接 clone 模式」，故非偏离
+- 风险扫描阻断安装（详细设计 §3.5 步骤 4）——v1 只做路径穿越/大小/`SKILL.md` 存在性校验，扫描引擎进 v2
 
 ## 6. 实现要点
 
@@ -77,23 +78,35 @@ skillmesh/
 
 - `update --check` 用 `git ls-remote` 取远端 ref，不做完整 clone；只有 `add` / `install` / `update` 才 clone 到临时目录。
 - 引入 go-git 或纯 exec 系统 git **以 exec 为主**：系统 git 已在，go-git 只在需要无 git 环境时才值得。MVP 不引入。
+- `add` 只登记来源，`--install` 才写入 Agent 目录（详细设计 §3.5）。`--scope` 默认 `project`，检测不到项目根时提示用户。
 - 安装前校验：路径穿越（`..`、绝对路径、符号链接逃逸）、单文件大小上限、总大小上限、`SKILL.md` 必须存在。
-- 安装用「临时目录 → 校验 → 原子替换」，失败不破坏当前版本。
+- 安装用「临时目录 → 校验 → 原子替换」，失败不破坏当前版本；目标目录已有同名 Skill 且不受 SkillMesh 管理时默认不覆盖，需 `--replace`。
+- Agent 目录路径全部来自配置（`config.yaml` 的 `agents.*.user_skills_dir`），不在代码里硬编码（附录 A.8）。
+
+### 配置与凭据
+
+- **服务端**：仓库内只提交 `.env.example`；真实值在 `.env`（已 gitignore）。`datasource.url`、`minio.*`、`keycloak.issuer-uri` 全部外部化到环境变量。
+- **CLI**：配置在 `%APPDATA%\SkillMesh\config.yaml`，缓存 `%LOCALAPPDATA%\SkillMesh\Cache`（详细设计 §3.1.1）。`config.yaml` 只存非敏感设置，access/refresh token 存 Windows Credential Manager；`--credential-ref` 指向凭据引用，不接受明文 token。
+
+### 项目配置与锁文件
+
+按详细设计 §3.10，项目根目录：
+
+- `skillmesh.yaml`——声明式：来源、`ref_type`/`ref`、`install.agents`、`install.scope`、`update_policy`。`install`/`update --all` 读取它。
+- `skillmesh.lock.yaml`——解析结果：`source_id`、`repository`、`path`、`ref_type`、`ref`、`resolved_commit`、`version`、`sha256`、`agents`、`resolved_at`。
+- `install --locked` 在远端解析结果与 lock 不符时失败，用于 CI 防漂移。
 
 ### 制品存储（MinIO）
 
 - bucket：`skillmesh-artifacts`；object key：`{skill_id}/{version}/{sha256}.tar.gz`。
 - 数据库存 `artifact_key` + `sha256` + `size_bytes`，key 不可复用覆盖。
+- **临时态与正式态分离**（附录 A.2）：`POST /uploads/{upload_id}/complete` 收尾时把临时对象搬到按摘要寻址的正式 key；临时对象配置自动过期。
 
-### 配置与凭据
+### API 契约
 
-- 仓库内只提交 `.env.example`；真实值在 `.env`（已 gitignore）。
-- API 通过 Spring Profile `local` 读取 `.env`；`minio.endpoint`、`keycloak.issuer-uri`、`datasource.url` 全部外部化。
-
-### API 约定
-
-- 前缀 `/api/v1`，JSON 字段 `snake_case`，错误统一 problem+json（详细设计 §0.2、§2.1）。
-- 列表接口用 `limit` + `cursor`。
+- `api-spec/openapi.yaml` 是**手写契约**，从详细设计 §2.3 原样抽出，不从代码生成（附录 A.1）。变更时同步更新 Go 客户端模型并跑 lint。
+- 前缀 `/api/v1`，JSON 字段 `snake_case`；错误统一 problem+json，字段 `type`/`title`/`status`/`code`/`detail`/`request_id`/`retryable`/`field_errors`；客户端只按 `code` 分支，不解析 `detail`。
+- 创建返回 `201` + `Location`；列表用 `limit` + `cursor`；无权限的私有资源按策略返回 `404` 而非 `403`。
 
 ## 7. 风险
 
@@ -103,3 +116,17 @@ skillmesh/
 | Keycloak / MinIO 首轮下载体积大（合计约 500MB） | 只下载一次，脚本固化到 `infra/` |
 | Go 为 386 32 位，跨平台分发受限 | MVP 只在本机开发，不做交叉编译发布；发版时换 amd64/arm64 |
 | 上游详细设计的 DDL 未在 PG 18 实测 | 切片 2 的验收即为此项实测 |
+
+## 8. 与详细设计 §4.5「最小可交付范围」的覆盖对照
+
+| §4.5 条目 | v1 状态 | 说明 |
+| --- | --- | --- |
+| 1. PostgreSQL DDL 与 Flyway migration | ✅ 切片 2 | |
+| 2. OIDC 登录、`GET /me`、Skill 搜索/详情和版本查询 | ✅ 切片 1 + 3 | 真 OIDC，Keycloak 自托管 |
+| 3. Git 来源解析、候选 Skill 选择、安装至 Claude Code/Codex | ✅ 切片 4 | 解析在 CLI 本地，服务端接口推迟 |
+| 4. 本地安装记录与 `list`/`status`/`doctor` | ⚠️ 部分 | `list`/`status`/`doctor` 在 v1；`installations` 表和登记 API 建表即在，注册上报推迟 |
+| 5. 检查更新、差异预览、固定 commit 和回滚 | ⚠️ 部分 | `update --check`、`--locked` 固定 commit 在 v1；差异预览和 `rollback` 推迟 |
+| 6. 私有云端备份、changeset 幂等、离线队列和基础冲突记录 | ❌ 推迟 | changeset 相关表建表即在，端点推迟到 v2 |
+| 7. 敏感信息扫描、哈希验证、审计事件与最低限度的团队权限 | ⚠️ 部分 | SHA-256 哈希验证在 v1；扫描、审计事件、团队权限推迟 |
+
+**结论**：§4.5 的 7 条里，2 条完整覆盖、4 条部分覆盖、1 条推迟。所有推迟项的表结构在 v1 建表时按最终设计建，避免 v2 改表。
