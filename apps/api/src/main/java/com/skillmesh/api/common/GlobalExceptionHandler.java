@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -35,6 +36,16 @@ public class GlobalExceptionHandler {
         Problem body = Problem.of(BASE + "invalid-parameter", ErrorCodes.VALIDATION_FAILED,
             400, ErrorCodes.VALIDATION_FAILED,
             "参数格式不对: " + ex.getName() + " = " + ex.getValue(), requestId(req), false);
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    /** 请求体读不出来（编码坏了、JSON 坏了）也是调用方的错，不该 500。 */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ResponseEntity<Problem> handleUnreadable(HttpMessageNotReadableException ex,
+                                              HttpServletRequest req) {
+        Problem body = Problem.of(BASE + "invalid-body", ErrorCodes.VALIDATION_FAILED,
+            400, ErrorCodes.VALIDATION_FAILED, "请求体读不出来，检查编码和 JSON 格式",
+            requestId(req), false);
         return ResponseEntity.badRequest().body(body);
     }
 

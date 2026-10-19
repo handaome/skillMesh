@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
+	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/spf13/cobra"
@@ -39,7 +41,11 @@ func newListCmd() *cobra.Command {
 			"注意这是「本地装了什么」，不是「云端有什么」——\n" +
 			"发布到云端的 Skill 用 skillmesh search 查。",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			client, err := newClient()
+			if err != nil {
+				return err
+			}
 			projectRoot := mustGetwd()
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
@@ -67,8 +73,32 @@ func newListCmd() *cobra.Command {
 						skill.Name, agentName, resolvedLabel(skill), target, managed)
 				}
 			}
-			return w.Flush()
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			warnRevoked(cmd.Context(), client, lock)
+			return nil
 		},
+	}
+}
+
+// warnRevoked 提示「装着的版本已经被撤回」。
+// 不自动卸载、不删本地文件——那是用户自己的机器（设计文档 §10 撤回）。
+func warnRevoked(ctx context.Context, client *apiclient.Client, lock lockfile.Lock) {
+	for _, entry := range lock.Skills {
+		if entry.SourceID == "" || entry.Version == "" {
+			continue
+		}
+		versions, err := client.Versions(ctx, entry.SourceID)
+		if err != nil {
+			continue // 查不到就当没事，别在 list 里制造噪音
+		}
+		status, found := versionStatus(versions, entry.Version)
+		if !found || status == "published" {
+			continue
+		}
+		fmt.Printf("注意：%s 当前装的 %s 状态是 %s，云端已不可用，请自行确认是否继续使用。\n",
+			entry.Name, entry.Version, status)
 	}
 }
 

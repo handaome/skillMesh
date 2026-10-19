@@ -163,6 +163,16 @@ func recordInstall(projectRoot, name, skillID string, target apiclient.SkillVers
 	return lock.Save(projectRoot)
 }
 
+// versionStatus 查一个版本的状态；版本不存在返回空串。
+func versionStatus(versions apiclient.VersionPage, want string) (string, bool) {
+	for _, candidate := range versions.Items {
+		if candidate.Version == want {
+			return candidate.Status, true
+		}
+	}
+	return "", false
+}
+
 // pickVersion 选要装的版本。--locked 时必须与锁文件完全一致，
 // 否则 CI 会静默装到漂移的版本（详细设计 §3.10）。
 func pickVersion(versions apiclient.VersionPage, want string, locked bool,
@@ -192,6 +202,9 @@ func pickVersion(versions apiclient.VersionPage, want string, locked bool,
 			return apiclient.SkillVersion{}, fmt.Errorf("版本 %s 没有可安装的制品", want)
 		}
 		return candidate, nil
+	}
+	if status, revoked := versionStatus(versions, want); revoked {
+		return apiclient.SkillVersion{}, fmt.Errorf("版本 %s 已被撤回，不能安装（当前状态 %s）", want, status)
 	}
 	return apiclient.SkillVersion{}, fmt.Errorf("找不到已发布的版本: %s", want)
 }
