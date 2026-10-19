@@ -89,10 +89,13 @@ cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 ./skillmesh.exe search java
 ./skillmesh.exe info <skill-id>
 
-# 从 Git 仓库安装（来源必须是远程 https/ssh）
-./skillmesh.exe source resolve https://github.com/owner/agent-skills
-./skillmesh.exe add https://github.com/owner/agent-skills.git \
+# 从 Git 仓库安装（来源必须是远程地址）
+./skillmesh.exe source resolve git@github.com:owner/agent-skills
+./skillmesh.exe add git@github.com:owner/agent-skills.git \
   --path skills/java-debug --agent claude-code --scope user --install
+
+# 从注册中心安装（SkillMesh 云端已发布的版本）
+./skillmesh.exe install <skill-id> --agent claude-code --scope user
 
 # 本地项目状态
 ./skillmesh.exe list
@@ -104,6 +107,123 @@ cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 # 诊断
 ./skillmesh.exe doctor
 ./skillmesh.exe agents detect
+```
+
+### 从 Git 仓库装一个 Skill：两步
+
+#### 第一步 `source resolve` —— 先看一眼仓库里有什么
+
+```bash
+./skillmesh.exe source resolve git@github.com:owner/agent-skills
+```
+
+**只读，不装任何东西。** 浅克隆到临时目录 → 扫描出所有含 `SKILL.md` 的子目录 → 打印后删掉临时目录。
+
+```text
+仓库 git@github.com:owner/agent-skills
+commit 9eb54157e27447d184ca40d5b189c1d8
+
+子目录            SKILL.md
+skills/java-debug    有
+skills/redis-cache   有
+```
+```
+
+**它的用途是让你知道下一步 `--path` 该填什么。** 一个仓库里通常有好几个 Skill 目录，不先看一眼只能一个个试。
+
+加 `--ref` 可以指定分支、标签或 commit：
+
+```bash
+./skillmesh.exe source resolve git@github.com:owner/agent-skills --ref v1.2.0
+```
+
+#### 第二步 `add` —— 登记并装上
+
+```bash
+./skillmesh.exe add git@github.com:owner/agent-skills.git \
+  --path skills/java-debug --agent claude-code --scope user --install
+```
+
+| 参数 | 作用 |
+| --- | --- |
+| `<repo-url>` | 仓库地址。**必须是远程地址**——`NormalizeURL` 按设计拒绝 `file://` 和本地路径。支持 `git@owner:repo.git`、`ssh://`、`https://` 三种形式，**不能混写**（`git@` 形式不能带 `https://` 前缀） |
+| `--path` | 仓库里哪个子目录是 Skill。**只有候选恰好一个时才能省略**；有多个会报错并列出候选让你挑 |
+| `--agent` | 装给哪个 Agent。`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/` |
+| `--scope` | `user` 装到用户级（你所有项目都能用）；`project` 装到当前项目里（提交进版本控制，团队共享） |
+| `--ref` | 分支、标签或 commit。不填用仓库默认分支 |
+| `--install` | **关键开关**。不加只"登记"来源，不碰 Agent 目录；加了才真正安装 |
+| `--replace` | 目标位置已有同名目录时强制覆盖（见下方"同名目录不覆盖"） |
+| `--credential-ref` | 私有仓库用本机凭据管理器里的凭据引用，**不接受明文令牌** |
+
+执行的步骤：
+
+```text
+clone 到临时目录
+  → 校验：必须有 SKILL.md / 没有逃出目录的符号链接 / 文件数和大小不超限
+  → 原子安装：先复制到暂存目录，校验过了再切换到目标路径
+  → 写 .skillmesh-install 标记（表示这个目录归 SkillMesh 管）
+  → 写 skillmesh.lock.yaml（记下 commit、路径、来源）
+```
+
+输出：
+
+```text
+来源 git@github.com:owner/agent-skills.git
+子目录 skills/java-debug
+commit 9eb54157e27447d184ca40d5b189c1d8
+Skill java-debug
+已安装到 C:\Users\23929\.claude\skills\java-debug
+锁文件 skillmesh.lock.yaml
+```
+
+**原子安装的意义**：装到一半失败不会毁掉你原来的版本——旧版本先被备份，新版本校验通过才切换，切换失败自动回滚。
+
+#### 同名目录默认不覆盖
+
+目标位置已经有同名目录、但它不是 SkillMesh 装的（没有 `.skillmesh-install` 标记），CLI 会拒绝：
+
+```text
+目标已存在且不受 SkillMesh 管理: C:\Users\23929\.claude\skills\java-debug（用 --replace 覆盖）
+```
+
+这是防止误删你手写的 Skill。确认要覆盖就加 `--replace`。反过来，`uninstall` 也不会删不受管理的目录，除非加 `--force`。
+
+### 从注册中心装一个 Skill
+
+```bash
+./skillmesh.exe install <skill-id> --agent claude-code --scope user
+```
+
+从 SkillMesh 云端拉已发布的版本。`--version` 指定版本（不填取最新已发布的），`--dry-run` 只演练不落盘。
+
+CI 里没有浏览器也没有凭据管理器，用环境变量传令牌：
+
+```bash
+export SKILLMESH_TOKEN=<access-token>
+./skillmesh.exe install <skill-id> --locked
+```
+
+`--locked` 会校验远端解析结果与 `skillmesh.lock.yaml` 是否一致，不一致直接失败，防止构建环境静默漂移。
+
+### 本地项目状态
+
+| 命令 | 作用 |
+| --- | --- |
+| `list` | 列出本项目锁文件里登记的安装：Skill、Agent、commit、安装路径、是否受管 |
+| `status` | 同上，但输出 JSON（`status <name>` 只看某一个），适合脚本消费 |
+| `update --check` | 检查远端有没有新 commit，**只报告不改动** |
+| `update --all` | 应用全部更新 |
+| `update <name>` | 只更新某一个 |
+| `lock refresh` | 重新解析来源并刷新锁文件 |
+| `uninstall <name>` | 移除安装内容与锁文件记录 |
+
+`update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。
+
+### 诊断
+
+```bash
+./skillmesh.exe doctor        # 服务端地址、配置目录、git 是否可用、登录状态、各 Agent 目录是否存在
+./skillmesh.exe agents detect  # 各 Agent 的用户级/项目级目录表格
 ```
 
 CI 里没有浏览器也没有凭据管理器，用环境变量传令牌：
