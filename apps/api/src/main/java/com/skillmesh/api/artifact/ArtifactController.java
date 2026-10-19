@@ -37,15 +37,17 @@ public class ArtifactController {
     private final SkillRepository skills;
     private final CurrentUserService currentUserService;
     private final AuditService audit;
+    private final SkillService skillsService;
 
     public ArtifactController(ArtifactService artifacts, SkillVersionRepository versions,
                               SkillRepository skills, CurrentUserService currentUserService,
-                              AuditService audit) {
+                              AuditService audit, SkillService skillsService) {
         this.artifacts = artifacts;
         this.versions = versions;
         this.skills = skills;
         this.currentUserService = currentUserService;
         this.audit = audit;
+        this.skillsService = skillsService;
     }
 
     @GetMapping("/{artifactId}/download")
@@ -84,7 +86,7 @@ public class ArtifactController {
         }
         for (SkillVersionEntity version : referencing) {
             SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
-            if (skill != null && SkillService.canView(user, skill)) {
+            if (skill != null && skillsService.canView(user, skill)) {
                 return;
             }
         }

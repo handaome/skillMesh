@@ -2,6 +2,7 @@ package com.skillmesh.api.skill;
 
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillPage;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -25,12 +27,16 @@ public class SkillService {
 
     private final SkillRepository skills;
 
-    public SkillService(SkillRepository skills) {
+    private final OrgService orgs;
+
+    public SkillService(SkillRepository skills, OrgService orgs) {
         this.skills = skills;
+        this.orgs = orgs;
     }
 
     @Transactional
     public SkillResponse create(CurrentUser user, CreateSkillRequest req) {
+        requireVisibilitySupported(user, req);
         if (skills.existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(user.id(), req.slug())) {
             throw new ApiException(409, ErrorCodes.SLUG_TAKEN, "slug 已被占用: " + req.slug());
         }
@@ -72,8 +78,12 @@ public class SkillService {
             cursorTime = OffsetDateTime.parse(parts[0]);
             cursorId = UUID.fromString(parts[1]);
         }
+        // 团队/组织可见的 Skill：把「我加入的团队与组织」交给 SQL 过滤，
+        // 别把不该看到的查出来再在内存里筛——那等于没权限控制。
         List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibility, tag,
-            mine, cursorTime, cursorId, PageRequest.of(0, size + 1));
+            mine, uuidArray(orgs.myOrganizationIds(user.id())),
+            uuidArray(orgs.myTeamIds(user.id())),
+            cursorTime, cursorId, PageRequest.of(0, size + 1));
         boolean hasMore = rows.size() > size;
         List<SkillEntity> page = hasMore ? rows.subList(0, size) : rows;
         List<SkillResponse> items = new ArrayList<>(page.size());
@@ -88,9 +98,61 @@ public class SkillService {
         return new SkillPage(items, next, hasMore);
     }
 
-    /** 可见性判定：公开的谁都能看，私有的只有属主能看。 */
-    public static boolean canView(CurrentUser user, SkillEntity entity) {
-        return "public".equals(entity.getVisibility()) || user.id().equals(entity.getOwnerUserId());
+    /**
+     * 可见性判定（设计文档 §10 团队管理）。
+     *
+     * public 谁都能看；private 只有属主；team 要团队成员；organization 要组织成员。
+     * 外部调用方（版本、制品、审计）都走这里，所以一处判就够。
+     */
+    public boolean canView(CurrentUser user, SkillEntity entity) {
+        if ("public".equals(entity.getVisibility())
+            || user.id().equals(entity.getOwnerUserId())) {
+            return true;
+        }
+        if (entity.getOrganizationId() == null) {
+            return false;
+        }
+        return switch (entity.getVisibility()) {
+            case "team" -> entity.getOwnerTeamId() != null
+                && orgs.isTeamMember(entity.getOwnerTeamId(), user.id());
+            case "organization" -> orgs.isOrgMember(entity.getOrganizationId(), user.id());
+            default -> false;
+        };
+    }
+
+    /**
+     * 创建时的可见性校验：team 必须挂到组织下的某个团队，
+     * 组织内可见需要组织成员身份（不能凭空建一个没人看得到的团队 Skill）。
+     */
+    private void requireVisibilitySupported(CurrentUser user, CreateSkillRequest req) {
+        String visibility = req.visibility();
+        if (!Set.of("private", "public", "team", "organization").contains(visibility)) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "可见性只能是 private / public / team / organization");
+        }
+        if ("private".equals(visibility) || "public".equals(visibility)) {
+            return;
+        }
+        if (req.organization_id() == null) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                visibility + " 可见必须指定 organization_id");
+        }
+        if (!orgs.isOrgMember(req.organization_id(), user.id())) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "你不是该组织的成员");
+        }
+        if ("team".equals(visibility) && req.owner_team_id() == null) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "team 可见必须指定 owner_team_id");
+        }
+    }
+
+    /** PostgreSQL 的 uuid[] 字面量。一个都没加入就传空数组，= any 匹配不到任何行。 */
+    private static String uuidArray(List<UUID> ids) {
+        if (ids.isEmpty()) {
+            return "{}";
+        }
+        return "{" + ids.stream().map(UUID::toString)
+            .reduce((left, right) -> left + "," + right).orElse("") + "}";
     }
 
     private static String normalize(String q) {

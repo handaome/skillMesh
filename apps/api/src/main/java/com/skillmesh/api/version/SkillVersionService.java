@@ -36,17 +36,20 @@ public class SkillVersionService {
 
     private final SkillVersionRepository versions;
     private final SkillRepository skills;
+    private final SkillService skillService;
     private final UploadSessionRepository uploads;
     private final ArtifactService artifacts;
     private final ArtifactStorage storage;
     private final ScanRepository scans;
     private final AuditService audit;
 
-    public SkillVersionService(ScanRepository scans, SkillVersionRepository versions, SkillRepository skills,
+    public SkillVersionService(ScanRepository scans, SkillVersionRepository versions,
+                               SkillRepository skills, SkillService skillService,
                                UploadSessionRepository uploads, ArtifactService artifacts,
                                ArtifactStorage storage, AuditService audit) {
         this.versions = versions;
         this.skills = skills;
+        this.skillService = skillService;
         this.scans = scans;
         this.audit = audit;
         this.uploads = uploads;
@@ -192,7 +195,7 @@ public class SkillVersionService {
 
     SkillEntity requireVisibleSkill(CurrentUser user, UUID skillId) {
         SkillEntity skill = skills.findById(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!SkillService.canView(user, skill)) {
+        if (!skillService.canView(user, skill)) {
             throw ApiException.notFound("Skill");
         }
         return skill;

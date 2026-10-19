@@ -34,16 +34,19 @@ public class SyncService {
     private final SyncConflictRepository conflicts;
     private final SyncStateRepository states;
     private final SkillRepository skills;
+    private final SkillService skillService;
     private final SkillVersionRepository versions;
     private final DeviceService devices;
 
     public SyncService(SyncChangesetRepository changesets, SyncConflictRepository conflicts,
                        SyncStateRepository states, SkillRepository skills,
-                       SkillVersionRepository versions, DeviceService devices) {
+                       SkillVersionRepository versions, DeviceService devices,
+                       SkillService skillService) {
         this.changesets = changesets;
         this.conflicts = conflicts;
         this.states = states;
         this.skills = skills;
+        this.skillService = skillService;
         this.versions = versions;
         this.devices = devices;
     }
@@ -64,7 +67,7 @@ public class SyncService {
 
         SkillEntity skill = skills.findById(req.skill_id())
             .orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!SkillService.canView(user, skill)) {
+        if (!skillService.canView(user, skill)) {
             throw ApiException.notFound("Skill");
         }
         String cloud = cloudHash(req.skill_id());
