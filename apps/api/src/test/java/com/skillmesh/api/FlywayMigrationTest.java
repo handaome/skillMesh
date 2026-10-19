@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,7 +36,8 @@ class FlywayMigrationTest {
     void 迁移建出全部19张表() {
         List<String> tables = jdbc.queryForList(
             "select table_name from information_schema.tables "
-                + "where table_schema = 'skillmesh_test' order by table_name",
+                + "where table_schema = current_schema() and table_name not like 'flyway%' "
+                + "order by table_name",
             String.class);
         assertThat(tables).containsExactlyInAnyOrder(
             "users", "organizations", "organization_memberships", "teams", "team_memberships",
@@ -47,19 +49,17 @@ class FlywayMigrationTest {
 
     @Test
     void 同一用户下slug唯一() {
-        String userId = insertUser("u-1");
-        jdbc.execute("insert into skills (slug, name, owner_user_id) "
-            + "values ('demo', 'Demo', " + userId + ")");
+        UUID userId = insertUser("u-1");
+        insertSkill(userId, "demo");
 
-        assertThatThrownBy(() -> jdbc.execute(
-            "insert into skills (slug, name, owner_user_id) values ('demo', 'Demo2', " + userId + ")"))
+        assertThatThrownBy(() -> insertSkill(userId, "demo"))
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void 同一Skill下版本号唯一且发布后不可覆盖() {
-        String userId = insertUser("u-1");
-        String skillId = insertSkill(userId, "demo");
+        UUID userId = insertUser("u-1");
+        UUID skillId = insertSkill(userId, "demo");
         insertVersion(skillId, "1.0.0", "published");
 
         assertThatThrownBy(() -> insertVersion(skillId, "1.0.0", "published"))
@@ -68,51 +68,52 @@ class FlywayMigrationTest {
 
     @Test
     void 发布版本必须带制品() {
-        String userId = insertUser("u-1");
-        String skillId = insertSkill(userId, "demo");
+        UUID userId = insertUser("u-1");
+        UUID skillId = insertSkill(userId, "demo");
 
-        assertThatThrownBy(() -> jdbc.execute(
+        assertThatThrownBy(() -> jdbc.update(
             "insert into skill_versions (skill_id, version, channel, status, published_at) "
-                + "values (" + skillId + ", '2.0.0', 'stable', 'published', now())"))
+                + "values (?, '2.0.0', 'stable', 'published', now())", skillId))
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void 制品摘要唯一() {
         String digest = "a".repeat(64);
-        jdbc.execute("insert into artifacts (sha256, storage_key, content_type, size_bytes, file_count) "
-            + "values ('" + digest + "', 'k/1', 'application/zip', 10, 1)");
+        jdbc.update("insert into artifacts "
+            + "(sha256, storage_key, content_type, size_bytes, file_count) "
+            + "values (?, 'k/1', 'application/zip', 10, 1)", digest);
 
-        assertThatThrownBy(() -> jdbc.execute(
-            "insert into artifacts (sha256, storage_key, content_type, size_bytes, file_count) "
-                + "values ('" + digest + "', 'k/2', 'application/zip', 10, 1)"))
+        assertThatThrownBy(() -> jdbc.update("insert into artifacts "
+            + "(sha256, storage_key, content_type, size_bytes, file_count) "
+            + "values (?, 'k/2', 'application/zip', 10, 1)", digest))
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    private String insertUser(String subject) {
-        jdbc.execute("insert into users (oidc_issuer, oidc_subject, display_name) "
-            + "values ('https://kc', '" + subject + "', 'User " + subject + "')");
+    private UUID insertUser(String subject) {
+        jdbc.update("insert into users (oidc_issuer, oidc_subject, display_name) "
+            + "values ('https://kc', ?, ?)", subject, "User " + subject);
         return jdbc.queryForObject(
-            "select id from users where oidc_subject = ?", String.class, subject);
+            "select id from users where oidc_subject = ?", UUID.class, subject);
     }
 
-    private String insertSkill(String userId, String slug) {
-        jdbc.execute("insert into skills (slug, name, owner_user_id) "
-            + "values ('" + slug + "', '" + slug + "', " + userId + ")");
+    private UUID insertSkill(UUID userId, String slug) {
+        jdbc.update("insert into skills (slug, name, owner_user_id) values (?, ?, ?)",
+            slug, slug, userId);
         return jdbc.queryForObject(
-            "select id from skills where slug = ?", String.class, slug);
+            "select id from skills where slug = ?", UUID.class, slug);
     }
 
-    private void insertVersion(String skillId, String version, String status) {
+    private void insertVersion(UUID skillId, String version, String status) {
         String digest = nextDigest();
-        String artifactId = jdbc.queryForObject(
+        UUID artifactId = jdbc.queryForObject(
             "insert into artifacts (sha256, storage_key, content_type, size_bytes, file_count) "
-                + "values ('" + digest + "', 'k/" + digest + "', 'application/zip', 10, 1) returning id",
-            String.class);
-        jdbc.execute("insert into skill_versions "
-                + "(skill_id, version, channel, status, artifact_id, published_at) values ("
-                + skillId + ", '" + version + "', 'stable', '" + status + "', " + artifactId
-                + ", now())");
+                + "values (?, ?, 'application/zip', 10, 1) returning id",
+            UUID.class, digest, "k/" + digest);
+        jdbc.update("insert into skill_versions "
+                + "(skill_id, version, channel, status, artifact_id, published_at) "
+                + "values (?, ?, 'stable', ?, ?, now())",
+            skillId, version, status, artifactId);
     }
 
     /** 每次调用给出不同的 64 位十六进制摘要，避免先撞上 artifacts 的唯一约束。 */

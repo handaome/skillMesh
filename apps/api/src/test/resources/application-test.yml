@@ -1,17 +1,16 @@
 spring:
   datasource:
-    url: jdbc:postgresql://123.56.146.58:5432/skill_mesh?currentSchema=skillmesh_test
+    # 独立的测试库，与应用库 skill_mesh 完全隔离。
+    # 测试里的清表操作不可能碰到应用数据。
+    url: jdbc:postgresql://123.56.146.58:5432/skillmesh_test
     username: ${SM_DB_USER}
     password: ${SM_DB_PASSWORD}
   flyway:
-    schemas: skillmesh_test
-    default-schema: skillmesh_test
     create-schemas: true
-    clean-disabled: false
   jpa:
     properties:
       hibernate:
-        default_schema: skillmesh_test
+        default_schema: public
 
 skillmesh:
   minio:

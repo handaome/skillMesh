@@ -1,0 +1,50 @@
+package com.skillmesh.api.common;
+
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private static final String BASE = "https://skills.example.com/problems/";
+
+    @ExceptionHandler(ApiException.class)
+    ResponseEntity<Problem> handleApi(ApiException ex, HttpServletRequest req) {
+        return ResponseEntity.status(ex.status()).body(Problem.of(
+            BASE + ex.code().toLowerCase().replace('_', '-'),
+            ex.code(), ex.status(), ex.code(), ex.getMessage(), requestId(req), false));
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    ResponseEntity<Problem> handleValidation(MethodArgumentNotValidException ex,
+                                             HttpServletRequest req) {
+        List<Problem.FieldError> fields = ex.getBindingResult().getFieldErrors().stream()
+            .map(fe -> new Problem.FieldError(fe.getField(), "INVALID", fe.getDefaultMessage()))
+            .toList();
+        Problem body = new Problem(BASE + "validation-failed", ErrorCodes.VALIDATION_FAILED,
+            400, ErrorCodes.VALIDATION_FAILED, "请求字段校验失败", requestId(req), false, fields);
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(Exception.class)
+    ResponseEntity<Problem> handleOther(Exception ex, HttpServletRequest req) {
+        log.error("未处理异常 request_id={}", requestId(req), ex);
+        Problem body = Problem.of(BASE + "internal", "Internal Server Error", 500,
+            ErrorCodes.INTERNAL, "服务内部错误", requestId(req), true);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
+    }
+
+    private static String requestId(HttpServletRequest req) {
+        String id = req.getHeader("X-Request-Id");
+        return id != null && !id.isBlank() ? id : "req_" + UUID.randomUUID().toString().replace("-", "");
+    }
+}
