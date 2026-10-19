@@ -7,19 +7,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +24,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.support.DatabaseCleaner;
+import com.skillmesh.api.support.TestArtifacts;
 
 /** 版本发布全流程：建版本 → 直传对象存储 → 服务端校验 → 发布 → 下载。 */
 @SpringBootTest
@@ -252,16 +247,10 @@ class VersionFlowTest {
     }
 
     static byte[] zipOf(String name, String content) throws Exception {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        try (ZipOutputStream zos = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
-            zos.putNextEntry(new ZipEntry(name));
-            zos.write(content.getBytes(StandardCharsets.UTF_8));
-            zos.closeEntry();
-        }
-        return out.toByteArray();
+        return TestArtifacts.zipOf(name, content);
     }
 
     static String sha256(byte[] data) throws Exception {
-        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data));
+        return TestArtifacts.sha256(data);
     }
 }
