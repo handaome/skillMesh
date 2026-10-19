@@ -43,6 +43,8 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// 装之前先摊开服务端扫描结论：内容没问题也该让人看见风险。
+			printVersionRisks(target)
 
 			data, err := client.DownloadArtifact(cmd.Context(), target.Artifact.ID)
 			if err != nil {

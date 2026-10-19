@@ -1,6 +1,7 @@
 package com.skillmesh.api.upload;
 
 import com.skillmesh.api.artifact.ArtifactEntity;
+import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
@@ -40,10 +41,11 @@ public class UploadService {
     private final ArtifactStorage storage;
     private final ArtifactScanner scanner;
     private final ScanRepository scans;
+    private final AuditService audit;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
                          SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
-                         ArtifactScanner scanner, ScanRepository scans) {
+                         ArtifactScanner scanner, ScanRepository scans, AuditService audit) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
@@ -51,6 +53,7 @@ public class UploadService {
         this.storage = storage;
         this.scanner = scanner;
         this.scans = scans;
+        this.audit = audit;
     }
 
     @Transactional
@@ -110,6 +113,11 @@ public class UploadService {
                 skills.save(skill);
             });
         }
+
+        audit.record(user, scan.blocked() ? "skill.publish_rejected" : "skill.publish",
+            "skill", version.getSkillId(), scan.blocked() ? "failure" : "success",
+            Map.of("version", version.getVersion(), "sha256", promoted.sha256(),
+                "scan_status", scan.status()));
 
         session.setStatus("completed");
         session.setVerifiedAt(now);

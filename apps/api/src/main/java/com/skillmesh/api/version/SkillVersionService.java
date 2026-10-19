@@ -12,6 +12,9 @@ import com.skillmesh.api.upload.UploadSessionRepository;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionResponse.UploadTarget;
+import com.skillmesh.api.audit.AuditService;
+import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.scan.ScanEntity;
 import com.skillmesh.api.scan.ScanRepository;
 import com.skillmesh.api.version.dto.SkillVersionResponse;
@@ -35,13 +38,15 @@ public class SkillVersionService {
     private final ArtifactService artifacts;
     private final ArtifactStorage storage;
     private final ScanRepository scans;
+    private final AuditService audit;
 
     public SkillVersionService(ScanRepository scans, SkillVersionRepository versions, SkillRepository skills,
                                UploadSessionRepository uploads, ArtifactService artifacts,
-                               ArtifactStorage storage) {
+                               ArtifactStorage storage, AuditService audit) {
         this.versions = versions;
         this.skills = skills;
         this.scans = scans;
+        this.audit = audit;
         this.uploads = uploads;
         this.artifacts = artifacts;
         this.storage = storage;
@@ -146,6 +151,38 @@ public class SkillVersionService {
             entries.add(entry);
         }
         return entries;
+    }
+
+    /**
+     * 撤回一个已发布版本（设计文档 §10）。
+     *
+     * 只允许属主撤回自己的 Skill——没有组织角色体系之前，权限就这一条。
+     * 撤回不可逆：要恢复得发新版本。
+     */
+    @Transactional
+    public Map<String, Object> revoke(CurrentUser user, UUID skillId, String version, String reason) {
+        SkillEntity skill = requireVisibleSkill(user, skillId);
+        if (!skill.getOwnerUserId().equals(user.id())) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能撤回自己的版本");
+        }
+        SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
+            .orElseThrow(() -> ApiException.notFound("版本"));
+        if ("revoked".equals(entity.getStatus())) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已经是撤回状态");
+        }
+        String previous = entity.getStatus();
+        // DDL 要求 revoked 必须带 revoked_at（V1__init.sql 的 check 约束）。
+        entity.setStatus("revoked");
+        entity.setRevokedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        entity.setRevokeReason(reason == null ? "" : reason);
+        versions.save(entity);
+
+        audit.record(user, "version.revoke", "skill", skillId, "success",
+            Map.of("version", version, "reason", reason == null ? "" : reason,
+                "previous_status", previous));
+
+        return Map.of("skill_id", skillId.toString(), "version", version,
+            "status", "revoked", "reason", reason == null ? "" : reason);
     }
 
     SkillEntity requireVisibleSkill(CurrentUser user, UUID skillId) {

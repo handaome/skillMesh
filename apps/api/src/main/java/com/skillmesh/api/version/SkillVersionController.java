@@ -1,11 +1,13 @@
 package com.skillmesh.api.version;
 
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.version.dto.RevokeVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
 import com.skillmesh.api.version.dto.VersionPage;
 import jakarta.validation.Valid;
 import java.net.URI;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -44,5 +46,19 @@ public class SkillVersionController {
     @GetMapping("/skills/{skillId}/versions")
     public VersionPage list(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID skillId) {
         return versions.list(currentUserService.current(jwt), skillId);
+    }
+
+    /**
+     * 撤回一个版本（设计文档 §10 撤回）。
+     * 只改可用状态、留下记录；已经装在别人机器上的内容不无痕删除。
+     */
+    @PostMapping("/skills/{skillId}/versions/{version}/revoke")
+    public ResponseEntity<Map<String, Object>> revoke(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID skillId,
+            @PathVariable String version,
+            @RequestBody(required = false) RevokeVersionRequest req) {
+        return ResponseEntity.ok(versions.revoke(currentUserService.current(jwt), skillId,
+            version, req == null ? "" : req.reason()));
     }
 }

@@ -1,6 +1,7 @@
 package com.skillmesh.api.artifact;
 
 import com.skillmesh.api.artifact.dto.DownloadInfo;
+import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
@@ -12,6 +13,7 @@ import com.skillmesh.api.version.SkillVersionRepository;
 import java.io.InputStream;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import org.springframework.core.io.InputStreamResource;
@@ -34,13 +36,16 @@ public class ArtifactController {
     private final SkillVersionRepository versions;
     private final SkillRepository skills;
     private final CurrentUserService currentUserService;
+    private final AuditService audit;
 
     public ArtifactController(ArtifactService artifacts, SkillVersionRepository versions,
-                              SkillRepository skills, CurrentUserService currentUserService) {
+                              SkillRepository skills, CurrentUserService currentUserService,
+                              AuditService audit) {
         this.artifacts = artifacts;
         this.versions = versions;
         this.skills = skills;
         this.currentUserService = currentUserService;
+        this.audit = audit;
     }
 
     @GetMapping("/{artifactId}/download")
@@ -50,6 +55,7 @@ public class ArtifactController {
         CurrentUser user = currentUserService.current(jwt);
         ArtifactEntity artifact = artifacts.require(artifactId);
         requireVisible(user, artifact);
+        recordDownload(user, artifactId);
 
         if ("stream".equals(disposition)) {
             InputStream in = artifacts.open(artifact);
@@ -83,6 +89,15 @@ public class ArtifactController {
             }
         }
         throw ApiException.notFound("Artifact");
+    }
+
+    /** 下载留痕：谁在什么时候取走了哪份制品。 */
+    private void recordDownload(CurrentUser user, UUID artifactId) {
+        for (SkillVersionEntity version : versions.findByArtifactId(artifactId)) {
+            audit.record(user, "artifact.download", "skill", version.getSkillId(), "success",
+                Map.of("version", version.getVersion(), "artifact_id", artifactId.toString()));
+            return;
+        }
     }
 
     private static String fileName(ArtifactEntity artifact) {

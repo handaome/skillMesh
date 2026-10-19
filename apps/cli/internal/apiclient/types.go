@@ -38,8 +38,26 @@ type SkillVersion struct {
 	SourceCommit *string          `json:"source_commit"`
 	Artifact     *ArtifactSummary `json:"artifact"`
 	Manifest     []ManifestEntry  `json:"manifest"`
+	Scan         *ScanSummary     `json:"scan"`
 	PublishedAt  *string          `json:"published_at"`
 	CreatedAt    string           `json:"created_at"`
+}
+
+// ScanSummary 是服务端对这一份制品的扫描结论。
+type ScanSummary struct {
+	ScannerName    string        `json:"scanner_name"`
+	ScannerVersion string        `json:"scanner_version"`
+	Status         string        `json:"status"`
+	Summary        string        `json:"summary"`
+	CompletedAt    *string       `json:"completed_at"`
+	Findings       []ScanFinding `json:"findings"`
+}
+
+type ScanFinding struct {
+	Path   string `json:"path"`
+	Line   int    `json:"line"`
+	Rule   string `json:"rule"`
+	Detail string `json:"detail"`
 }
 
 type VersionPage struct {
