@@ -11,6 +11,7 @@ import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import java.io.InputStream;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import org.springframework.core.io.InputStreamResource;
@@ -65,13 +66,23 @@ public class ArtifactController {
         return ResponseEntity.ok(info);
     }
 
+    /**
+     * 制品只要被任何一个调用者可见的版本引用就允许下载。
+     * 同一份内容可能被多个版本引用（内容寻址，sha256 唯一），
+     * 所以要遍历全部引用者，不能只看第一个。
+     */
     private void requireVisible(CurrentUser user, ArtifactEntity artifact) {
-        SkillVersionEntity version = versions.findByArtifactId(artifact.getId())
-            .orElseThrow(() -> ApiException.notFound("Artifact"));
-        SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
-        if (skill == null || !SkillService.canView(user, skill)) {
+        List<SkillVersionEntity> referencing = versions.findByArtifactId(artifact.getId());
+        if (referencing.isEmpty()) {
             throw ApiException.notFound("Artifact");
         }
+        for (SkillVersionEntity version : referencing) {
+            SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
+            if (skill != null && SkillService.canView(user, skill)) {
+                return;
+            }
+        }
+        throw ApiException.notFound("Artifact");
     }
 
     private static String fileName(ArtifactEntity artifact) {

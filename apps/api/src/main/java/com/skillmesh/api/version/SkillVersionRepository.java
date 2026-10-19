@@ -13,5 +13,9 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
 
     List<SkillVersionEntity> findBySkillIdOrderByCreatedAtDesc(UUID skillId);
 
-    Optional<SkillVersionEntity> findByArtifactId(UUID artifactId);
+    /**
+     * 按制品反查版本。同一份内容可以被多个版本引用（内容寻址，sha256 唯一），
+     * 所以这里是一对多，不能用 Optional。
+     */
+    List<SkillVersionEntity> findByArtifactId(UUID artifactId);
 }

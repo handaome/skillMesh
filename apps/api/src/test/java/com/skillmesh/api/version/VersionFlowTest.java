@@ -132,6 +132,50 @@ class VersionFlowTest {
             .isEqualTo("VERSION_CONFLICT");
     }
 
+    @Test
+    void 同一份内容发成两个版本时仍可下载() throws Exception {
+        UUID skillId = createSkill("same-content");
+        byte[] zip = zipOf("SKILL.md", "# Same\n");
+
+        String first = publishVersion(skillId, "1.0.0", zip);
+        String second = publishVersion(skillId, "1.0.1", zip);
+        // 两次内容相同 → sha256 相同 → 共用同一条 artifacts 记录
+        assertThat(json.readTree(first).path("artifact").path("id").asText())
+            .isEqualTo(json.readTree(second).path("artifact").path("id").asText());
+
+        String artifactId = json.readTree(first).path("artifact").path("id").asText();
+        byte[] downloaded = mockMvc.perform(get("/api/v1/artifacts/{id}/download", artifactId)
+                .header("Authorization", auth).param("disposition", "stream"))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsByteArray();
+        assertThat(downloaded).isEqualTo(zip);
+    }
+
+    /** 发布一个版本并完成上传，返回版本列表里该版本那一项的 JSON。 */
+    private String publishVersion(UUID skillId, String version, byte[] zip) throws Exception {
+        String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(versionBody(version, zip)))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        var node = json.readTree(created);
+        putToStorage(node.path("upload").path("url").asText(), zip);
+        mockMvc.perform(post("/api/v1/uploads/{id}/complete",
+                node.path("upload").path("session_id").asText())
+                .header("Authorization", auth))
+            .andExpect(status().isAccepted());
+
+        String versionsJson = mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth))
+            .andReturn().getResponse().getContentAsString();
+        for (var item : json.readTree(versionsJson).path("items")) {
+            if (item.path("version").asText().equals(version)) {
+                return item.toString();
+            }
+        }
+        throw new AssertionError("版本列表里找不到 " + version);
+    }
+
     private UUID createSkill(String slug) throws Exception {
         String resp = mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
                 .contentType(MediaType.APPLICATION_JSON)
