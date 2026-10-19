@@ -227,6 +227,45 @@ export SKILLMESH_TOKEN=<access-token>
 
 `--locked` 会校验远端解析结果与 `skillmesh.lock.yaml` 是否一致，不一致直接失败，防止构建环境静默漂移。
 
+### 把本地 Skill 发布到云端
+
+```bash
+# 先看看会发什么
+./skillmesh.exe publish ./skills/java-debug --dry-run
+
+# 真的发
+./skillmesh.exe publish ./skills/java-debug
+```
+
+流程：
+
+```text
+校验本地目录 → 打成 zip（SKILL.md 在包根）→ 算整包 SHA-256 与逐文件 manifest
+  → 按 slug 查云端，没有就建（建完直接就是 published）
+  → 建版本 → 拿 presigned URL 直传对象存储
+  → 服务端重算 SHA-256、比对、转正为不可变制品、置 published
+```
+
+| 参数 | 作用 |
+| --- | --- |
+| `<path>` | 本地 Skill 目录 |
+| `--all` | 发布目录树里的**全部** Skill |
+| `--version` | 版本号。不填就在云端已有版本上**累加 patch 位**（1.0.0 → 1.0.1） |
+| `--visibility` | `private`（默认）或 `public`。v1 不支持 team/organization（需要组织概念） |
+| `--channel` | 发布通道：`stable`（默认）/ `beta` / `dev` |
+| `--slug` | 覆盖 slug。默认取**目录名**（要符合 `^[a-z0-9][a-z0-9-]{1,63}$`，不满足时用这个覆盖） |
+| `--name` | 覆盖展示名。默认取 `SKILL.md` frontmatter 的 `name` |
+| `--description` | 覆盖描述。默认取 `SKILL.md` frontmatter 的 `description` |
+| `--dry-run` | 只走完流程不真的发布 |
+
+**v1 是「创建即发布」**——没有 `draft → scanning → pending_review → published` 的审批流（那是 v2 的团队治理）。这是 spec 里明确标注的有意偏离。
+
+几个注意点：
+
+- **版本号自动累加依赖已有版本是语义化版本**。云端已有 `2024-01-01` 这种非语义化版本时，会报错让你用 `--version` 显式指定，不会瞎猜。
+- **隐藏文件不进包**。`.skillmesh-install`（本机状态标记）、`.git` 之类不会发到云端。
+- **Windows 上发布的包会丢掉脚本的可执行位**。Windows 没有 Unix 可执行位，Go 一律报 0666；Skill 里如果有 shell 脚本，在 Unix 上装完可能需要 `chmod +x`。
+
 ### 本地项目状态
 
 | 命令 | 作用 |
