@@ -1,0 +1,300 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/agent"
+	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/spf13/cobra"
+)
+
+// watchState 是 watch 的运行状态，落在配置目录里。
+const (
+	pidFileName   = "watch.pid"
+	pauseFileName = "watch.paused"
+	logFileName   = "watch.log"
+)
+
+// defaultWatchInterval 是轮询间隔。
+//
+// ponytail: 用轮询而不是 fsnotify——少一个依赖、跨平台、行为可预测，
+// 代价是空转时每轮都要 stat 一遍所有文件。要更省资源再上文件监听。
+const defaultWatchInterval = 30 * time.Second
+
+func newWatchCmd() *cobra.Command {
+	var interval time.Duration
+
+	cmd := &cobra.Command{
+		Use:   "watch",
+		Short: "后台盯住已授权目录，变了就同步",
+		Long: "启动时先全量对账一次（弥补错过的文件系统通知），之后按间隔检查：\n" +
+			"内容变了才触发同步，不变就什么都不做。\n" +
+			"pause 只暂停同步，不影响 Agent 读取现有文件。",
+		Args: cobra.NoArgs,
+	}
+	cmd.AddCommand(watchRunCmd(&interval), watchStartCmd(), watchStatusCmd(),
+		watchPauseCmd("pause"), watchResumeCmd(), watchStopCmd())
+	return cmd
+}
+
+func watchRunCmd(interval *time.Duration) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "前台运行监听循环",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if *interval <= 0 {
+				*interval = defaultWatchInterval
+			}
+			return runWatchLoop(cmd.Context(), *interval)
+		},
+	}
+	cmd.Flags().DurationVar(interval, "interval", defaultWatchInterval, "检查间隔")
+	return cmd
+}
+
+func watchStartCmd() *cobra.Command {
+	var interval time.Duration
+	cmd := &cobra.Command{
+		Use:   "start",
+		Short: "后台启动监听",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if pid, running := watchRunning(); running {
+				fmt.Printf("已经在运行（PID %d）。\n", pid)
+				return nil
+			}
+			if _, paused := watchPaused(); paused {
+				fmt.Println("当前是暂停状态，先 skillmesh watch resume。")
+				return nil
+			}
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			logPath := watchLogPath()
+			if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+				return err
+			}
+			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			if err != nil {
+				return err
+			}
+			defer logFile.Close()
+
+			child := exec.Command(exe, "watch", "run", "--interval", interval.String())
+			child.Stdout = logFile
+			child.Stderr = logFile
+			// 独立进程组：父进程退出后它继续跑（Windows 上 DetachProcess 即可）。
+			child.SysProcAttr = detachAttr()
+			if err := child.Start(); err != nil {
+				return err
+			}
+			if err := os.WriteFile(watchPidPath(), []byte(strconv.Itoa(child.Process.Pid)), 0o644); err != nil {
+				return err
+			}
+			fmt.Printf("已后台启动（PID %d），日志 %s\n", child.Process.Pid, logPath)
+			return nil
+		},
+	}
+	cmd.Flags().DurationVar(&interval, "interval", defaultWatchInterval, "检查间隔")
+	return cmd
+}
+
+func watchStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "看监听是不是在跑、有没有暂停",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			pid, running := watchRunning()
+			if running {
+				fmt.Printf("运行中（PID %d）\n", pid)
+			} else {
+				fmt.Println("没在运行")
+			}
+			if _, paused := watchPaused(); paused {
+				fmt.Println("已暂停")
+			}
+			fmt.Printf("日志 %s\n", watchLogPath())
+			return nil
+		},
+	}
+}
+
+func watchPauseCmd(action string) *cobra.Command {
+	return &cobra.Command{
+		Use:   action,
+		Short: "只暂停同步，不动 Agent 已有的文件",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			path := watchPausePath()
+			if action == "pause" {
+				if err := os.WriteFile(path, []byte(time.Now().Format(time.RFC3339)), 0o644); err != nil {
+					return err
+				}
+				fmt.Println("已暂停同步。")
+				return nil
+			}
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			fmt.Println("已恢复同步。")
+			return nil
+		},
+	}
+}
+
+func watchResumeCmd() *cobra.Command { return watchPauseCmd("resume") }
+
+func watchStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "停掉后台监听",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			pid, running := watchRunning()
+			if !running {
+				fmt.Println("本来就没在跑。")
+				return os.Remove(watchPidPath())
+			}
+			process, err := os.FindProcess(pid)
+			if err != nil {
+				return err
+			}
+			if err := process.Kill(); err != nil {
+				return fmt.Errorf("结束 PID %d 失败: %w", pid, err)
+			}
+			_ = os.Remove(watchPidPath())
+			fmt.Printf("已停止（PID %d）。\n", pid)
+			return nil
+		},
+	}
+}
+
+// runWatchLoop 是监听主循环。
+func runWatchLoop(ctx context.Context, interval time.Duration) error {
+	// 启动先全量对账：文件监听可能漏事件，基线必须自己找回来。
+	if err := reconcile(ctx); err != nil {
+		logf("首次对账失败: %v", err)
+	}
+	last := skillSnapshot()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+		if _, paused := watchPaused(); paused {
+			continue
+		}
+		current := skillSnapshot()
+		if sameSnapshot(last, current) {
+			continue
+		}
+		logf("检测到内容变化，开始同步")
+		if err := reconcile(ctx); err != nil {
+			logf("同步失败: %v", err)
+		}
+		last = skillSnapshot()
+	}
+}
+
+// reconcile 跑一轮完整同步，并把结果写进日志。
+func reconcile(ctx context.Context) error {
+	results, _, err := runSync(ctx, syncOptions{})
+	if err != nil {
+		return err
+	}
+	for _, result := range results {
+		if result.Outcome == failed || result.Outcome == conflicted {
+			logf("%s %s：%s", result.Name, result.Outcome, oneLine(result.Detail))
+			continue
+		}
+		logf("%s %s：%s", result.Name, result.Outcome, oneLine(result.Detail))
+	}
+	return nil
+}
+
+// skillSnapshot 拍一张「每个 Skill 的内容摘要」快照。
+func skillSnapshot() map[string]string {
+	snapshot := map[string]string{}
+	for _, agentName := range syncAgentNames(nil) {
+		dir, err := agent.Dir(cfg, agentName, "user", "")
+		if err != nil {
+			continue
+		}
+		for _, path := range localSkills(dir) {
+			digest, err := skillscan.DirDigest(path)
+			if err != nil {
+				continue
+			}
+			snapshot[path] = digest
+		}
+	}
+	return snapshot
+}
+
+func sameSnapshot(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for path, digest := range a {
+		if b[path] != digest {
+			return false
+		}
+	}
+	return true
+}
+
+func watchPidPath() string   { return filepath.Join(cfg.ConfigDir, pidFileName) }
+func watchPausePath() string { return filepath.Join(cfg.ConfigDir, pauseFileName) }
+func watchLogPath() string   { return filepath.Join(cfg.CacheDir, logFileName) }
+
+// watchRunning 看 PID 文件里的进程还活着没。
+func watchRunning() (int, bool) {
+	data, err := os.ReadFile(watchPidPath())
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, processAlive(pid)
+}
+
+func watchPaused() (time.Time, bool) {
+	data, err := os.ReadFile(watchPausePath())
+	if err != nil {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
+	if err != nil {
+		return time.Time{}, true
+	}
+	return at, true
+}
+
+func logf(format string, args ...any) {
+	line := fmt.Sprintf("%s %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+	path := watchLogPath()
+	// 缓存目录可能还不存在——守护进程是第一个跑起来的东西，不能假设它在了。
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+		if file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			fmt.Fprint(file, line)
+			file.Close()
+		}
+	}
+	fmt.Print(line)
+}
