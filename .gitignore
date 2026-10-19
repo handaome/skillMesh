@@ -1,0 +1,11 @@
+.codegraph/
+node_modules/
+target/
+dist/
+*.log
+.env
+.DS_Store
+__pycache__/
+.venv/
+.idea/
+data/
