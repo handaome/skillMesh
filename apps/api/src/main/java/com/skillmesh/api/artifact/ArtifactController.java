@@ -1,0 +1,81 @@
+package com.skillmesh.api.artifact;
+
+import com.skillmesh.api.artifact.dto.DownloadInfo;
+import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.skill.SkillEntity;
+import com.skillmesh.api.skill.SkillRepository;
+import com.skillmesh.api.skill.SkillService;
+import com.skillmesh.api.version.SkillVersionEntity;
+import com.skillmesh.api.version.SkillVersionRepository;
+import java.io.InputStream;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/v1/artifacts")
+public class ArtifactController {
+
+    private final ArtifactService artifacts;
+    private final SkillVersionRepository versions;
+    private final SkillRepository skills;
+    private final CurrentUserService currentUserService;
+
+    public ArtifactController(ArtifactService artifacts, SkillVersionRepository versions,
+                              SkillRepository skills, CurrentUserService currentUserService) {
+        this.artifacts = artifacts;
+        this.versions = versions;
+        this.skills = skills;
+        this.currentUserService = currentUserService;
+    }
+
+    @GetMapping("/{artifactId}/download")
+    public ResponseEntity<?> download(@AuthenticationPrincipal Jwt jwt,
+                                      @PathVariable UUID artifactId,
+                                      @RequestParam(defaultValue = "redirect") String disposition) {
+        CurrentUser user = currentUserService.current(jwt);
+        ArtifactEntity artifact = artifacts.require(artifactId);
+        requireVisible(user, artifact);
+
+        if ("stream".equals(disposition)) {
+            InputStream in = artifacts.open(artifact);
+            return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(artifact.getContentType()))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                    "attachment; filename=\"" + fileName(artifact) + "\"")
+                .contentLength(artifact.getSizeBytes())
+                .body(new InputStreamResource(in));
+        }
+        DownloadInfo info = new DownloadInfo(artifacts.presignedDownload(artifact),
+            artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType(),
+            OffsetDateTime.now(ZoneOffset.UTC).plus(ArtifactService.DOWNLOAD_TTL));
+        return ResponseEntity.ok(info);
+    }
+
+    private void requireVisible(CurrentUser user, ArtifactEntity artifact) {
+        SkillVersionEntity version = versions.findByArtifactId(artifact.getId())
+            .orElseThrow(() -> ApiException.notFound("Artifact"));
+        SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
+        if (skill == null || !SkillService.canView(user, skill)) {
+            throw ApiException.notFound("Artifact");
+        }
+    }
+
+    private static String fileName(ArtifactEntity artifact) {
+        String key = artifact.getStorageKey();
+        return key.substring(key.lastIndexOf('/') + 1);
+    }
+}
