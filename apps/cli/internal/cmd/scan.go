@@ -23,6 +23,7 @@ const (
 	catChanged   scanCategory = "内容变化"
 	catConflict  scanCategory = "路径冲突"
 	catSensitive scanCategory = "疑似敏感"
+	catRisky     scanCategory = "可疑内容"
 	catUnmanaged scanCategory = "未受管"
 )
 
@@ -163,6 +164,12 @@ func classifyOne(target scanTarget, candidate skillscan.Candidate, state syncsta
 		entry.Category = catSensitive
 		entry.Detail = fmt.Sprintf("%d 处，第一处 %s:%d %s", len(findings),
 			findings[0].Path, findings[0].Line, findings[0].Rule)
+		return entry
+	}
+	if risks, err := skillscan.ScanRisks(candidate.Dir); err == nil && len(risks) > 0 {
+		entry.Category = catRisky
+		entry.Detail = fmt.Sprintf("%d 处，第一处 %s:%d %s", len(risks),
+			risks[0].Path, risks[0].Line, risks[0].Rule)
 		return entry
 	}
 	digest, err := skillscan.DirDigest(candidate.Dir)

@@ -48,6 +48,41 @@ public class ArtifactScanner {
     /** 二进制文件超过这个大小就不扫了——凭据不会藏在那里面。 */
     private static final int MAX_SCAN_BYTES = 2 << 20;
 
+    /**
+     * 可疑内容规则（设计文档 §10：脚本、可疑命令、外部下载、依赖信息）。
+     * 和密钥规则不同，这些只提示不阻断——脚本里有 curl 不等于它有害，
+     * 但装之前应该让人看见。
+     */
+    private static final List<ScanRule> RISK_RULES = List.of(
+        new ScanRule("下载后直接执行", Pattern.compile(
+            "(?i)(curl|wget|iwr|invoke-webrequest)[^|;&\\n]*\\|\\s*(sudo\\s+)?(ba)?sh|iex\\s*\\("),
+            Severity.WARNING),
+        new ScanRule("编码后解码执行", Pattern.compile(
+            "(?i)(base64\\s+-d|frombase64string|xxd\\s+-r)[^|;&\\n]*\\|\\s*(ba)?sh"),
+            Severity.WARNING),
+        new ScanRule("递归删除根目录", Pattern.compile(
+            "rm\\s+(-[a-zA-Z]*[rf][a-zA-Z]*\\s+)+(/|~|\\$HOME)(\\s|$|/)"), Severity.WARNING),
+        new ScanRule("动态求值", Pattern.compile("(?i)\\b(eval|exec)\\s*\\("),
+            Severity.WARNING),
+        new ScanRule("权限放宽到所有人", Pattern.compile("(?i)chmod\\s+(-[a-zA-Z]+\\s+)*777"),
+            Severity.WARNING),
+        new ScanRule("关闭安全机制", Pattern.compile(
+            "(?i)(curl\\s+[^\\n]*(-k|--insecure)|set-executionpolicy\\s+bypass)"),
+            Severity.WARNING),
+        new ScanRule("读取凭据文件", Pattern.compile(
+            "(?i)(~/\\.ssh/id_|\\.aws/credentials|\\.netrc|\\.npmrc|id_rsa)"),
+            Severity.WARNING),
+        new ScanRule("安装依赖", Pattern.compile(
+            "(?i)(npm\\s+(install|i)\\b|pip\\s+install\\b|gem\\s+install\\b|go\\s+get\\b)"),
+            Severity.WARNING),
+        new ScanRule("外部下载", Pattern.compile("https?://[^\\s\"'<>)]+"), Severity.WARNING));
+
+    /** 只有脚本和配置才扫这些规则：把每个 .md 里的链接都报一遍只会淹没真问题。 */
+    private static final List<String> RISK_EXTS = List.of(
+        ".sh", ".bash", ".zsh", ".ps1", ".cmd", ".bat", ".py", ".rb", ".js", ".ts");
+    private static final List<String> RISK_FILES = List.of(
+        "package.json", "requirements.txt", "pyproject.toml", "Gemfile");
+
     public ScanResult scan(InputStream artifact) {
         long started = System.currentTimeMillis();
         List<ScanResult.Finding> findings = new ArrayList<>();
@@ -114,16 +149,36 @@ public class ArtifactScanner {
         }
     }
 
+    /** 脚本与配置文件才扫可疑内容规则。 */
+    private boolean scansRisks(String path) {
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        String name = lower.substring(lower.lastIndexOf('/') + 1);
+        if (RISK_FILES.contains(name)) {
+            return true;
+        }
+        return RISK_EXTS.stream().anyMatch(lower::endsWith);
+    }
+
     private void scanContent(String path, byte[] data, List<ScanResult.Finding> findings) {
         if (data.length > MAX_SCAN_BYTES || isBinary(data)) {
             return;
         }
         String[] lines = new String(data, StandardCharsets.UTF_8).split("\n", -1);
+        boolean scanRisks = scansRisks(path);
         for (int i = 0; i < lines.length; i++) {
             for (ScanRule rule : RULES) {
                 if (rule.pattern().matcher(lines[i]).find()) {
                     findings.add(new ScanResult.Finding(path, i + 1, rule.name(),
                         "疑似真实凭据，别把它发上云端"));
+                }
+            }
+            if (!scanRisks) {
+                continue;
+            }
+            for (ScanRule rule : RISK_RULES) {
+                if (rule.pattern().matcher(lines[i]).find()) {
+                    findings.add(new ScanResult.Finding(path, i + 1, rule.name(),
+                        "可疑内容，装之前自己判断"));
                 }
             }
         }

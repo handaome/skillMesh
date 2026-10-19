@@ -21,6 +21,16 @@ func warnRisks(skillDir string) {
 	fmt.Printf("风险提示：\n%s\n", skillscan.FormatFindings(findings))
 }
 
+// warnRisksOnly 只报可疑内容：脚本、可疑命令、外部下载、依赖（设计文档 §10）。
+// 这类不阻断——脚本里有 curl 不等于它有害，但装之前应该让人看见。
+func warnRisksOnly(skillDir string) {
+	risks, err := skillscan.ScanRisks(skillDir)
+	if err != nil || len(risks) == 0 {
+		return
+	}
+	fmt.Println(skillscan.FormatRisks(risks))
+}
+
 // verifyArtifact 验签这一份制品，并对一遍本地算出的摘要。
 //
 // 两件事都要做：签名验的是「服务端说的摘要没被换」，
