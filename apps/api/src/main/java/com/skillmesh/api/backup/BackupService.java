@@ -1,0 +1,243 @@
+package com.skillmesh.api.backup;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.minio.GetObjectArgs;
+import io.minio.ListObjectsArgs;
+import io.minio.MinioClient;
+import io.minio.Result;
+import io.minio.messages.Item;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+/**
+ * 备份与恢复验证（设计文档 §14：生产部署需要定期备份数据库与对象存储，并验证恢复流程）。
+ *
+ * 走 JDBC 和 MinIO SDK 而不是 pg_dump / mc：这两个 SDK 本来就在依赖里，
+ * 备份脚本就不必在每台机器上再装一套客户端工具。
+ *
+ * export 抛 Exception 是因为 MinIO 的异常层级很杂（ErrorResponseException 等）；
+ * 调用方本来就只有「备份成功 / 失败」两种处理方式。
+ *
+ * ponytail: 表数据一次性读进内存（一个 List<Map>）。备份窗口内并发写入不多时够用；
+ * 真要备份生产大库，换成 ResultSet 流式写出。
+ */
+@Service
+public class BackupService {
+
+    private static final Logger log = LoggerFactory.getLogger(BackupService.class);
+
+    private final JdbcTemplate jdbc;
+    private final MinioClient minio;
+    private final ObjectMapper json;
+    private final String bucket;
+
+    public BackupService(JdbcTemplate jdbc, MinioClient minio,
+                         ObjectMapper json,
+                         @org.springframework.beans.factory.annotation.Value(
+                             "${skillmesh.minio.bucket}") String bucket) {
+        this.jdbc = jdbc;
+        this.minio = minio;
+        this.json = json;
+        this.bucket = bucket;
+    }
+
+    /** 导出一份备份，返回清单。 */
+    public Manifest export(Path target) throws IOException, Exception {
+        Path dbDir = target.resolve("db");
+        Path objectsDir = target.resolve("objects");
+        Files.createDirectories(dbDir);
+        Files.createDirectories(objectsDir);
+
+        List<TableBackup> tables = new ArrayList<>();
+        for (String table : listTables()) {
+            List<Map<String, Object>> rows =
+                jdbc.queryForList("select * from " + quote(table));
+            Path file = dbDir.resolve(table + ".ndjson");
+            try (OutputStream out = Files.newOutputStream(file)) {
+                for (Map<String, Object> row : rows) {
+                    out.write(json.writeValueAsBytes(normalize(row)));
+                    out.write('\n');
+                }
+            }
+            tables.add(new TableBackup(table, "db/" + table + ".ndjson", rows.size(),
+                sha256(file)));
+        }
+
+        List<ObjectBackup> objects = new ArrayList<>();
+        Iterable<Result<Item>> listed = minio.listObjects(ListObjectsArgs.builder()
+            .bucket(bucket).recursive(true).build());
+        for (Result<Item> result : listed) {
+            Item item = result.get();
+            Path file = objectsDir.resolve(item.objectName());
+            Files.createDirectories(file.getParent());
+            try (InputStream in = minio.getObject(GetObjectArgs.builder()
+                    .bucket(bucket).object(item.objectName()).build());
+                 OutputStream out = Files.newOutputStream(file)) {
+                in.transferTo(out);
+            }
+            objects.add(new ObjectBackup(item.objectName(), "objects/" + item.objectName(),
+                item.size(), sha256(file)));
+        }
+
+        Manifest manifest = new Manifest(
+            OffsetDateTime.now(ZoneOffset.UTC).toString(), bucket, tables, objects);
+        Files.write(target.resolve("manifest.json"),
+            json.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest));
+        log.info("备份完成：{} 张表，{} 个对象 -> {}", tables.size(), objects.size(), target);
+        return manifest;
+    }
+
+    /**
+     * 验证一份备份：逐个文件重算摘要与行数，对不上就报出来。
+     * 这就是设计文档说的「验证恢复流程」——光备份不算数，能验才算。
+     */
+    public List<String> verify(Path target) throws IOException {
+        Manifest manifest = json.readValue(target.resolve("manifest.json").toFile(),
+            Manifest.class);
+        List<String> problems = new ArrayList<>();
+
+        for (TableBackup table : manifest.tables()) {
+            Path file = target.resolve(table.file());
+            if (!Files.exists(file)) {
+                problems.add("缺文件：" + table.file());
+                continue;
+            }
+            if (!sha256(file).equals(table.sha256())) {
+                problems.add("摘要对不上：" + table.file());
+            }
+            long rows = countLines(file);
+            if (rows != table.rows()) {
+                problems.add("行数对不上：" + table.file() + "（清单 " + table.rows()
+                    + "，实际 " + rows + "）");
+            }
+        }
+        for (ObjectBackup object : manifest.objects()) {
+            Path file = target.resolve(object.file());
+            if (!Files.exists(file)) {
+                problems.add("缺对象：" + object.key());
+                continue;
+            }
+            if (Files.size(file) != object.bytes()) {
+                problems.add("大小对不上：" + object.key());
+            }
+            if (!sha256(file).equals(object.sha256())) {
+                problems.add("对象摘要对不上：" + object.key());
+            }
+        }
+        return problems;
+    }
+
+    /**
+     * JDBC 取回来的值不都能直接交给 Jackson：jsonb 回来的类型驱动私有、
+     * byte[] 需要 base64。统一转成能序列化的形态，否则导出会中途炸掉。
+     *
+     * 不认识的类型一律 toString：PGobject、UUID 这类的字符串形式足够还原，
+     * 类型信息在表结构里，不用在数据里重复一遍。
+     */
+    private Map<String, Object> normalize(Map<String, Object> row) {
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        row.forEach((column, value) -> out.put(column, normalizeValue(value)));
+        return out;
+    }
+
+    private Object normalizeValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof byte[] bytes) {
+            return java.util.Base64.getEncoder().encodeToString(bytes);
+        }
+        if (value instanceof java.sql.Array array) {
+            // PostgreSQL 的数组列（text[] 之类）直接序列化会顺着驱动对象一路炸下去
+            Object raw;
+            try {
+                raw = array.getArray();
+            } catch (java.sql.SQLException e) {
+                return String.valueOf(value);
+            }
+            if (raw instanceof Object[] items) {
+                return java.util.Arrays.stream(items).map(this::normalizeValue).toList();
+            }
+            return raw == null ? null : String.valueOf(raw);
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toInstant().toString();
+        }
+        if (value instanceof java.sql.Date date) {
+            return date.toString();
+        }
+        if (value instanceof UUID || value instanceof Number || value instanceof Boolean
+            || value instanceof String) {
+            return value;
+        }
+        return String.valueOf(value);
+    }
+
+    private List<String> listTables() {
+        return jdbc.queryForList(
+            "select table_name from information_schema.tables "
+                + "where table_schema = current_schema() and table_type = 'BASE TABLE' "
+                + "order by table_name", String.class);
+    }
+
+    private long countLines(Path file) throws IOException {
+        try (InputStream in = Files.newInputStream(file)) {
+            long lines = 0;
+            int read;
+            while ((read = in.read()) != -1) {
+                if (read == '\n') {
+                    lines++;
+                }
+            }
+            return lines;
+        }
+    }
+
+    private String sha256(Path file) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
+        try (InputStream in = Files.newInputStream(file);
+             DigestInputStream digestStream = new DigestInputStream(in, digest)) {
+            byte[] buffer = new byte[8192];
+            while (digestStream.read(buffer) != -1) {
+                // 读干就行，摘要在 close 前从 digest 里取
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    /** 表名来自 information_schema，但仍过一遍引号，避免关键字表名。 */
+    private String quote(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
+    }
+
+    /** 备份清单。 */
+    public record Manifest(String createdAt, String bucket, List<TableBackup> tables,
+                           List<ObjectBackup> objects) {}
+
+    public record TableBackup(String table, String file, long rows, String sha256) {}
+
+    public record ObjectBackup(String key, String file, long bytes, String sha256) {}
+}

@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -27,19 +28,24 @@ public class SourceService {
     private final GitHostPolicy policy;
     private final long timeoutSeconds;
     private final int maxCandidates;
+    private final Semaphore slots;
 
     public SourceService(GitHostPolicy policy,
                          @Value("${skillmesh.git.timeout-seconds:30}") long timeoutSeconds,
-                         @Value("${skillmesh.git.max-candidates:100}") int maxCandidates) {
+                         @Value("${skillmesh.git.max-candidates:100}") int maxCandidates,
+                         @Value("${skillmesh.git.max-concurrent:4}") int maxConcurrent) {
         this.policy = policy;
         this.timeoutSeconds = timeoutSeconds;
         this.maxCandidates = maxCandidates;
+        // 并发上限（设计文档 §14）：拉仓库是重活，几个人同时点就能把机器和带宽打满。
+        this.slots = new Semaphore(Math.max(1, maxConcurrent));
     }
 
     /** 解析仓库，返回其中的 Skill 候选清单。 */
     public ResolveResult resolve(String repositoryUrl, String subpath, String ref) {
         String url = policy.requireAllowed(repositoryUrl);
         Path workspace = null;
+        acquireSlot();
         try {
             workspace = Files.createTempDirectory("skillmesh-source-");
             String head = clone(url, ref, workspace.resolve("repo"));
@@ -51,6 +57,20 @@ public class SourceService {
                 "拉取仓库失败：" + e.getMessage());
         } finally {
             deleteQuietly(workspace);
+            slots.release();
+        }
+    }
+
+    private void acquireSlot() {
+        try {
+            // 拿不到位就干等一会儿：宁可排队也别把请求全拒了
+            if (!slots.tryAcquire(5, TimeUnit.SECONDS)) {
+                throw new ApiException(503, ErrorCodes.INTERNAL,
+                    "Git 解析任务排队超时，稍后再试");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(503, ErrorCodes.INTERNAL, "Git 解析被中断");
         }
     }
 

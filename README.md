@@ -285,6 +285,24 @@ export SKILLMESH_TOKEN=<access-token>
 
 只支持注册中心来源（`install` 装的）。Git 来源要固定版本用 `skillmesh add <url> --ref <tag>`，或 `update` 之后手动 checkout 到指定 commit。
 
+### 备份与恢复验证
+
+```bash
+java -jar apps/api/target/skillmesh-api.jar --skillmesh.backup.dir=D:/backup/skillmesh
+```
+
+启动时导出一份备份：每张表一个 `db/<table>.ndjson`，每个对象在 `objects/` 下有一份拷贝，`manifest.json` 记行数、大小和 SHA-256。导完立刻自检一遍，把结果打进日志。
+
+走 JDBC 和 MinIO SDK 而不是 `pg_dump` / `mc`——这两个 SDK 本来就在依赖里，备份时不用在每台机器上再装客户端。
+
+```bash
+# 换台机器上先校验，再决定要不要恢复
+```
+
+`verify()` 会逐个文件重算摘要与行数，对不上就报出来。**能导出不算数，能发现损坏才算**（`BackupServiceTest` 就是这么验的：导出一份、验一遍、再故意改坏一个文件确认能报出来）。
+
+限制：表数据一次性读进内存，备份窗口内并发写入不多时够用；生产大库要换成 `ResultSet` 流式写出。
+
 ### 我在哪些机器上装了什么
 
 ```bash
