@@ -293,9 +293,12 @@ export SKILLMESH_TOKEN=<access-token>
 | `status` | 同上，但输出 JSON（`status <name>` 只看某一个），适合脚本消费 |
 | `update --check` | 检查远端有没有新 commit，**只报告不改动** |
 | `update <name> --dry-run` | 看这次更新改了哪些文件，不落盘 |
+| `scan` | 本机分类扫描：已管理 / 内容变化 / 疑似敏感 / 路径冲突 |
 | `update --all` | 应用全部更新 |
 | `update <name>` | 只更新某一个 |
 | `rollback <name> --to <version>` | 回滚到指定版本（仅注册中心来源） |
+| `sync` / `sync --resolve` | 与个人私有空间对账，冲突按你的选择解决 |
+| `watch start\|stop\|pause` | 后台同步监听 |
 | `lock refresh` | 重新解析来源并刷新锁文件 |
 | `uninstall <name>` | 移除安装内容与锁文件记录 |
 
@@ -326,6 +329,39 @@ demo-skill —— 3 个文件有变化
 判重和"本地有没有被改过"都用**内容摘要**（对「路径 + 逐文件 SHA-256」排序后哈希），不用 zip 的 sha256——同一份内容重新打包，压缩实现或文件权限位一变摘要就变，会把没变误判成变。装的时候摘要记进锁文件的 `installed_hash`。
 
 本地有未提交修改时，`update` 会打印「跳过 xxx —— 本地有改动，保留本地版本」，不动你的文件、锁文件也不改，退出码仍是 0（其余 Skill 照常更新）。差异大到不值得逐行算时只报文件级，二进制文件同样只报文件级。
+
+### 同步：三方对账，冲突不自动覆盖
+
+```bash
+skillmesh scan                    # 先看本机有什么问题（不碰网络）
+skillmesh sync                    # 对账并同步
+skillmesh sync --direction upload # 只上传 / download 只拉取
+skillmesh sync --resolve keep-local   # 冲突时保留本地并上传
+skillmesh sync --resolve keep-cloud   # 冲突时保留云端并拉回
+skillmesh sync --resolve keep-both    # 本地备份一份，两边都留
+skillmesh sync --retry-only      # 只重试断网失败的任务
+```
+
+判定看三份摘要：**基线**（上次同步时）、**本地**、**云端**。
+
+| 本地 vs 云端 | 动作 |
+| --- | --- |
+| 一样 | 无变化 |
+| 只有本地变了 | 上传新版本 |
+| 只有云端变了 | 拉回云端版本 |
+| 两边都变了 | **冲突**，不自动覆盖，等 `--resolve` |
+
+云端也会再判一次（`POST /api/v1/sync/changesets`，带幂等键）：别的设备在两次请求之间动过内容的话，它会直接回冲突。断网失败的任务进持久队列，指数退避（1 分钟起步、翻倍、封顶 30 分钟），重试 5 次后标记放弃但仍留在队列里可查。
+
+```bash
+skillmesh watch start --interval 5m   # 后台盯住目录，变了才同步
+skillmesh watch status                # 在跑吗 / 暂停了吗
+skillmesh watch pause                 # 只暂停同步，不动 Agent 的文件
+skillmesh daemon install              # 写成用户级自启动（不需要管理员）
+skillmesh daemon logs --tail 50
+```
+
+守护进程启动时先做一次全量对账，弥补错过的文件系统通知。实现上用**轮询**触发扫描而不是文件监听：少一个依赖、跨平台，代价是空转时每轮 stat 一遍所有文件。
 
 ### 换设备装回自己的 Skill
 
@@ -618,6 +654,8 @@ cd apps/web && pnpm test          # 前端组件
 
 v1 做：本地基础设施、数据库迁移、OIDC 鉴权、Skill 元数据与搜索、MinIO 制品存储与不可变版本、授权下载、CLI 全套命令、前端搜索与详情两页。
 
-v1 不做（推迟到 v2，表结构已按最终设计建好）：本地同步引擎与 daemon、发布审批流、团队角色矩阵、审计事件、制品签名、Cursor 适配器。
+v1 不做（推迟到 v2，表结构已按最终设计建好）：发布审批流、团队角色矩阵、制品签名、Cursor 适配器。
+
+同步引擎（scan / sync / watch / daemon / 冲突解决 / 断网重试 / 同步变更集接口）在 v1.1 已交付，但只覆盖「本地 ↔ 个人私有空间」这一条链路；组织与团队之间的同步要等团队治理那批。
 
 密钥扫描（发布阻断）与许可证识别（安装后展示）在 v1 已做，但都只是**本地粗匹配**：扫描在 CLI 侧、规则是固定的高置信度特征；许可证识别不做法律判断。要变成服务端强制，得等 v2 的 `skill_scans` 表和审核流。
