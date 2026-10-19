@@ -55,6 +55,13 @@ func defaults() Config {
 				UserSkillsDir: filepath.Join(codexHome(), "skills"),
 				ProjectSkills: filepath.Join(".agents", "skills"),
 			},
+			// Cursor 的 Skill 目录约定随版本变过，这里用设计文档 §8 记的
+			// ~/.cursor/skills 与 .cursor/skills，落到别的路径就在 config.yaml 里改。
+			"cursor": {
+				Enabled:       false, // 默认关着：没验证过的适配器不该替用户决定
+				UserSkillsDir: filepath.Join(homeDir(), ".cursor", "skills"),
+				ProjectSkills: filepath.Join(".cursor", "skills"),
+			},
 		},
 		ConfigDir: configDir,
 		CacheDir:  cacheDir,

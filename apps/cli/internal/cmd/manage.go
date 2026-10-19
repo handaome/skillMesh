@@ -144,7 +144,7 @@ func newUninstallCmd() *cobra.Command {
 		Use:   "uninstall <skill-name>",
 		Short: "移除安装内容与锁文件记录",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			projectRoot := mustGetwd()
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
@@ -170,7 +170,14 @@ func newUninstallCmd() *cobra.Command {
 				fmt.Printf("已移除 %s\n", target)
 			}
 			lock.Remove(entry.Name)
-			return lock.Save(projectRoot)
+			if err := lock.Save(projectRoot); err != nil {
+				return err
+			}
+			if client, err := newClient(); err == nil && entry.SourceID != "" {
+				_ = client.ReportAuditEvent(cmd.Context(), "uninstall.completed",
+					entry.SourceID, "success", map[string]string{"name": entry.Name})
+			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "连同不受 SkillMesh 管理的目录一起删除")

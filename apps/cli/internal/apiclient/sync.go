@@ -79,3 +79,15 @@ func MachineKey() string {
 	}
 	return host + "|" + user + "|" + runtime.GOOS
 }
+
+// ReportAuditEvent 上报客户端自己知道的审计事件。
+// 服务端会拒绝特权动作——发布、撤回这类是服务端自己的事。
+func (c *Client) ReportAuditEvent(ctx context.Context, action, targetID, outcome string,
+	details map[string]string) error {
+
+	body := map[string]any{"action": action, "target_id": targetID, "outcome": outcome}
+	if len(details) > 0 {
+		body["details"] = details
+	}
+	return c.doWith(ctx, http.MethodPost, "/audit/events", nil, body, nil)
+}

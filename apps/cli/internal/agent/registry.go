@@ -11,8 +11,9 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/config"
 )
 
-// Supported 是 v1 交付的两个 Agent（详细设计 §4 首期范围）。
-var Supported = []string{"claude-code", "codex"}
+// Supported 是已知的 Agent 适配器（设计文档 §8）。
+// 是否启用看配置——Cursor 默认关着，目录约定还没在真实安装上验证过。
+var Supported = []string{"claude-code", "codex", "cursor"}
 
 // Dir 解析目标 Agent 的安装目录。scope 为 project 时用项目内相对路径。
 func Dir(cfg config.Config, name, scope, projectRoot string) (string, error) {

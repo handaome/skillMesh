@@ -133,6 +133,10 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		installedDigest(skillDir)); err != nil {
 		return err
 	}
+	// 上报安装完成：服务端只记自己知道的特权动作，本地发生了什么它看不见。
+	// 上报失败不该影响安装结果——东西已经装好了。
+	_ = client.ReportAuditEvent(ctx, "install.completed", req.SkillID, "success",
+		map[string]string{"name": name, "version": req.Version.Version})
 	fmt.Printf("锁文件 %s\n", lockfile.FileName)
 	return nil
 }

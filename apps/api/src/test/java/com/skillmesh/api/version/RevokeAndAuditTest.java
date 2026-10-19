@@ -89,6 +89,35 @@ class RevokeAndAuditTest {
             .andExpect(status().isConflict());
     }
 
+    /** 客户端上报只放行客户端自己知道的动作，特权动作要被拒。 */
+    @Test
+    void 客户端只能上报自己的动作() throws Exception {
+        UUID skillId = createSkill("reported");
+        publish(skillId, "1.0.0", VersionFlowTest.zipOf("SKILL.md", "# Reported\n"));
+
+        mockMvc.perform(post("/api/v1/audit/events")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"action":"install.completed","target_id":"%s","outcome":"success",
+                     "details":{"version":"1.0.0"}}""".formatted(skillId)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.accepted").value(true));
+
+        // 发布是服务端的特权动作，客户端报上来的一律拒
+        mockMvc.perform(post("/api/v1/audit/events")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"action":"skill.publish","target_id":"%s","outcome":"success"}""".formatted(skillId)))
+            .andExpect(status().isBadRequest());
+
+        // 上报的安装事件要能在流水里查到
+        var auditJson = mockMvc.perform(get("/api/v1/skills/{id}/audit", skillId)
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        assertThat(auditJson).contains("install.completed");
+    }
+
     private UUID createSkill(String slug) throws Exception {
         String resp = mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
                 .contentType(MediaType.APPLICATION_JSON)

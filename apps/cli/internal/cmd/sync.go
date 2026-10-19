@@ -476,6 +476,9 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 			Detail: fmt.Sprintf("本地版本备份到 %s，云端上传 %s", backup, result.Version)}, entry, nil
 
 	default:
+		// 让服务端也知道这次冲突了：另一台设备可能正等着知道这件事。
+		_ = client.ReportAuditEvent(ctx, "sync.conflict_reported", target.SkillID, "denied",
+			map[string]string{"skill": target.Name, "local_hash": localHash[:12]})
 		return syncResult{Name: target.Name, Path: target.Path,
 			Outcome: conflicted, Detail: hint}, syncstate.Entry{}, nil
 	}
