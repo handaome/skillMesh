@@ -35,6 +35,17 @@ func verifyArtifact(ctx context.Context, client *apiclient.Client, target apicli
 	if err != nil {
 		return "验签跳过（取不到公钥）"
 	}
+	// 钉了公钥就以本地这份为准：注册中心换了密钥而你没更新配置，
+	// 这里必须硬失败，不能只看「签名能不能验过」（设计文档 §10 信任根）。
+	if cfg.Verify.Pinned() {
+		if key.KeyID != cfg.Verify.PinnedKeyID || key.PublicKey != cfg.Verify.PinnedPublicKey {
+			return string(verify.Invalid) + "：签名密钥与本地钉住的不一致（服务端 " +
+				key.KeyID + "，本地 " + cfg.Verify.PinnedKeyID + "）"
+		}
+	} else if !key.Enabled || key.PublicKey == "" {
+		// 没钉也没配服务端密钥：这次只能确认内容摘要对得上，不能确认是谁签的
+		return "未验证来源（本地没钉公钥，服务端也没开签名）"
+	}
 	outcome, err := verify.Check(key, target.Artifact.Signature, target.Artifact.ContentDigest)
 	if err != nil {
 		return string(verify.Invalid) + "：" + err.Error()

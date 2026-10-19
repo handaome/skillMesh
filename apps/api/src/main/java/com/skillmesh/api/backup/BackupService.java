@@ -9,7 +9,6 @@ import io.minio.messages.Item;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.DigestInputStream;
@@ -36,8 +35,7 @@ import org.springframework.stereotype.Service;
  * export 抛 Exception 是因为 MinIO 的异常层级很杂（ErrorResponseException 等）；
  * 调用方本来就只有「备份成功 / 失败」两种处理方式。
  *
- * ponytail: 表数据一次性读进内存（一个 List<Map>）。备份窗口内并发写入不多时够用；
- * 真要备份生产大库，换成 ResultSet 流式写出。
+ * 导出按表流式写：ResultSet 边读边落 NDJSON，内存只占单行。
  */
 @Service
 public class BackupService {
@@ -68,17 +66,9 @@ public class BackupService {
 
         List<TableBackup> tables = new ArrayList<>();
         for (String table : listTables()) {
-            List<Map<String, Object>> rows =
-                jdbc.queryForList("select * from " + quote(table));
             Path file = dbDir.resolve(table + ".ndjson");
-            try (OutputStream out = Files.newOutputStream(file)) {
-                for (Map<String, Object> row : rows) {
-                    out.write(json.writeValueAsBytes(normalize(row)));
-                    out.write('\n');
-                }
-            }
-            tables.add(new TableBackup(table, "db/" + table + ".ndjson", rows.size(),
-                sha256(file)));
+            long rows = dumpTable(table, file);
+            tables.add(new TableBackup(table, "db/" + table + ".ndjson", rows, sha256(file)));
         }
 
         List<ObjectBackup> objects = new ArrayList<>();
@@ -143,6 +133,37 @@ public class BackupService {
             }
         }
         return problems;
+    }
+
+    /**
+     * 流式导出一张表：边读 ResultSet 边写 NDJSON。
+     *
+     * 一次 queryForList 会把整表读进内存——百万行的表就能把进程撑爆。
+     * fetchSize 提示驱动分批取，内存占用只与单行大小有关。
+     */
+    private long dumpTable(String table, Path file) throws IOException {
+        long rows = 0;
+        try (var connection = jdbc.getDataSource().getConnection();
+             var statement = connection.createStatement(
+                 java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY)) {
+            statement.setFetchSize(1000);
+            try (var result = statement.executeQuery("select * from " + quote(table));
+                 OutputStream out = Files.newOutputStream(file)) {
+                int columns = result.getMetaData().getColumnCount();
+                while (result.next()) {
+                    Map<String, Object> row = new java.util.LinkedHashMap<>();
+                    for (int i = 1; i <= columns; i++) {
+                        row.put(result.getMetaData().getColumnLabel(i), result.getObject(i));
+                    }
+                    out.write(json.writeValueAsBytes(normalize(row)));
+                    out.write('\n');
+                    rows++;
+                }
+            }
+        } catch (java.sql.SQLException e) {
+            throw new IOException("导出表 " + table + " 失败：" + e.getMessage(), e);
+        }
+        return rows;
     }
 
     /**

@@ -301,7 +301,7 @@ java -jar apps/api/target/skillmesh-api.jar --skillmesh.backup.dir=D:/backup/ski
 
 `verify()` 会逐个文件重算摘要与行数，对不上就报出来。**能导出不算数，能发现损坏才算**（`BackupServiceTest` 就是这么验的：导出一份、验一遍、再故意改坏一个文件确认能报出来）。
 
-限制：表数据一次性读进内存，备份窗口内并发写入不多时够用；生产大库要换成 `ResultSet` 流式写出。
+导出按表流式写（`ResultSet` 边读边落 NDJSON，内存只占单行），大表也不会把进程撑爆。
 
 ### 我在哪些机器上装了什么
 
@@ -461,7 +461,15 @@ SM_SIGNING_PUBLIC_KEY=<公钥 base64>
 SM_SIGNING_KEY_ID=2026-10
 ```
 
-客户端从 `GET /api/v1/keys/verify` 取公钥。**验签证明的是「这份摘要确实出自注册中心当前的密钥」，不等于注册中心本身可信**——那需要固定公钥或证书链，目前没有。
+客户端从 `GET /api/v1/keys/verify` 取公钥。要把「注册中心当前的密钥」变成「我信任的密钥」，在 `config.yaml` 里钉死它：
+
+```yaml
+verify:
+  pinned_key_id: 2026-10
+  pinned_public_key: <base64 原始 32 字节>
+```
+
+钉了之后，服务端换密钥而你没更新配置，验签会**硬失败**（不会只看「签名能不能验过」）。没钉也没配服务端密钥时，CLI 会明说「未验证来源」——能确认内容摘要对得上，但不能确认是谁签的。
 
 **被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
 

@@ -21,9 +21,24 @@ type Config struct {
 	ClientID string           `yaml:"client_id"`
 	Network  NetworkConfig    `yaml:"network"`
 	Agents   map[string]Agent `yaml:"agents"`
+	Verify   VerifyConfig     `yaml:"verify"`
 
 	ConfigDir string `yaml:"-"`
 	CacheDir  string `yaml:"-"`
+}
+
+// VerifyConfig 是钉住的验签公钥（信任根）。
+//
+// 填了就以本地这份为准：注册中心换密钥时必须先更新这里，
+// 否则验签直接失败——这正是「信任根」该有的行为。
+type VerifyConfig struct {
+	PinnedKeyID     string `yaml:"pinned_key_id"`
+	PinnedPublicKey string `yaml:"pinned_public_key"`
+}
+
+// Pinned 是否钉住了公钥。
+func (v VerifyConfig) Pinned() bool {
+	return v.PinnedKeyID != "" && v.PinnedPublicKey != ""
 }
 
 type NetworkConfig struct {
@@ -44,6 +59,7 @@ func defaults() Config {
 		Server:   defaultServer,
 		ClientID: defaultClientID,
 		Network:  NetworkConfig{TimeoutSeconds: 30, MaxRetries: 5},
+		Verify:   VerifyConfig{},
 		Agents: map[string]Agent{
 			"claude-code": {
 				Enabled:       true,
