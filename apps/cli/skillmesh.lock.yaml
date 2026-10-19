@@ -1,0 +1,486 @@
+version: 1
+resolved_at: "2026-10-19T14:14:36Z"
+skills:
+    - name: code-review
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-ai-shipping/skills/code-review
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: intended-vs-implemented
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-ai-shipping/skills/intended-vs-implemented
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: shipping-artifacts
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-ai-shipping/skills/shipping-artifacts
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: ab-test-analysis
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-data-analytics/skills/ab-test-analysis
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: cohort-analysis
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-data-analytics/skills/cohort-analysis
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: sql-queries
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-data-analytics/skills/sql-queries
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: brainstorm-okrs
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/brainstorm-okrs
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: create-prd
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/create-prd
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: dummy-dataset
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/dummy-dataset
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: job-stories
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/job-stories
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: outcome-roadmap
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/outcome-roadmap
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: pre-mortem
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/pre-mortem
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: prioritization-frameworks
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/prioritization-frameworks
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: release-notes
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/release-notes
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: retro
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/retro
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: sprint-plan
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/sprint-plan
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: stakeholder-map
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/stakeholder-map
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: strategy-red-team
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/strategy-red-team
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: summarize-meeting
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/summarize-meeting
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: test-scenarios
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/test-scenarios
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: user-stories
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/user-stories
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: wwas
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-execution/skills/wwas
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: beachhead-segment
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-go-to-market/skills/beachhead-segment
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: competitive-battlecard
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-go-to-market/skills/competitive-battlecard
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: growth-loops
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-go-to-market/skills/growth-loops
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: gtm-motions
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-go-to-market/skills/gtm-motions
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: gtm-strategy
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-go-to-market/skills/gtm-strategy
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: ideal-customer-profile
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-go-to-market/skills/ideal-customer-profile
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: competitor-analysis
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-market-research/skills/competitor-analysis
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: customer-journey-map
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-market-research/skills/customer-journey-map
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: market-segments
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-market-research/skills/market-segments
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: market-sizing
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-market-research/skills/market-sizing
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: sentiment-analysis
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-market-research/skills/sentiment-analysis
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: user-personas
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-market-research/skills/user-personas
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: user-segmentation
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-market-research/skills/user-segmentation
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: marketing-ideas
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-marketing-growth/skills/marketing-ideas
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: north-star-metric
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-marketing-growth/skills/north-star-metric
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: positioning-ideas
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-marketing-growth/skills/positioning-ideas
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: product-name
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-marketing-growth/skills/product-name
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: value-prop-statements
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-marketing-growth/skills/value-prop-statements
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: analyze-feature-requests
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/analyze-feature-requests
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: brainstorm-experiments-existing
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/brainstorm-experiments-existing
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: brainstorm-experiments-new
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/brainstorm-experiments-new
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: brainstorm-ideas-existing
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/brainstorm-ideas-existing
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: brainstorm-ideas-new
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/brainstorm-ideas-new
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: identify-assumptions-existing
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/identify-assumptions-existing
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: identify-assumptions-new
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/identify-assumptions-new
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: interview-script
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/interview-script
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: metrics-dashboard
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/metrics-dashboard
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: opportunity-solution-tree
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/opportunity-solution-tree
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: prioritize-assumptions
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/prioritize-assumptions
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: prioritize-features
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/prioritize-features
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: summarize-interview
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-discovery/skills/summarize-interview
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: ansoff-matrix
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/ansoff-matrix
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: business-model
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/business-model
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: lean-canvas
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/lean-canvas
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: monetization-strategy
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/monetization-strategy
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: pestle-analysis
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/pestle-analysis
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: porters-five-forces
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/porters-five-forces
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: pricing-strategy
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/pricing-strategy
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: product-strategy
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/product-strategy
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: product-vision
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/product-vision
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: startup-canvas
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/startup-canvas
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: swot-analysis
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/swot-analysis
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: value-proposition
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-product-strategy/skills/value-proposition
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: draft-nda
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-toolkit/skills/draft-nda
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: grammar-check
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-toolkit/skills/grammar-check
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: privacy-policy
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-toolkit/skills/privacy-policy
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code
+    - name: review-resume
+      repository: https://github.com/phuryn/pm-skills
+      path: pm-toolkit/skills/review-resume
+      ref_type: default
+      resolved_commit: 98bb6791fa9d15e8bf77c4bc289ebfba1f8b8e99
+      agents:
+        - claude-code

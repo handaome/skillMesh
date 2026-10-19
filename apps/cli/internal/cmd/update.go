@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
-	"github.com/spf13/cobra"
 )
 
 // UpdateInfo 是一次检查更新的结果。
@@ -26,16 +26,29 @@ type UpdateInfo struct {
 	RemoteCommit string
 }
 
+// lsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
+var lsRemote = gitx.LsRemote
+
 // CheckUpdates 只调 git ls-remote，不下载内容（详细设计 §3.7）。
+//
+// 一个仓库里可能装了几十个 Skill（--all 装的），但远端 commit 只有一个：
+// 所以按「仓库 + ref」缓存，每个仓库只查一次。
 func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error) {
+	remoteCache := map[string]string{}
 	var updates []UpdateInfo
 	for _, skill := range lock.Skills {
 		if skill.Repository == "" {
 			continue
 		}
-		remote, err := gitx.LsRemote(ctx, skill.Repository, skill.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("检查 %s 失败: %w", skill.Name, err)
+		key := skill.Repository + "\x00" + skill.Ref
+		remote, cached := remoteCache[key]
+		if !cached {
+			var err error
+			remote, err = lsRemote(ctx, skill.Repository, skill.Ref)
+			if err != nil {
+				return nil, fmt.Errorf("检查 %s 失败: %w", skill.Name, err)
+			}
+			remoteCache[key] = remote
 		}
 		if remote != skill.ResolvedCommit {
 			updates = append(updates, UpdateInfo{
@@ -95,10 +108,8 @@ func newUpdateCmd() *cobra.Command {
 				fmt.Println("加 --all 应用全部更新，或指定 skill 名称只更新它。")
 				return nil
 			}
-			for _, update := range updates {
-				if err := applyUpdate(cmd.Context(), projectRoot, &lock, update); err != nil {
-					return err
-				}
+			if err := applyUpdates(cmd.Context(), projectRoot, &lock, updates); err != nil {
+				return err
 			}
 			return lock.Save(projectRoot)
 		},
@@ -108,19 +119,43 @@ func newUpdateCmd() *cobra.Command {
 	return cmd
 }
 
-// applyUpdate 走「临时目录 → 校验 → 原子替换」，失败保留当前可用版本。
-func applyUpdate(ctx context.Context, projectRoot string, lock *lockfile.Lock, update UpdateInfo) error {
-	work, err := os.MkdirTemp("", "skillmesh-update-*")
-	if err != nil {
-		return err
+// applyUpdates 按仓库分组应用更新：同一个仓库只 clone 一次，
+// 再从同一份检出里取各个 Skill 的子目录。装几十个 Skill 的仓库时
+// 这是数量级的差别。
+func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock, updates []UpdateInfo) error {
+	groups := map[string][]UpdateInfo{}
+	var order []string
+	for _, update := range updates {
+		if _, seen := groups[update.Repository]; !seen {
+			order = append(order, update.Repository)
+		}
+		groups[update.Repository] = append(groups[update.Repository], update)
 	}
-	defer os.RemoveAll(work)
 
-	root := filepath.Join(work, "repo")
-	commit, err := gitx.Clone(ctx, update.Repository, update.RemoteCommit, root)
-	if err != nil {
-		return err
+	for _, repository := range order {
+		group := groups[repository]
+		work, err := os.MkdirTemp("", "skillmesh-update-*")
+		if err != nil {
+			return err
+		}
+		root := filepath.Join(work, "repo")
+		commit, err := gitx.Clone(ctx, repository, group[0].RemoteCommit, root)
+		if err != nil {
+			os.RemoveAll(work)
+			return err
+		}
+		for _, update := range group {
+			if err := applyOne(root, projectRoot, lock, update, commit); err != nil {
+				fmt.Fprintf(os.Stderr, "更新 %s 失败: %v\n", update.Name, err)
+			}
+		}
+		os.RemoveAll(work)
 	}
+	return nil
+}
+
+// applyOne 走「校验 → 原子替换」，失败保留当前可用版本。
+func applyOne(root, projectRoot string, lock *lockfile.Lock, update UpdateInfo, commit string) error {
 	skillDir := filepath.Join(root, filepath.FromSlash(update.Path))
 	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
 		return err
@@ -191,10 +226,8 @@ func newLockCmd() *cobra.Command {
 				fmt.Println("全部为最新，锁文件未变")
 				return nil
 			}
-			for _, update := range updates {
-				if err := applyUpdate(cmd.Context(), projectRoot, &lock, update); err != nil {
-					return err
-				}
+			if err := applyUpdates(cmd.Context(), projectRoot, &lock, updates); err != nil {
+				return err
 			}
 			if err := lock.Save(projectRoot); err != nil {
 				return err

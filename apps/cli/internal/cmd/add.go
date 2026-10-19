@@ -6,18 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
-	"github.com/spf13/cobra"
 )
 
 func newAddCmd() *cobra.Command {
 	var (
 		ref, subpath, agentName, scope, credentialRef string
-		doInstall, replace                            bool
+		doInstall, replace, all, dryRun                bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add <repo-url>",
@@ -27,6 +27,9 @@ func newAddCmd() *cobra.Command {
 			repo, err := gitx.NormalizeURL(args[0])
 			if err != nil {
 				return err
+			}
+			if all && subpath != "" {
+				return fmt.Errorf("--all 与 --path 不能同时用")
 			}
 			if credentialRef != "" {
 				fmt.Printf("使用凭据引用 %s（不接受明文令牌）\n", credentialRef)
@@ -44,22 +47,9 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 
-			skillDir, err := locateSkillDir(root, subpath)
+			candidates, err := locateCandidates(root, subpath, all)
 			if err != nil {
 				return err
-			}
-			if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
-				return err
-			}
-
-			name := skillscan.SkillName(skillDir)
-			relPath, _ := filepath.Rel(root, skillDir)
-			relPath = filepath.ToSlash(relPath)
-			fmt.Printf("来源 %s\n子目录 %s\ncommit %s\nSkill %s\n", repo, relPath, commit, name)
-
-			if !doInstall {
-				fmt.Println("已登记。加 --install 安装到 Agent 目录。")
-				return nil
 			}
 
 			projectRoot := mustGetwd()
@@ -74,34 +64,56 @@ func newAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target := filepath.Join(base, name)
-			if err := checkTarget(target, replace); err != nil {
-				return err
+
+			// 先把全部候选校验一遍、定好计划，再动手装：
+			// 一个 Skill 有问题不该挡住其他全部。
+			plan := planInstalls(root, candidates, base, replace)
+			reportPlan(plan, base, dryRun)
+
+			if !doInstall {
+				fmt.Println("已登记。加 --install 安装到 Agent 目录。")
+				return nil
 			}
-			if err := installer.InstallAtomic(skillDir, target, true); err != nil {
-				return err
-			}
-			if err := installer.MarkInstalled(target, repo); err != nil {
-				return err
+			if dryRun {
+				return nil
 			}
 
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
 				return err
 			}
-			lock.Upsert(lockfile.LockedSkill{
-				Name:           name,
-				Repository:     repo,
-				Path:           relPath,
-				RefType:        refTypeOf(ref),
-				Ref:            ref,
-				ResolvedCommit: commit,
-				Agents:         []string{agentName},
-			})
+			installed := 0
+			for _, item := range plan.Install {
+				if err := installer.InstallAtomic(item.Candidate.Dir, item.Target, true); err != nil {
+					plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
+					continue
+				}
+				if err := installer.MarkInstalled(item.Target, repo); err != nil {
+					plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
+					continue
+				}
+				lock.Upsert(lockfile.LockedSkill{
+					Name:           item.Name,
+					Repository:     repo,
+					Path:           item.RelPath,
+					RefType:        refTypeOf(ref),
+					Ref:            ref,
+					ResolvedCommit: commit,
+					Agents:         []string{agentName},
+				})
+				installed++
+			}
 			if err := lock.Save(projectRoot); err != nil {
 				return err
 			}
-			fmt.Printf("已安装到 %s\n锁文件 %s\n", target, lockfile.FileName)
+			fmt.Printf("\n已安装 %d 个 Skill 到 %s\n", installed, base)
+			if len(plan.Fail) > 0 {
+				fmt.Printf("失败 %d 个：\n", len(plan.Fail))
+				for _, failure := range plan.Fail {
+					fmt.Printf("  %s —— %s\n", failure.Path, failure.Why)
+				}
+			}
+			fmt.Printf("锁文件 %s\n", lockfile.FileName)
 			return nil
 		},
 	}
@@ -111,40 +123,140 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&scope, "scope", "", "user 或 project（默认有项目根时为 project）")
 	cmd.Flags().StringVar(&credentialRef, "credential-ref", "", "本机凭据管理器中的凭据引用")
 	cmd.Flags().BoolVar(&doInstall, "install", false, "解析和扫描通过后立即安装")
+	cmd.Flags().BoolVar(&all, "all", false, "安装仓库里的全部 Skill")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只列出会装什么，不实际安装")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
 	return cmd
 }
 
-// locateSkillDir 定位要安装的 Skill 目录：给了 --path 就用它，
-// 否则按候选数量决定——唯一候选直接用，多个必须让用户明确指定。
-func locateSkillDir(root, subpath string) (string, error) {
+// locateCandidates 定位要处理的 Skill 目录。
+// 指定 --path 就用它；否则扫描全仓库，多个候选时要求明确选择或用 --all。
+func locateCandidates(root, subpath string, all bool) ([]skillscan.Candidate, error) {
 	if subpath != "" {
 		dir := filepath.Join(root, filepath.FromSlash(subpath))
 		if _, err := os.Stat(dir); err != nil {
-			return "", fmt.Errorf("子目录不存在: %s", subpath)
+			return nil, fmt.Errorf("子目录不存在: %s", subpath)
 		}
-		return dir, nil
+		return []skillscan.Candidate{{Dir: dir, Name: filepath.Base(dir)}}, nil
 	}
 	candidates, err := skillscan.Candidates(root)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	switch len(candidates) {
-	case 0:
-		return "", fmt.Errorf("仓库中未找到含 SKILL.md 的目录")
-	case 1:
-		return candidates[0].Dir, nil
-	default:
-		names := make([]string, 0, len(candidates))
-		for _, candidate := range candidates {
-			rel, relErr := filepath.Rel(root, candidate.Dir)
-			if relErr != nil {
-				rel = candidate.Name
-			}
-			names = append(names, filepath.ToSlash(rel))
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("仓库中未找到含 SKILL.md 的目录")
+	}
+	if !all && len(candidates) > 1 {
+		return nil, fmt.Errorf(
+			"仓库含 %d 个候选 Skill，请用 --path 指定其中一个，或用 --all 全部安装：%s",
+			len(candidates), strings.Join(candidatePaths(root, candidates), ", "))
+	}
+	return candidates, nil
+}
+
+func candidatePaths(root string, candidates []skillscan.Candidate) []string {
+	paths := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		rel, err := filepath.Rel(root, candidate.Dir)
+		if err != nil {
+			rel = candidate.Dir
 		}
-		return "", fmt.Errorf("仓库含多个候选 Skill，请用 --path 指定其中一个：%s",
-			strings.Join(names, ", "))
+		paths = append(paths, filepath.ToSlash(rel))
+	}
+	return paths
+}
+
+// planItem 是计划安装的一个 Skill。
+type planItem struct {
+	Candidate skillscan.Candidate
+	Name      string
+	Target    string
+	RelPath   string
+}
+
+// skipItem 是被跳过的 Skill 及原因。
+type skipItem struct {
+	Path string
+	Why  string
+}
+
+// failItem 是校验或安装失败的 Skill 及原因。
+type failItem struct {
+	Path string
+	Why  string
+}
+
+// installPlan 是一次安装的完整计划。
+type installPlan struct {
+	Install []planItem
+	Skip    []skipItem
+	Fail    []failItem
+}
+
+// planInstalls 校验全部候选并决定装哪些。
+// 校验失败只影响它自己；安装名冲突或目标被占则跳过，不静默覆盖。
+func planInstalls(root string, candidates []skillscan.Candidate, base string, replace bool) installPlan {
+	var plan installPlan
+	used := map[string]string{} // 安装名 -> 来源路径
+	for _, candidate := range candidates {
+		rel, err := filepath.Rel(root, candidate.Dir)
+		if err != nil {
+			rel = candidate.Dir
+		}
+		rel = filepath.ToSlash(rel)
+
+		if err := skillscan.ValidateDir(candidate.Dir, skillscan.DefaultLimits); err != nil {
+			plan.Fail = append(plan.Fail, failItem{Path: rel, Why: err.Error()})
+			continue
+		}
+		name := skillscan.SkillName(candidate.Dir)
+		if previous, duplicate := used[name]; duplicate {
+			plan.Skip = append(plan.Skip, skipItem{
+				Path: rel,
+				Why:  fmt.Sprintf("安装名 %s 与 %s 冲突", name, previous),
+			})
+			continue
+		}
+		used[name] = rel
+
+		target := filepath.Join(base, name)
+		if err := checkTarget(target, replace); err != nil {
+			plan.Skip = append(plan.Skip, skipItem{Path: rel, Why: err.Error()})
+			continue
+		}
+		plan.Install = append(plan.Install, planItem{
+			Candidate: candidate, Name: name, Target: target, RelPath: rel,
+		})
+	}
+	return plan
+}
+
+// reportPlan 打印计划。成功的只报数量和前几个示例，
+// 跳过和失败要逐条列出来——那些是需要人看的。
+func reportPlan(plan installPlan, base string, dryRun bool) {
+	action := "将安装"
+	if dryRun {
+		action = "可安装"
+	}
+	fmt.Printf("%s %d 个 Skill 到 %s\n", action, len(plan.Install), base)
+	for i, item := range plan.Install {
+		if i >= 10 {
+			fmt.Printf("  ……等共 %d 个\n", len(plan.Install))
+			break
+		}
+		fmt.Printf("  %s\n", item.Name)
+	}
+	if len(plan.Skip) > 0 {
+		fmt.Printf("跳过 %d 个：\n", len(plan.Skip))
+		for _, skip := range plan.Skip {
+			fmt.Printf("  %s —— %s\n", skip.Path, skip.Why)
+		}
+	}
+	if len(plan.Fail) > 0 {
+		fmt.Printf("失败 %d 个：\n", len(plan.Fail))
+		for _, failure := range plan.Fail {
+			fmt.Printf("  %s —— %s\n", failure.Path, failure.Why)
+		}
 	}
 }
 

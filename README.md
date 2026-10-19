@@ -147,10 +147,12 @@ skills/redis-cache   有
 | --- | --- |
 | `<repo-url>` | 仓库地址。**必须是远程地址**——`NormalizeURL` 按设计拒绝 `file://` 和本地路径。支持 `git@owner:repo.git`、`ssh://`、`https://` 三种形式，**不能混写**（`git@` 形式不能带 `https://` 前缀） |
 | `--path` | 仓库里哪个子目录是 Skill。**只有候选恰好一个时才能省略**；有多个会报错并列出候选让你挑 |
+| `--all` | 装仓库里的**全部** Skill。与 `--path` 互斥 |
 | `--agent` | 装给哪个 Agent。`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/` |
 | `--scope` | `user` 装到用户级（你所有项目都能用）；`project` 装到当前项目里（提交进版本控制，团队共享） |
 | `--ref` | 分支、标签或 commit。不填用仓库默认分支 |
 | `--install` | **关键开关**。不加只"登记"来源，不碰 Agent 目录；加了才真正安装 |
+| `--dry-run` | 只列出会装什么，不实际安装 |
 | `--replace` | 目标位置已有同名目录时强制覆盖（见下方"同名目录不覆盖"） |
 | `--credential-ref` | 私有仓库用本机凭据管理器里的凭据引用，**不接受明文令牌** |
 
@@ -176,6 +178,27 @@ Skill java-debug
 ```
 
 **原子安装的意义**：装到一半失败不会毁掉你原来的版本——旧版本先被备份，新版本校验通过才切换，切换失败自动回滚。
+
+#### 一次装整个仓库的 Skill
+
+有些仓库本身就是「一堆 Skill 的集合」（比如一个产品方法论仓库里分了好几个 category、每个 category 下十几个 Skill）。用 `--all` 一次装完：
+
+```bash
+# 先看看会装什么
+./skillmesh.exe add https://github.com/phuryn/pm-skills --all --agent claude-code --scope user --dry-run
+
+# 确认后真装
+./skillmesh.exe add https://github.com/phuryn/pm-skills --all --agent claude-code --scope user --install
+```
+
+批量安装的规则：
+
+- **先全量校验，再全量安装**。一个 Skill 校验失败（比如有逃出目录的符号链接）只影响它自己，其他照装，最后汇总报告。
+- **安装名冲突跳过并报告**，不静默覆盖。两个 Skill 的 frontmatter `name` 相同的话，后一个会被跳过并说明和谁冲突。
+- **目标位置已被手写内容占用的跳过并报告**，要用 `--replace` 才覆盖。
+- 锁文件里每个 Skill 一条记录，各记各的子目录，但共享同一个 `resolved_commit`。
+
+装了几十个之后，`update` 依然很快——同一个仓库只发一次 `ls-remote`、只 clone 一次（69 个 Skill 的仓库，`update --check` 约 1.4 秒）。
 
 #### 同名目录默认不覆盖
 
