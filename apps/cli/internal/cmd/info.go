@@ -69,7 +69,7 @@ func printProvenance(skill apiclient.Skill, latest apiclient.SkillVersion) {
 
 func printVersions(versions []apiclient.SkillVersion) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "\n版本\t通道\t状态\t扫描\tcommit\tSHA256")
+	fmt.Fprintln(w, "\n版本\t通道\t状态\t扫描\t签名\tcommit\tSHA256")
 	for _, version := range versions {
 		commit := "-"
 		if version.SourceCommit != nil {
@@ -79,8 +79,9 @@ func printVersions(versions []apiclient.SkillVersion) error {
 		if version.Artifact != nil && len(version.Artifact.SHA256) >= 12 {
 			digest = version.Artifact.SHA256[:12]
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			version.Version, version.Channel, version.Status, scanLabel(version.Scan),
+			signatureLabel(version.Artifact),
 			commit, digest)
 	}
 	return w.Flush()
