@@ -5,6 +5,7 @@ Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本�
 - 产品设计：[设计文档](docs/设计文档.md)
 - 接口与数据库规范：[详细设计](docs/详细设计.md)
 - MVP 范围裁剪：[docs/superpowers/specs/2026-10-19-mvp-v1-design.md](docs/superpowers/specs/2026-10-19-mvp-v1-design.md)
+- **设计文档实现对照表**（逐节核对 + 明确未做项）：[docs/superpowers/specs/2026-10-19-design-doc-coverage.md](docs/superpowers/specs/2026-10-19-design-doc-coverage.md)
 
 ## 目录结构
 

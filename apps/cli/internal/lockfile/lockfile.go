@@ -27,6 +27,7 @@ type LockedSkill struct {
 	Name           string   `yaml:"name"`
 	SourceID       string   `yaml:"source_id,omitempty"`
 	Repository     string   `yaml:"repository"`
+	Provider       string   `yaml:"provider,omitempty"`
 	Path           string   `yaml:"path"`
 	RefType        string   `yaml:"ref_type"`
 	Ref            string   `yaml:"ref,omitempty"`

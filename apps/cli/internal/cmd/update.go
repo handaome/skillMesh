@@ -23,6 +23,7 @@ type UpdateInfo struct {
 	Ref           string
 	Scope         string
 	InstalledHash string
+	SkillID       string
 	Agents        []string
 	LocalCommit   string
 	RemoteCommit  string
@@ -86,6 +87,7 @@ func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error)
 				Ref:           skill.Ref,
 				Scope:         skill.Scope,
 				InstalledHash: skill.InstalledHash,
+				SkillID:       skill.SourceID,
 				Agents:        skill.Agents,
 				LocalCommit:   skill.ResolvedCommit,
 				RemoteCommit:  remote,
@@ -207,7 +209,7 @@ func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock,
 				previewUpdate(root, projectRoot, update)
 				continue
 			}
-			if err := applyOne(root, projectRoot, lock, update, commit); err != nil {
+			if err := applyOne(ctx, root, projectRoot, lock, update, commit); err != nil {
 				fmt.Fprintf(os.Stderr, "更新 %s 失败: %v\n", update.Name, err)
 			}
 		}
@@ -273,7 +275,8 @@ func previewUpdate(root, projectRoot string, update UpdateInfo) {
 }
 
 // applyOne 走「校验 → 原子替换」，失败保留当前可用版本。
-func applyOne(root, projectRoot string, lock *lockfile.Lock, update UpdateInfo, commit string) error {
+func applyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock,
+	update UpdateInfo, commit string) error {
 	skillDir := filepath.Join(root, filepath.FromSlash(update.Path))
 	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
 		return err

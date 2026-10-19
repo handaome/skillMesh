@@ -27,8 +27,9 @@ public class AuditReportController {
 
     /** 允许客户端上报的动作。别的 action 直接 400。 */
     private static final Set<String> ALLOWED = Set.of(
-        "install.completed", "install.failed", "uninstall.completed",
-        "sync.conflict_reported", "sync.retried");
+        "install.completed", "install.failed", "install.upgraded", "install.rolled_back",
+        "uninstall.completed", "sync.conflict_reported", "sync.retried",
+        "source.policy_changed");
 
     private final AuditService audit;
     private final CurrentUserService currentUserService;

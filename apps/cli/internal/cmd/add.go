@@ -100,6 +100,7 @@ func newAddCmd() *cobra.Command {
 				lock.Upsert(lockfile.LockedSkill{
 					Name:           item.Name,
 					Repository:     repo,
+					Provider:       providerOf(repo),
 					Path:           item.RelPath,
 					RefType:        refTypeOf(ref),
 					Ref:            ref,
@@ -292,6 +293,22 @@ func checkTarget(target string, replace bool) error {
 		return nil
 	}
 	return fmt.Errorf("目标已存在且不受 SkillMesh 管理: %s（用 --replace 覆盖）", target)
+}
+
+// providerOf 从仓库地址猜出来源类型（设计文档 §7.1）。
+// 猜不出就归 generic_git——来源类型是元数据，猜错不会影响功能。
+func providerOf(url string) string {
+	lower := strings.ToLower(url)
+	switch {
+	case strings.Contains(lower, "github.com"):
+		return "github"
+	case strings.Contains(lower, "gitlab.com"):
+		return "gitlab"
+	case strings.Contains(lower, "gitee.com"):
+		return "gitee"
+	default:
+		return "generic_git"
+	}
 }
 
 // installedDigest 记下装完内容的规范化摘要，update 时用它判断本地有没有被改过。
