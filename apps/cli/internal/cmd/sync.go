@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -19,6 +20,9 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/syncstate"
 	"github.com/spf13/cobra"
 )
+
+// cliVersion 报给注册中心，方便知道谁在提交同步。
+const cliVersion = "0.1.0"
 
 // syncVisibility 是同步用的可见性。
 // 个人云端备份默认私有，不等于团队发布（设计文档 §2 的概念区分）。
@@ -293,7 +297,70 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 	}
 
 	decision := syncstate.Decide(target.BaseHash, localHash, cloudHash)
-	return applyDecision(ctx, client, target, decision, local, localHash, skill, found, options)
+	changeset := ""
+	if found && decision != syncstate.UpToDate {
+		// 云端也判一次：别的设备可能在两次请求之间动过内容（详细设计 §3.6）。
+		var err error
+		changeset, err = confirmWithCloud(ctx, client, target, local, localHash, decision)
+		if err != nil {
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: conflicted,
+				Detail: err.Error()}, syncstate.Entry{}, nil
+		}
+	}
+	result, entry, err := applyDecision(ctx, client, target, decision, local, localHash,
+		skill, found, options)
+	if changeset != "" && result.Outcome == uploaded {
+		result.Detail += "（云端记录 " + short(changeset) + "）"
+	}
+	return result, entry, err
+}
+
+// confirmWithCloud 把这次的基线和本地摘要报给服务端，由它回答还成不成立。
+// 服务端说冲突就以它为准——它看得到别的设备，服务端之间才比得准。
+func confirmWithCloud(ctx context.Context, client *apiclient.Client, target syncTarget,
+	local packager.Artifact, localHash string, decision syncstate.Decision) (string, error) {
+
+	device, err := ensureDevice(ctx, client)
+	if err != nil {
+		return "", err
+	}
+	direction := "bidirectional"
+	if decision == syncstate.Upload {
+		direction = "upload"
+	} else if decision == syncstate.Download {
+		direction = "download"
+	}
+	// 幂等键用「内容摘要 + 基线」：同样的内容重复提交只会有一条记录。
+	key := localHash[:16] + "-" + short(target.BaseHash)
+	response, err := client.SubmitChangeset(ctx, device, key, apiclient.SyncChangesetRequest{
+		SkillID:   target.SkillID,
+		Direction: direction,
+		BaseHash:  target.BaseHash,
+		LocalHash: localHash,
+		LocalPath: target.Path,
+		Manifest:  toManifest(local.Manifest),
+	})
+	if err != nil {
+		// 服务端不可达不该挡住同步本身：本地三方比较已经够用，
+		// 报不出错比拒绝同步好。
+		if apiclient.CodeOf(err) == "" {
+			return "", nil
+		}
+		return "", err
+	}
+	if response.Status == "conflict" {
+		return "", fmt.Errorf("云端已判冲突（%s），不自动覆盖", response.Message)
+	}
+	return response.ChangesetID, nil
+}
+
+// ensureDevice 拿本机在注册中心的设备 ID，没有就注册一个。
+func ensureDevice(ctx context.Context, client *apiclient.Client) (string, error) {
+	device, err := client.RegisterDevice(ctx, apiclient.MachineKey(), runtime.GOOS, cliVersion)
+	if err != nil {
+		return "", err
+	}
+	return device.ID, nil
 }
 
 // applyDecision 按判定结果执行。冲突在没有 --resolve 时只报告不动手。

@@ -31,15 +31,38 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, out any) error {
+	return c.doWith(ctx, method, path, query, nil, out)
+}
+
+// doWith 发一个带请求体和自定义头的请求。headers 一律是键值对，调用方自己拼。
+func (c *Client) doWith(ctx context.Context, method, path string, query url.Values,
+	body any, out any, headers ...map[string]string) error {
+
 	target := c.base + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target, nil)
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for _, extra := range headers {
+		for key, value := range extra {
+			req.Header.Set(key, value)
+		}
+	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
