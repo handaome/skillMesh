@@ -118,17 +118,24 @@ MVP v1 已经把「注册中心 + Git 来源 + CLI 全套命令」跑通了。�
 | §12 `audit/events` 客户端上报 | 已实现，只放行 5 个客户端动作，特权动作 400 |
 | §6.1 `.skillmeshignore` 与凭据文件过滤 | 已实现，摘要与打包同一套口径 |
 | §8 Cursor 适配器 | 已加适配器，**默认关闭**（目录约定没在真实 Cursor 上验证过） |
+| §10.1 发布审批流 | 团队/组织可见的版本停在 `pending_review`，reviewer 及以上放行，且不能审自己发的 |
+| §10、§11 组织 / 团队 / 角色矩阵 | 建组织、建团队、加成员；可见性按 private/team/organization/public 判，搜索同步过滤 |
+| §10 制品签名与客户端验签 | Ed25519 签清单摘要，公钥经 `/keys/verify` 公布；装之前验签名 + 核对本地摘要 |
+| §12 `sources/resolve`、`sources/check-updates` | 服务端拉 Git，前置 GitHostPolicy 白名单 + SSRF 防护 |
+| §12 `installations` 全套 | 安装实例登记 + 跨设备视图（`skillmesh installations`） |
+| §12 `audit-events`、变更集 `resolve`、`PATCH /skills/{id}`、单版本详情 | 已补齐 |
+| §14 限流、并发上限、Git 主机白名单 | 按用户限流（读/写分开）、Git 解析信号量、主机白名单 + 内网地址拦截 |
+| §14 备份与恢复验证 | `BackupService` 走 JDBC + MinIO SDK 导出并自检；`BackupServiceTest` 验「改坏文件能被报出来」 |
+| §6.4 软删除 / 回收期 | `uninstall` 默认移进回收站，`trash restore` 找回，`trash purge` 清过期 |
 
-仍未实现（按设计文档阶段划分，需要组织/团队概念或生产环境）：
+仍未实现：
 
-| 设计文档要求 | 章节 | 为什么还做不了 |
+| 设计文档要求 | 章节 | 说明 |
 | --- | --- | --- |
-| 发布审批流 `draft→scanning→pending_review→published` | §10.1 | 审核要有审核人可审，先得有组织与成员 |
-| 组织 / 团队 / 角色矩阵、团队可见性 | §10、§11 | 同上；`organizations` / `teams` / `memberships` 表已在，代码未动 |
-| 制品签名与客户端验签 | §10 | 需要密钥管理方案，现在签名只会是装饰 |
-| 服务端 `sources/resolve`、`sources/check-updates` | §12 | 契约里有；服务端去拉 Git 会引入 SSRF 面（§14 明确要求主机白名单），本阶段仍由 CLI 本地解析 |
-| 限流、并发上限、Git 主机白名单 | §14 | 生产加固。当前是内网单机；对外暴露前必须先做 |
-| 备份与恢复验证 | §14 | 运维动作，不是代码 |
+| `POST /sync/changesets/{id}/uploads` 与 `/commit` | §12 | 契约里是文件级上传；本实现的同步是「整包声明式对账」，Skill 制品走 `/uploads`，这两条对单 Skill 场景没有使用者 |
+| 删除传播到云端 | §6.4 | 契约说「默认软删除、确认后才传播」。本实现**永远不删云端**，等于最保守的那一档 |
+| 信任根（固定公钥 / 证书链） | §10 | 验签目前信的是注册中心当前密钥；要做供应链证明需要把公钥钉死 |
+| 流式备份 | §14 | 备份一次性读表到内存，生产大库要换 `ResultSet` 流式 |
 
 ## 明确推到 v2（不在这一阶段）
 

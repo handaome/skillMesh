@@ -12,6 +12,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
+	"github.com/handaome/skillmesh/apps/cli/internal/trash"
 	"github.com/spf13/cobra"
 )
 
@@ -152,7 +153,7 @@ func newStatusCmd() *cobra.Command {
 }
 
 func newUninstallCmd() *cobra.Command {
-	var force bool
+	var force, purge bool
 	cmd := &cobra.Command{
 		Use:   "uninstall <skill-name>",
 		Short: "移除安装内容与锁文件记录",
@@ -173,14 +174,27 @@ func newUninstallCmd() *cobra.Command {
 					return err
 				}
 				target := filepath.Join(base, entry.Name)
-				if force {
+				switch {
+				case purge:
+					// --purge 是真删：不可恢复，只在明确要求时走
 					if err := os.RemoveAll(target); err != nil {
 						return err
 					}
-				} else if err := installer.RemoveUnmanaged(target); err != nil {
-					return err
+					fmt.Printf("已彻底删除 %s\n", target)
+				case force:
+					if err := os.RemoveAll(target); err != nil {
+						return err
+					}
+					fmt.Printf("已移除 %s\n", target)
+				default:
+					// 默认进回收站：卸载还能找回来（设计文档 §6.4、§15.1）
+					item, err := trash.NewStore(cfg.ConfigDir).Move(entry.Name, target)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("已移到回收站 %s（%d KiB，skillmesh trash restore 可找回）\n",
+						item.Entry, item.SizeKiB)
 				}
-				fmt.Printf("已移除 %s\n", target)
 			}
 			lock.Remove(entry.Name)
 			if err := lock.Save(projectRoot); err != nil {
@@ -195,5 +209,6 @@ func newUninstallCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "连同不受 SkillMesh 管理的目录一起删除")
+	cmd.Flags().BoolVar(&purge, "purge", false, "彻底删除，不进回收站（不可恢复）")
 	return cmd
 }

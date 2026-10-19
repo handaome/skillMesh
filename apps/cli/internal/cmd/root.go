@@ -44,7 +44,7 @@ func newRootCmd() *cobra.Command {
 		newReviewCmd(),
 		newListCmd(), newStatusCmd(), newUninstallCmd(), newInstallationsCmd(),
 		newScanCmd(), newSyncCmd(), newRestoreCmd(),
-		newDoctorCmd(), newAgentsCmd(), newUpdateCmd(), newLockCmd(),
+		newDoctorCmd(), newAgentsCmd(), newUpdateCmd(), newLockCmd(), newTrashCmd(),
 		newWatchCmd(), newDaemonCmd(),
 	)
 	return root

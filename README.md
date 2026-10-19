@@ -347,7 +347,8 @@ curl -X POST .../api/v1/teams/<id>/members -d '{"user_id":"...","role":"reviewer
 | `sync` / `sync --resolve` | 与个人私有空间对账，冲突按你的选择解决 |
 | `watch start` / `stop` / `pause` | 后台同步监听 |
 | `lock refresh` | 重新解析来源并刷新锁文件 |
-| `uninstall <name>` | 移除安装内容与锁文件记录 |
+| `uninstall <name>` | 卸载（默认移进回收站，可找回） |
+| `trash list` / `restore` / `purge` | 回收站：找回卸载掉的 Skill、清过期 |
 
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。
 
