@@ -22,3 +22,11 @@ skillmesh:
     client-id: skillmesh-test
     username: dev-user
     password: dev
+  git:
+    allowed-hosts: github.com,gitlab.com,gitee.com
+    timeout-seconds: 30
+  # 集成测试全部共用一个 Spring 上下文、同一个用户，额度默认会把后半程的测试全打成 429。
+  # 限流逻辑由 RateLimitFilterTest 单独验证，这里放开。
+  rate-limit:
+    read-per-minute: 100000
+    write-per-minute: 100000
