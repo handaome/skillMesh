@@ -208,6 +208,16 @@ cd apps/web && pnpm test          # 前端组件
 3. **Git Bash 下 Keycloak 需要 `.cmd` 包装器**。形如 `/kc` 的参数会被 MSYS 当成 Unix 路径转成 `C:\Program Files\Git\kc`，Keycloak 会报 `Specified path is an invalid URI`；`.cmd` 文件还必须纯 ASCII，因为 cmd 按 OEM 码页（GBK）读批处理，中文注释会解出元字符。
 4. **JVM 堆要显式压住**。`apps/api/.mvn/jvm.config` 与 surefire `argLine` 都设了 `-Xmx768m`，否则 fork 起来申请 G1 虚拟空间会直接失败。
 5. **GitHub 不可达**时 Keycloak 走 Maven Central 的 `org.keycloak:keycloak-quarkus-dist`，Go 模块走 goproxy.cn。
+6. **github.com 的 443 不通，但 22（SSH）通**。本机已生成 `~/.ssh/id_ed25519`（无口令，注释 `skillmesh-dev`），把公钥注册到 GitHub 后，git 走 SSH 就能用，不依赖代理：
+
+   ```bash
+   export GITHUB_TOKEN=<带 admin:public_key 权限的 PAT>
+   bash infra/scripts/register-github-ssh-key.sh
+   ```
+
+   注册后 CLI 用 `git@github.com:owner/repo.git` 形式即可（`NormalizeURL` 已支持 `git@` 写法）。注意建 PAT 和加密钥都要走 github.com 的 web UI，所以**第一次仍然需要把代理开起来**。
+
+   不想用 SSH 的话，开着代理直接 `git config --global http.proxy http://127.0.0.1:7890` 更省事。
 
 ## MVP 范围
 
