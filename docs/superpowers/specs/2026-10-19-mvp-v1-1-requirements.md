@@ -128,6 +128,22 @@ MVP v1 已经把「注册中心 + Git 来源 + CLI 全套命令」跑通了。�
 - 绕过 CLI 的上传也会被服务端扫描拦下。
 - 发布、下载、安装、撤回都有审计流水，且不含凭据。
 
+## 落地状态（2026-10-20）
+
+| 故事 | 状态 | 说明 |
+| --- | --- | --- |
+| S3 换设备装回 | ✅ | `search --mine` + `restore`；服务端加 `?mine=true` |
+| S1 差异预览 | ✅ | `update <name> --dry-run` 输出文件级差异；`installed_hash` 判定本地改动并保护 |
+| S2 风险面板 | ⚠️ 部分 | `info` 展示来源/扫描/风险、`install` 装前提示扫描结论；**「来源=仓库 URL / commit」在注册中心侧拿不到**——v1 没有任何地方往 `skill_sources` 写，Git 来源信息只在本地锁文件里 |
+| S5 服务端扫描 | ✅ | 解包扫描写 `skill_scans`，命中即 `rejected`；扫描规则与客户端同名同序 |
+| S4 撤回 | ✅ | `POST /skills/{id}/versions/{v}/revoke`；`list` 警告、`install` 拒绝；DDL 的 `revoked` 状态无 `quarantined`，阻断时用 `rejected` |
+| S6 审计 | ⚠️ 部分 | 发布/撤回/下载写 `audit_events`，`GET /skills/{id}/audit` 可查；**安装与卸载发生在客户端，没有上报通道**，按 S6-AC#2 的边界处理 |
+
+偏离说明：
+
+1. S2-AC#4 原写「客户端扫描结论一并上报」。改为**服务端独立扫描为准**——客户端结果只做本地提示，上报两份可能不一致的结论没有意义。
+2. S6-AC#2「客户端可上报的少量事件」没有实现：`POST /api/v1/audit/events` 留到真有离线场景再说（离线队列本身在 v2）。
+
 ## 顺序建议
 
 S3 → S1 → S2 → S5 → S4 → S6。

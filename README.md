@@ -100,6 +100,7 @@ cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 # 发布本地 Skill
 ./skillmesh.exe publish ./skills/java-debug
 ./skillmesh.exe rollback java-debug --to 1.0.0
+./skillmesh.exe restore                    # 换设备：装回个人私有空间
 
 # 本地项目状态
 ./skillmesh.exe list
@@ -291,7 +292,7 @@ export SKILLMESH_TOKEN=<access-token>
 | `list` | 列出本项目锁文件里登记的**本地安装**：Skill、Agent、版本/commit、安装路径、是否受管 |
 | `status` | 同上，但输出 JSON（`status <name>` 只看某一个），适合脚本消费 |
 | `update --check` | 检查远端有没有新 commit，**只报告不改动** |
-| `update --dry-run` | 同上，指定单个 Skill 时用（`update <name>` 默认是真更新） |
+| `update <name> --dry-run` | 看这次更新改了哪些文件，不落盘 |
 | `update --all` | 应用全部更新 |
 | `update <name>` | 只更新某一个 |
 | `rollback <name> --to <version>` | 回滚到指定版本（仅注册中心来源） |
@@ -308,6 +309,70 @@ export SKILLMESH_TOKEN=<access-token>
 - `search` = **云端有什么**（调 `/api/v1/skills`）
 
 `publish` 只把 Skill 发到云端，**不在本地装任何东西**，所以发布完 `list` 仍然是空的——这是设计如此（锁文件记录的是"已安装的 Skill 的解析结果"，用来让 CI 复现同样的安装）。发布完用 `search` 查。
+
+### 更新前先看差异，本地改过就不覆盖
+
+```bash
+./skillmesh.exe update <name> --dry-run
+```
+
+```text
+demo-skill —— 3 个文件有变化
+    修改 SKILL.md（+2/-1 行）
+    新增 new.md
+    删除 old.md
+```
+
+判重和"本地有没有被改过"都用**内容摘要**（对「路径 + 逐文件 SHA-256」排序后哈希），不用 zip 的 sha256——同一份内容重新打包，压缩实现或文件权限位一变摘要就变，会把没变误判成变。装的时候摘要记进锁文件的 `installed_hash`。
+
+本地有未提交修改时，`update` 会打印「跳过 xxx —— 本地有改动，保留本地版本」，不动你的文件、锁文件也不改，退出码仍是 0（其余 Skill 照常更新）。差异大到不值得逐行算时只报文件级，二进制文件同样只报文件级。
+
+### 换设备装回自己的 Skill
+
+```bash
+./skillmesh.exe search --mine     # 只看个人私有空间
+./skillmesh.exe restore           # 全部装回本机
+./skillmesh.exe restore java-debug --agent claude-code --scope project
+```
+
+`restore` 走的是和 `install` 完全一样的路径：校验 → 原子替换 → 写锁文件。单个 Skill 失败不中断整批，最后给「已恢复 / 跳过 / 失败」三段汇总。
+
+### 装之前看一眼来源与风险
+
+```bash
+./skillmesh.exe info <skill-id>
+```
+
+```text
+来源
+  来源      SkillMesh 注册中心
+  可见性    private
+  最新版本  1.0.1（状态 published）
+  许可证    未提供（注册中心不存这个字段，识别仅供参考）
+
+版本     通道      状态         扫描      commit  SHA256
+1.0.1  stable  published  passed  -       bf5f82c1b89e
+
+风险
+  静态扫描只能帮你发现风险，不能证明这份 Skill 安全。
+```
+
+**扫描是服务端做的**：制品定版后立刻解包扫一遍，结论写进 `skill_scans`，随版本列表返回。命中凭据（AWS Key、GitHub Token、OpenAI Key、Slack Token、Google API Key、私钥正文）或路径穿越的包**不会发布**，版本状态停在 `rejected`。客户端也扫一遍，但只用来当场提示——绕开 CLI 直接调 API 一样会被服务端拦下。
+
+扫描列显示 `未扫描` 的，是 v1.1 之前发布的版本，那会儿没有服务端扫描。
+
+**被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
+
+### 审计
+
+发布、撤回、制品下载都写 `audit_events`（谁、什么时候、对哪个对象、结果、请求 ID）。
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/api/v1/skills/<skill-id>/audit
+```
+
+审计写入失败不会回滚业务动作——事情已经发生了，记不上是另一回事，会在日志里留一条失败记录。
 
 ### 诊断
 
