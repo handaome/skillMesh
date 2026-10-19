@@ -66,6 +66,8 @@ func newInstallCmd() *cobra.Command {
 			if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
 				return err
 			}
+			warnRisks(skillDir)
+			fmt.Println(skillscan.LicenseLine(skillDir))
 			name := skillscan.SkillName(skillDir)
 
 			for _, agentName := range agentNames {
@@ -85,6 +87,10 @@ func newInstallCmd() *cobra.Command {
 				}
 				fmt.Printf("已安装 %s@%s 到 %s\n", name, target.Version, installPath)
 			}
+			if err := recordInstall(projectRoot, name, args[0], target, agentNames); err != nil {
+				return err
+			}
+			fmt.Printf("锁文件 %s\n", lockfile.FileName)
 			return nil
 		},
 	}
@@ -95,6 +101,30 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只演练不落盘")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
 	return cmd
+}
+
+// recordInstall 把注册中心安装写进锁文件。
+// 不写的话 list 看不到它，CI 的 --locked 也无从校验（设计文档 §9.2）。
+func recordInstall(projectRoot, name, skillID string, target apiclient.SkillVersion,
+	agents []string) error {
+
+	lock, err := lockfile.Load(projectRoot)
+	if err != nil {
+		return err
+	}
+	entry := lockfile.LockedSkill{
+		Name:     name,
+		SourceID: skillID,
+		RefType:  "version",
+		Ref:      target.Version,
+		Version:  target.Version,
+		Agents:   agents,
+	}
+	if target.Artifact != nil {
+		entry.SHA256 = target.Artifact.SHA256
+	}
+	lock.Upsert(entry)
+	return lock.Save(projectRoot)
 }
 
 // pickVersion 选要装的版本。--locked 时必须与锁文件完全一致，

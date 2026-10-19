@@ -83,6 +83,7 @@ func newAddCmd() *cobra.Command {
 				return err
 			}
 			installed := 0
+			var installedItems []planItem
 			for _, item := range plan.Install {
 				if err := installer.InstallAtomic(item.Candidate.Dir, item.Target, true); err != nil {
 					plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
@@ -101,12 +102,16 @@ func newAddCmd() *cobra.Command {
 					ResolvedCommit: commit,
 					Agents:         []string{agentName},
 				})
+				installedItems = append(installedItems, item)
 				installed++
 			}
 			if err := lock.Save(projectRoot); err != nil {
 				return err
 			}
 			fmt.Printf("\n已安装 %d 个 Skill 到 %s\n", installed, base)
+			for _, item := range installedItems {
+				fmt.Printf("  %s —— %s\n", item.Name, skillscan.LicenseLine(item.Candidate.Dir, root))
+			}
 			if len(plan.Fail) > 0 {
 				fmt.Printf("失败 %d 个：\n", len(plan.Fail))
 				for _, failure := range plan.Fail {
@@ -172,6 +177,7 @@ type planItem struct {
 	Name      string
 	Target    string
 	RelPath   string
+	Risks     []skillscan.Finding
 }
 
 // skipItem 是被跳过的 Skill 及原因。
@@ -224,8 +230,13 @@ func planInstalls(root string, candidates []skillscan.Candidate, base string, re
 			plan.Skip = append(plan.Skip, skipItem{Path: rel, Why: err.Error()})
 			continue
 		}
+		// 命中只提示不拦：装到本地是自己的机器，发布才需要阻断（设计文档 §13）。
+		findings, err := skillscan.ScanSecrets(candidate.Dir)
+		if err != nil {
+			findings = nil
+		}
 		plan.Install = append(plan.Install, planItem{
-			Candidate: candidate, Name: name, Target: target, RelPath: rel,
+			Candidate: candidate, Name: name, Target: target, RelPath: rel, Risks: findings,
 		})
 	}
 	return plan
@@ -245,6 +256,9 @@ func reportPlan(plan installPlan, base string, dryRun bool) {
 			break
 		}
 		fmt.Printf("  %s\n", item.Name)
+		for _, risk := range item.Risks {
+			fmt.Printf("      风险：%s:%d %s\n", risk.Path, risk.Line, risk.Rule)
+		}
 	}
 	if len(plan.Skip) > 0 {
 		fmt.Printf("跳过 %d 个：\n", len(plan.Skip))

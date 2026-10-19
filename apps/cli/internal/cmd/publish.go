@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ type publishTarget struct {
 func newPublishCmd() *cobra.Command {
 	var (
 		version, visibility, channel, slug, name, description string
-		all, dryRun                                         bool
+		all, dryRun, skipSecretScan                           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "publish <path>",
@@ -46,13 +47,14 @@ func newPublishCmd() *cobra.Command {
 				return err
 			}
 			options := publishOptions{
-				Version:     version,
-				Visibility:  visibility,
-				Channel:     channel,
-				Slug:        slug,
-				Name:        name,
-				Description: description,
-				DryRun:      dryRun,
+				Version:        version,
+				Visibility:     visibility,
+				Channel:        channel,
+				Slug:           slug,
+				Name:           name,
+				Description:    description,
+				DryRun:         dryRun,
+				SkipSecretScan: skipSecretScan,
 			}
 			published, failed := 0, 0
 			for _, target := range targets {
@@ -81,18 +83,21 @@ func newPublishCmd() *cobra.Command {
 	cmd.Flags().StringVar(&description, "description", "", "覆盖描述，默认取 SKILL.md frontmatter 的 description")
 	cmd.Flags().BoolVar(&all, "all", false, "发布目录树里的全部 Skill")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只走完流程不真的发布")
+	cmd.Flags().BoolVar(&skipSecretScan, "skip-secret-scan", false,
+		"跳过密钥扫描（确认命中是占位符时再用）")
 	return cmd
 }
 
 // publishOptions 是发布时的可调项。
 type publishOptions struct {
-	Version     string
-	Visibility  string
-	Channel     string
-	Slug        string
-	Name        string
-	Description string
-	DryRun      bool
+	Version        string
+	Visibility     string
+	Channel        string
+	Slug           string
+	Name           string
+	Description    string
+	DryRun         bool
+	SkipSecretScan bool
 }
 
 // publishResult 是一次发布的结果。
@@ -141,6 +146,16 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 
 	if err := skillscan.ValidateDir(target.Dir, skillscan.DefaultLimits); err != nil {
 		return publishResult{}, err
+	}
+	if !options.SkipSecretScan {
+		findings, err := skillscan.ScanSecrets(target.Dir)
+		if err != nil {
+			return publishResult{}, err
+		}
+		if len(findings) > 0 {
+			// 设计文档 §15.1：含已识别密钥的 Skill 上传必须被阻断并说明原因。
+			return publishResult{}, errors.New(skillscan.FormatFindings(findings))
+		}
 	}
 	metadata := skillscan.ReadMetadata(target.Dir)
 

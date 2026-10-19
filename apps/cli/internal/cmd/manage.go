@@ -43,7 +43,7 @@ func newListCmd() *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "SKILL\tAGENT\tCOMMIT\t路径\t受管")
+			fmt.Fprintln(w, "SKILL\tAGENT\t版本/commit\t路径\t受管")
 			for _, skill := range lock.Skills {
 				for _, agentName := range skill.Agents {
 					base, err := agentDirFor(agentName, projectRoot)
@@ -56,12 +56,20 @@ func newListCmd() *cobra.Command {
 						managed = "是"
 					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-						skill.Name, agentName, short(skill.ResolvedCommit), target, managed)
+						skill.Name, agentName, resolvedLabel(skill), target, managed)
 				}
 			}
 			return w.Flush()
 		},
 	}
+}
+
+// resolvedLabel 显示锁住的东西：Git 来源锁的是 commit，注册中心来源锁的是版本号。
+func resolvedLabel(skill lockfile.LockedSkill) string {
+	if skill.ResolvedCommit != "" {
+		return short(skill.ResolvedCommit)
+	}
+	return orDash(skill.Version)
 }
 
 func newStatusCmd() *cobra.Command {
