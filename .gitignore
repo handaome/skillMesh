@@ -16,3 +16,6 @@ infra/bin/
 # Go CLI 构建产物
 apps/cli/skillmesh
 apps/cli/skillmesh.exe
+
+# 项目级锁文件（每个项目一份，不进仓库）
+skillmesh.lock.yaml
