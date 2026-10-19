@@ -127,7 +127,6 @@ commit 9eb54157e27447d184ca40d5b189c1d8
 skills/java-debug    有
 skills/redis-cache   有
 ```
-```
 
 **它的用途是让你知道下一步 `--path` 该填什么。** 一个仓库里通常有好几个 Skill 目录，不先看一眼只能一个个试。
 
