@@ -32,8 +32,12 @@ func Digest(files []FileDigest) string {
 
 // DirHashes 逐文件算摘要，规则与打包一致：跳过隐藏文件和忽略目录。
 func DirHashes(dir string) ([]FileDigest, error) {
+	ignore, err := LoadIgnore(dir)
+	if err != nil {
+		return nil, err
+	}
 	var files []FileDigest
-	err := filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+	err = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -46,15 +50,19 @@ func DirHashes(dir string) ([]FileDigest, error) {
 		if !fi.Mode().IsRegular() || isHidden(fi.Name()) {
 			return nil
 		}
-		sum, err := fileSHA256(path)
-		if err != nil {
-			return err
-		}
 		rel, err := filepath.Rel(dir, path)
 		if err != nil {
 			rel = path
 		}
-		files = append(files, FileDigest{Path: filepath.ToSlash(rel), SHA256: sum})
+		rel = filepath.ToSlash(rel)
+		if ignore.Match(rel) || IsSensitiveFile(fi.Name()) {
+			return nil
+		}
+		sum, err := fileSHA256(path)
+		if err != nil {
+			return err
+		}
+		files = append(files, FileDigest{Path: rel, SHA256: sum})
 		return nil
 	})
 	if err != nil {

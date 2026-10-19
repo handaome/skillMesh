@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 )
 
 // Entry 是 manifest 里的一项，对应 OpenAPI 的 ManifestEntry。
@@ -44,6 +46,11 @@ func Pack(dir string) (Artifact, error) {
 		return Artifact{}, fmt.Errorf("目录不存在: %s", dir)
 	}
 
+	ignore, err := skillscan.LoadIgnore(dir)
+	if err != nil {
+		return Artifact{}, err
+	}
+
 	var buf bytes.Buffer
 	writer := zip.NewWriter(&buf)
 	var manifest []Entry
@@ -68,6 +75,10 @@ func Pack(dir string) (Artifact, error) {
 		if strings.HasPrefix(fi.Name(), ".") {
 			// 隐藏文件不进包：.skillmesh-install 是本机状态标记，
 			// .git 之类是上游自己的东西，都不该发到云端。
+			return nil
+		}
+		if skillscan.IsSensitiveFile(fi.Name()) || ignore.Match(filepath.ToSlash(rel)) {
+			// .skillmeshignore 排掉的和凭据类文件都不进包（设计文档 §6.1）。
 			return nil
 		}
 
