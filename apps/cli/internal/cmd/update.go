@@ -17,14 +17,15 @@ import (
 
 // UpdateInfo 是一次检查更新的结果。
 type UpdateInfo struct {
-	Name         string
-	Repository   string
-	Path         string
-	Ref          string
-	Scope        string
-	Agents       []string
-	LocalCommit  string
-	RemoteCommit string
+	Name          string
+	Repository    string
+	Path          string
+	Ref           string
+	Scope         string
+	InstalledHash string
+	Agents        []string
+	LocalCommit   string
+	RemoteCommit  string
 }
 
 // lsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
@@ -53,14 +54,15 @@ func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error)
 		}
 		if remote != skill.ResolvedCommit {
 			updates = append(updates, UpdateInfo{
-				Name:         skill.Name,
-				Repository:   skill.Repository,
-				Path:         skill.Path,
-				Ref:          skill.Ref,
-				Scope:        skill.Scope,
-				Agents:       skill.Agents,
-				LocalCommit:  skill.ResolvedCommit,
-				RemoteCommit: remote,
+				Name:          skill.Name,
+				Repository:    skill.Repository,
+				Path:          skill.Path,
+				Ref:           skill.Ref,
+				Scope:         skill.Scope,
+				InstalledHash: skill.InstalledHash,
+				Agents:        skill.Agents,
+				LocalCommit:   skill.ResolvedCommit,
+				RemoteCommit:  remote,
 			})
 		}
 	}
@@ -105,13 +107,17 @@ func newUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			// 默认只报不装；--check / --dry-run 强制只报；--all 或指定了名字才动手
-			if checkOnly || dryRun || (!all && len(args) == 0) {
+			// 不给名字也不给 --all 就只报不动；--check / --dry-run 走到预览为止。
+			targeted := all || len(args) > 0
+			if !targeted {
 				fmt.Println("加 --all 应用全部更新，或指定 skill 名称只更新它。")
 				return nil
 			}
-			if err := applyUpdates(cmd.Context(), projectRoot, &lock, updates); err != nil {
+			if err := applyUpdates(cmd.Context(), projectRoot, &lock, updates, dryRun || checkOnly); err != nil {
 				return err
+			}
+			if dryRun || checkOnly {
+				return nil
 			}
 			return lock.Save(projectRoot)
 		},
@@ -125,7 +131,8 @@ func newUpdateCmd() *cobra.Command {
 // applyUpdates 按仓库分组应用更新：同一个仓库只 clone 一次，
 // 再从同一份检出里取各个 Skill 的子目录。装几十个 Skill 的仓库时
 // 这是数量级的差别。
-func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock, updates []UpdateInfo) error {
+func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock,
+	updates []UpdateInfo, dryRun bool) error {
 	groups := map[string][]UpdateInfo{}
 	var order []string
 	for _, update := range updates {
@@ -148,6 +155,20 @@ func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock, 
 			return err
 		}
 		for _, update := range group {
+			modified, err := locallyModified(projectRoot, update)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "检查 %s 的本地改动失败: %v\n", update.Name, err)
+				continue
+			}
+			if modified {
+				// 本地有未提交修改：保留本地版本，不覆盖（设计文档 §3.3、§6.3）。
+				fmt.Printf("跳过 %s —— 本地有改动，保留本地版本\n", update.Name)
+				continue
+			}
+			if dryRun {
+				previewUpdate(root, projectRoot, update)
+				continue
+			}
 			if err := applyOne(root, projectRoot, lock, update, commit); err != nil {
 				fmt.Fprintf(os.Stderr, "更新 %s 失败: %v\n", update.Name, err)
 			}
@@ -155,6 +176,62 @@ func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock, 
 		os.RemoveAll(work)
 	}
 	return nil
+}
+
+// installedDir 定位某个 Skill 现在装在本机的哪个目录。
+func installedDir(projectRoot string, update UpdateInfo) (string, error) {
+	if len(update.Agents) == 0 {
+		return "", fmt.Errorf("%s 没有登记 Agent 目录", update.Name)
+	}
+	base, err := agent.Dir(cfg, update.Agents[0], scopeOf(update.Scope, projectRoot), projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, update.Name), nil
+}
+
+// locallyModified 判断装在本机的内容是不是被人改过。
+func locallyModified(projectRoot string, update UpdateInfo) (bool, error) {
+	dir, err := installedDir(projectRoot, update)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return false, nil // 没装过，谈不上本地改动
+	}
+	return contentChanged(dir, update.InstalledHash), nil
+}
+
+// contentChanged 比对现场内容和安装时记下的摘要。
+// 锁文件里没有 installed_hash 的老记录一律放行——不能因为缺字段就拦住用户。
+func contentChanged(dir, installedHash string) bool {
+	if installedHash == "" {
+		return false
+	}
+	current, err := skillscan.DirDigest(dir)
+	if err != nil {
+		return false
+	}
+	return current != installedHash
+}
+
+// previewUpdate 只报差异不落盘（--dry-run / --check）。
+func previewUpdate(root, projectRoot string, update UpdateInfo) {
+	remote := filepath.Join(root, filepath.FromSlash(update.Path))
+	local, err := installedDir(projectRoot, update)
+	if err != nil {
+		fmt.Printf("%s —— 本地还没装，无法预览差异\n", update.Name)
+		return
+	}
+	changes, err := diffTrees(local, remote)
+	if err != nil || len(changes) == 0 {
+		// 拿不到差异就退化成只报 commit，不该让整批预览失败。
+		fmt.Printf("%s —— 只知道 commit 从 %s 变到 %s，看不到文件差异\n",
+			update.Name, short(update.LocalCommit), short(update.RemoteCommit))
+		return
+	}
+	fmt.Printf("%s —— %d 个文件有变化%s\n",
+		update.Name, len(changes), describeChanges(changes))
 }
 
 // applyOne 走「校验 → 原子替换」，失败保留当前可用版本。
@@ -178,6 +255,11 @@ func applyOne(root, projectRoot string, lock *lockfile.Lock, update UpdateInfo, 
 			return err
 		}
 	}
+	// 摘要取自刚装下去的那份内容：隐藏文件两边都不计，规则一致。
+	installedHash, err := skillscan.DirDigest(skillDir)
+	if err != nil {
+		installedHash = "" // 算不出来就留空，下次更新不做本地改动判断
+	}
 	lock.Upsert(lockfile.LockedSkill{
 		Name:           update.Name,
 		Repository:     update.Repository,
@@ -186,6 +268,7 @@ func applyOne(root, projectRoot string, lock *lockfile.Lock, update UpdateInfo, 
 		Ref:            update.Ref,
 		ResolvedCommit: commit,
 		Scope:          scopeOf(update.Scope, projectRoot),
+		InstalledHash:  installedHash,
 		Agents:         update.Agents,
 	})
 	fmt.Printf("已更新 %s 到 %s\n", name, short(commit))
@@ -219,7 +302,7 @@ func newLockCmd() *cobra.Command {
 				fmt.Println("全部为最新，锁文件未变")
 				return nil
 			}
-			if err := applyUpdates(cmd.Context(), projectRoot, &lock, updates); err != nil {
+			if err := applyUpdates(cmd.Context(), projectRoot, &lock, updates, false); err != nil {
 				return err
 			}
 			if err := lock.Save(projectRoot); err != nil {

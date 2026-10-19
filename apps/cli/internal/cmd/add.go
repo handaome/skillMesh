@@ -101,6 +101,7 @@ func newAddCmd() *cobra.Command {
 					Ref:            ref,
 					ResolvedCommit: commit,
 					Scope:          targetScope,
+					InstalledHash:  installedDigest(item.Target),
 					Agents:         []string{agentName},
 				})
 				installedItems = append(installedItems, item)
@@ -284,6 +285,16 @@ func checkTarget(target string, replace bool) error {
 		return nil
 	}
 	return fmt.Errorf("目标已存在且不受 SkillMesh 管理: %s（用 --replace 覆盖）", target)
+}
+
+// installedDigest 记下装完内容的规范化摘要，update 时用它判断本地有没有被改过。
+// 算不出来就留空——下次更新不做判断，而不是拦死用户。
+func installedDigest(target string) string {
+	digest, err := skillscan.DirDigest(target)
+	if err != nil {
+		return ""
+	}
+	return digest
 }
 
 func refTypeOf(ref string) string {

@@ -13,7 +13,7 @@ func Test注册中心安装写进锁文件(t *testing.T) {
 		Version:  "1.2.0",
 		Artifact: &apiclient.ArtifactSummary{ID: "art-1", SHA256: "abc123"},
 	}
-	if err := recordInstall(root, "demo", "skill-1", target, "user", []string{"claude-code"}); err != nil {
+	if err := recordInstall(root, "demo", "skill-1", target, "user", []string{"claude-code"}, "hash-1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -25,7 +25,8 @@ func Test注册中心安装写进锁文件(t *testing.T) {
 	if !ok {
 		t.Fatalf("锁文件里没有 demo：%+v", lock.Skills)
 	}
-	if entry.SourceID != "skill-1" || entry.Version != "1.2.0" || entry.SHA256 != "abc123" {
+	if entry.SourceID != "skill-1" || entry.Version != "1.2.0" || entry.SHA256 != "abc123" ||
+		entry.InstalledHash != "hash-1" {
 		t.Fatalf("锁文件记录不对: %+v", entry)
 	}
 	if len(entry.Agents) != 1 || entry.Agents[0] != "claude-code" {

@@ -2,13 +2,10 @@ package cmd
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
@@ -152,6 +149,11 @@ func syncOne(ctx context.Context, client *apiclient.Client, dir string,
 	if err != nil {
 		return failed, "", err
 	}
+	localFiles := make([]skillscan.FileDigest, 0, len(local.Manifest))
+	for _, entry := range local.Manifest {
+		localFiles = append(localFiles, skillscan.FileDigest{Path: entry.Path, SHA256: entry.SHA256})
+	}
+	localHash := skillscan.Digest(localFiles)
 	slug, err := skillscan.SlugFromDirName(filepath.Base(dir))
 	if err != nil {
 		return failed, "", err
@@ -162,13 +164,12 @@ func syncOne(ctx context.Context, client *apiclient.Client, dir string,
 		return failed, "", err
 	}
 	if found {
-		digest := localDigest(local)
-		same, err := cloudHasContent(ctx, client, skill.ID, local)
+		same, err := cloudHasContent(ctx, client, skill.ID, localHash, local.SHA256)
 		if err != nil {
 			return failed, "", err
 		}
 		if same {
-			return skipped, digest[:12], nil
+			return skipped, localHash[:12], nil
 		}
 	}
 
@@ -191,66 +192,37 @@ func syncOne(ctx context.Context, client *apiclient.Client, dir string,
 
 // cloudHasContent 判断云端已发布版本里有没有一份和本地内容一样的。
 // 内容寻址意味着同一份内容只会存一份，所以命中即可判定无需重传。
-func cloudHasContent(ctx context.Context, client *apiclient.Client, skillID string,
-	local packager.Artifact) (bool, error) {
+func cloudHasContent(ctx context.Context, client *apiclient.Client, skillID,
+	localHash, zipSHA string) (bool, error) {
 
 	versions, err := client.Versions(ctx, skillID)
 	if err != nil {
 		return false, err
 	}
-	digest := localDigest(local)
 	for _, item := range versions.Items {
 		if item.Status != "published" {
 			continue
 		}
 		if len(item.Manifest) > 0 {
-			if remoteDigest(item) == digest {
+			if remoteDigest(item) == localHash {
 				return true, nil
 			}
 			continue
 		}
 		// 老服务端不返回 manifest，只能退而比 zip 摘要。
-		if item.Artifact != nil && item.Artifact.SHA256 == local.SHA256 {
+		if item.Artifact != nil && item.Artifact.SHA256 == zipSHA {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-// fileDigest 是参与规范化摘要的一项。
-type fileDigest struct {
-	Path   string
-	SHA256 string
-}
-
-// digestOf 对「路径 + 逐文件 SHA-256」排序后哈希，得到内容的规范化摘要
-// （设计文档 §7.1 的 installed_hash、§6.2 的「计算相对路径与 SHA-256」）。
-//
-// 不用整包 zip 的 sha256：同一份内容重新打包，压缩实现或文件权限位一变
-// 摘要就变了，会被误判成内容变更。
-func digestOf(files []fileDigest) string {
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	hash := sha256.New()
-	for _, file := range files {
-		fmt.Fprintf(hash, "%s\x00%s\n", file.Path, file.SHA256)
-	}
-	return hex.EncodeToString(hash.Sum(nil))
-}
-
-func localDigest(artifact packager.Artifact) string {
-	files := make([]fileDigest, 0, len(artifact.Manifest))
-	for _, entry := range artifact.Manifest {
-		files = append(files, fileDigest{Path: entry.Path, SHA256: entry.SHA256})
-	}
-	return digestOf(files)
-}
-
 func remoteDigest(version apiclient.SkillVersion) string {
-	files := make([]fileDigest, 0, len(version.Manifest))
+	files := make([]skillscan.FileDigest, 0, len(version.Manifest))
 	for _, entry := range version.Manifest {
-		files = append(files, fileDigest{Path: entry.Path, SHA256: entry.SHA256})
+		files = append(files, skillscan.FileDigest{Path: entry.Path, SHA256: entry.SHA256})
 	}
-	return digestOf(files)
+	return skillscan.Digest(files)
 }
 
 func reportSync(results []syncResult) error {

@@ -127,7 +127,8 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		}
 		fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
 	}
-	if err := recordInstall(projectRoot, name, req.SkillID, req.Version, req.Scope, req.Agents); err != nil {
+	if err := recordInstall(projectRoot, name, req.SkillID, req.Version, req.Scope, req.Agents,
+		installedDigest(skillDir)); err != nil {
 		return err
 	}
 	fmt.Printf("锁文件 %s\n", lockfile.FileName)
@@ -137,20 +138,21 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 // recordInstall 把注册中心安装写进锁文件。
 // 不写的话 list 看不到它，CI 的 --locked 也无从校验（设计文档 §9.2）。
 func recordInstall(projectRoot, name, skillID string, target apiclient.SkillVersion,
-	scope string, agents []string) error {
+	scope string, agents []string, installedHash string) error {
 
 	lock, err := lockfile.Load(projectRoot)
 	if err != nil {
 		return err
 	}
 	entry := lockfile.LockedSkill{
-		Name:     name,
-		SourceID: skillID,
-		RefType:  "version",
-		Ref:      target.Version,
-		Version:  target.Version,
-		Scope:    scope,
-		Agents:   agents,
+		Name:          name,
+		SourceID:      skillID,
+		RefType:       "version",
+		Ref:           target.Version,
+		Version:       target.Version,
+		Scope:         scope,
+		InstalledHash: installedHash,
+		Agents:        agents,
 	}
 	if target.Artifact != nil {
 		entry.SHA256 = target.Artifact.SHA256
