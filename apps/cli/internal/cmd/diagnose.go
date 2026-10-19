@@ -10,6 +10,7 @@ import (
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
+	"github.com/handaome/skillmesh/apps/cli/internal/syncqueue"
 	"github.com/spf13/cobra"
 )
 
@@ -50,8 +51,39 @@ func newDoctorCmd() *cobra.Command {
 				}
 				fmt.Printf("agent %-12s %s（%s）\n", name, agentCfg.UserSkillsDir, state)
 			}
+			reportSyncHealth()
 			return nil
 		},
+	}
+}
+
+// reportSyncHealth 报同步队列概况（设计文档 §13：doctor 要能诊断同步队列）。
+func reportSyncHealth() {
+	queue, err := syncqueue.Load(cfg.ConfigDir)
+	if err != nil {
+		fmt.Printf("同步队列 读取失败: %v\n", err)
+		return
+	}
+	pending := queue.Pending()
+	if len(pending) == 0 {
+		fmt.Println("同步队列 空")
+		return
+	}
+	waiting, abandoned := 0, 0
+	for _, entry := range pending {
+		if entry.Abandoned() {
+			abandoned++
+			continue
+		}
+		waiting++
+	}
+	fmt.Printf("同步队列 待重试 %d，已放弃 %d（用 sync --retry-only 只跑待重试的）\n",
+		waiting, abandoned)
+	for _, entry := range pending {
+		if !entry.Abandoned() {
+			continue
+		}
+		fmt.Printf("  已放弃 %s：%s\n", entry.Name, entry.LastError)
 	}
 }
 

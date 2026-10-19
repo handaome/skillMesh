@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
@@ -13,6 +15,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/packager"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/handaome/skillmesh/apps/cli/internal/syncqueue"
 	"github.com/handaome/skillmesh/apps/cli/internal/syncstate"
 	"github.com/spf13/cobra"
 )
@@ -39,6 +42,7 @@ type syncOptions struct {
 	Only      string // --skill，只同步这一个
 	Direction string // upload / download / both
 	Resolve   string // keep-local / keep-cloud / keep-both，空表示不处理冲突
+	RetryOnly bool   // 只重试队列里到点的任务
 	DryRun    bool
 }
 
@@ -57,12 +61,12 @@ func newSyncCmd() *cobra.Command {
 				options.Direction != "both" {
 				return fmt.Errorf("--direction 只能是 upload / download / both")
 			}
-			results, err := runSync(cmd.Context(), options)
+			results, queue, err := runSync(cmd.Context(), options)
 			if len(results) == 0 && err == nil {
 				fmt.Println("授权目录里没有找到含 SKILL.md 的目录。")
 				return nil
 			}
-			reportErr := reportSync(results)
+			reportErr := reportSync(results, queue)
 			if err != nil {
 				return err
 			}
@@ -74,6 +78,7 @@ func newSyncCmd() *cobra.Command {
 	cmd.Flags().StringVar(&options.Direction, "direction", "both", "同步方向：upload / download / both")
 	cmd.Flags().StringVar(&options.Resolve, "resolve", "",
 		"冲突解决方式：keep-local / keep-cloud / keep-both")
+	cmd.Flags().BoolVar(&options.RetryOnly, "retry-only", false, "只重试失败队列里到点的任务")
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "只报出会同步什么，不落盘")
 	return cmd
 }
@@ -86,19 +91,24 @@ type syncResult struct {
 	Detail  string
 }
 
-func runSync(ctx context.Context, options syncOptions) ([]syncResult, error) {
+func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.Queue, error) {
 	targets, err := syncTargets(options)
 	if err != nil {
-		return nil, err
+		return nil, syncqueue.Queue{}, err
 	}
 	client, err := newClient()
 	if err != nil {
-		return nil, err
+		return nil, syncqueue.Queue{}, err
 	}
 	state, err := syncstate.Load(cfg.ConfigDir)
 	if err != nil {
-		return nil, err
+		return nil, syncqueue.Queue{}, err
 	}
+	queue, err := syncqueue.Load(cfg.ConfigDir)
+	if err != nil {
+		return nil, syncqueue.Queue{}, err
+	}
+	targets = filterByBackoff(targets, queue, options)
 
 	var results []syncResult
 	for _, target := range targets {
@@ -106,6 +116,15 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, error) {
 		if err != nil {
 			results = append(results, failedResult(target, err.Error()))
 			continue
+		}
+		if result.Outcome == failed && !options.DryRun {
+			// 只有网络类失败才值得重试；校验不通过重试一百次也一样。
+			if isTransient(result.Detail) {
+				queue.Record(target.Name, target.Agent, target.Path, result.Detail)
+			}
+		}
+		if result.Outcome != failed && !options.DryRun {
+			queue.Clear(target.Name, target.Agent)
 		}
 		// entry 为空表示这次没同步过（冲突没解决），基线不动。
 		if entry.Name != "" && !options.DryRun {
@@ -115,10 +134,60 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, error) {
 	}
 	if !options.DryRun {
 		if err := state.Save(cfg.ConfigDir); err != nil {
-			return results, err
+			return results, queue, err
+		}
+		if err := queue.Save(cfg.ConfigDir); err != nil {
+			return results, queue, err
 		}
 	}
-	return results, nil
+	return results, queue, nil
+}
+
+// queueKey 拼队列/基线的主键。用分隔符避免名字里带分隔符时撞车。
+func queueKey(name, agentName string) string {
+	return name + "/" + agentName
+}
+
+// filterByBackoff 按退避时间安排任务：
+//   - 默认：还在退避期内的先不碰，避免网络不通时每次运行都硬撞一遍
+//   - --retry-only：只留下队列里到点且没放弃的任务
+func filterByBackoff(targets []syncTarget, queue syncqueue.Queue, options syncOptions) []syncTarget {
+	pending := map[string]syncqueue.Entry{}
+	for _, entry := range queue.Pending() {
+		pending[queueKey(entry.Name, entry.Agent)] = entry
+	}
+	if options.RetryOnly && len(pending) == 0 {
+		return nil
+	}
+	now := time.Now()
+	kept := make([]syncTarget, 0, len(targets))
+	for _, target := range targets {
+		entry, queued := pending[queueKey(target.Name, target.Agent)]
+		if options.RetryOnly {
+			if queued && !entry.Abandoned() && entry.Ready(now) {
+				kept = append(kept, target)
+			}
+			continue
+		}
+		if queued && !entry.Abandoned() && !entry.Ready(now) {
+			continue
+		}
+		kept = append(kept, target)
+	}
+	return kept
+}
+
+// isTransient 判断失败值不值得进重试队列。
+func isTransient(detail string) bool {
+	for _, marker := range []string{
+		"连接", "connection", "timeout", "deadline", "no such host", "EOF",
+		"reset by peer", "temporarily", "TLS", "(500)", "(502)", "(503)", "(504)",
+	} {
+		if strings.Contains(strings.ToLower(detail), strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
 }
 
 // syncTarget 是一个待对账的 Skill。
@@ -430,7 +499,25 @@ func remoteDigest(version apiclient.SkillVersion) string {
 	return skillscan.Digest(files)
 }
 
-func reportSync(results []syncResult) error {
+// reportQueue 把待重试和已放弃的任务摊开：这些是需要人看的。
+func reportQueue(queue syncqueue.Queue) {
+	pending := queue.Pending()
+	if len(pending) == 0 {
+		return
+	}
+	for _, entry := range pending {
+		if entry.Abandoned() {
+			fmt.Printf("已放弃：%s（第 %d 次失败：%s）\n",
+				entry.Name, entry.Attempts, entry.LastError)
+			continue
+		}
+		fmt.Printf("待重试：%s（%s，第 %d 次失败：%s）\n", entry.Name, entry.NextAttemptAt,
+			entry.Attempts, entry.LastError)
+	}
+	fmt.Println("skillmesh sync --retry-only 只跑这些到点的任务；skillmesh doctor 看队列概况。")
+}
+
+func reportSync(results []syncResult, queue syncqueue.Queue) error {
 	counts := map[syncOutcome]int{}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SKILL\t结果\t说明")
