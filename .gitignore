@@ -9,3 +9,10 @@ __pycache__/
 .venv/
 .idea/
 data/
+
+# 本机基础设施产物
+infra/bin/
+
+# Go CLI 构建产物
+apps/cli/skillmesh
+apps/cli/skillmesh.exe
