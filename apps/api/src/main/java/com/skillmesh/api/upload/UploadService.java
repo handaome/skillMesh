@@ -83,6 +83,12 @@ public class UploadService {
             throw new ApiException(410, ErrorCodes.ARTIFACT_MISSING, "上传会话已过期，请重新上传");
         }
 
+        if ("sync_file".equals(session.getPurpose())) {
+            // 同步文件只校验，不转正成制品——等 changeset commit 时再打包
+            // （详细设计 §2.4.2 第 3 步）。
+            return completeSyncFile(session, now);
+        }
+
         SkillVersionEntity version = versions.findById(session.getSkillVersionId())
             .orElseThrow(() -> ApiException.notFound("版本"));
         session.setStatus("verifying");
@@ -143,6 +149,36 @@ public class UploadService {
 
         return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
             session.getExpiresAt(), promoted.sha256(), null);
+    }
+
+    /** 同步文件上传的收尾：校验字节数与摘要，通过就等着 commit。 */
+    private UploadSession completeSyncFile(UploadSessionEntity session, OffsetDateTime now) {
+        session.setStatus("verifying");
+        uploads.save(session);
+        try {
+            int size = storage.get(session.getTemporaryStorageKey()).readAllBytes().length;
+            if (session.getExpectedSizeBytes() > 0 && size != session.getExpectedSizeBytes()) {
+                throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,
+                    "文件大小与声明不一致：声明 " + session.getExpectedSizeBytes()
+                        + "，实际 " + size);
+            }
+            session.setStatus("completed");
+            session.setVerifiedAt(now);
+            uploads.save(session);
+            return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
+                session.getExpiresAt(), session.getExpectedSha256(), session.getRelativePath());
+        } catch (ApiException e) {
+            session.setStatus("failed");
+            session.setErrorCode(e.code());
+            uploads.save(session);
+            throw e;
+        } catch (java.io.IOException e) {
+            session.setStatus("failed");
+            session.setErrorCode(ErrorCodes.ARTIFACT_MISSING);
+            uploads.save(session);
+            throw new ApiException(502, ErrorCodes.ARTIFACT_MISSING,
+                "读取上传内容失败：" + e.getMessage());
+        }
     }
 
     /**
