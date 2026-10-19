@@ -270,7 +270,7 @@ export SKILLMESH_TOKEN=<access-token>
 
 | 命令 | 作用 |
 | --- | --- |
-| `list` | 列出本项目锁文件里登记的安装：Skill、Agent、commit、安装路径、是否受管 |
+| `list` | 列出本项目锁文件里登记的**本地安装**：Skill、Agent、commit、安装路径、是否受管 |
 | `status` | 同上，但输出 JSON（`status <name>` 只看某一个），适合脚本消费 |
 | `update --check` | 检查远端有没有新 commit，**只报告不改动** |
 | `update --all` | 应用全部更新 |
@@ -279,6 +279,13 @@ export SKILLMESH_TOKEN=<access-token>
 | `uninstall <name>` | 移除安装内容与锁文件记录 |
 
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。
+
+**`list` 和 `search` 看的不是一回事**：
+
+- `list` = **本地装了什么**（读项目里的 `skillmesh.lock.yaml`）
+- `search` = **云端有什么**（调 `/api/v1/skills`）
+
+`publish` 只把 Skill 发到云端，**不在本地装任何东西**，所以发布完 `list` 仍然是空的——这是设计如此（锁文件记录的是"已安装的 Skill 的解析结果"，用来让 CI 复现同样的安装）。发布完用 `search` 查。
 
 ### 诊断
 

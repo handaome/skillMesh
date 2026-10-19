@@ -26,8 +26,11 @@ func agentDirFor(name, projectRoot string) (string, error) {
 func newListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "列出本项目已登记的安装",
-		Args:  cobra.NoArgs,
+		Short: "列出本项目已登记的本地安装",
+		Long: "列出本项目锁文件里登记的本地安装。\n" +
+			"注意这是「本地装了什么」，不是「云端有什么」——\n" +
+			"发布到云端的 Skill 用 skillmesh search 查。",
+		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			projectRoot := mustGetwd()
 			lock, err := lockfile.Load(projectRoot)
@@ -35,7 +38,8 @@ func newListCmd() *cobra.Command {
 				return err
 			}
 			if len(lock.Skills) == 0 {
-				fmt.Println("尚未登记任何 Skill")
+				fmt.Println("本项目尚未登记任何本地安装。")
+				fmt.Println("已发布到云端的 Skill 用 skillmesh search 查。")
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
