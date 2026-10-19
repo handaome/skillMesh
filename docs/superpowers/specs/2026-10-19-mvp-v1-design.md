@@ -130,3 +130,39 @@ skillmesh/
 | 7. 敏感信息扫描、哈希验证、审计事件与最低限度的团队权限 | ⚠️ 部分 | SHA-256 哈希验证在 v1；扫描、审计事件、团队权限推迟 |
 
 **结论**：§4.5 的 7 条里，2 条完整覆盖、4 条部分覆盖、1 条推迟。所有推迟项的表结构在 v1 建表时按最终设计建，避免 v2 改表。
+
+## 9. 身份与用户模型
+
+身份源与业务用户是两套东西，v1 刻意做得很薄。
+
+### 身份源（Keycloak）
+
+开发用的用户在 `infra/keycloak/realm-skillmesh.json` 里静态定义，`start-keycloak.sh` 首次启动时通过 `--import-realm` 导入。这是开发便利，**生产应接企业已有的 OIDC/LDAP/SSO**——SkillMesh 侧只认 issuer + subject，换 IdP 不改代码。
+
+| 账号 | 密码 | 用途 |
+| --- | --- | --- |
+| `admin` | `admin` | Keycloak 自身的管理员（`KC_BOOTSTRAP_ADMIN_*`） |
+| `dev-user` | `dev` | 唯一的 SkillMesh 用户，realm role `skillmesh-user` |
+
+客户端两个：`skillmesh-cli`（public，浏览器授权码 + PKCE S256，CLI `login` 用）和 `skillmesh-test`（public，direct grant，**只给自动化测试**）。后者等价于「知道用户名密码就能换 token」，不能带到生产。
+
+### 业务用户（`users` 表）
+
+**v1 没有「创建用户」这个操作**。`CurrentUserService.provision()` 在第一次调 `GET /api/v1/me` 时按 token 自动建档：
+
+1. 用 `(oidc_issuer, oidc_subject)` 查 `users` 表
+2. 查不到就插一行：`display_name` ← token 的 `name` claim（退到 `preferred_username`，再退到 `sub`）、`email` ← token 的 `email` claim、`status` = `'active'`
+3. 每次访问更新 `last_login_at`
+
+于是「能通过 Keycloak 认证」就等于「在 SkillMesh 有账号」。v1 没有注册/邀请流程（realm 里 `registrationAllowed: false`），也没有组织/团队概念——`GET /me` 的 `organizations` 恒为空数组。
+
+显式用户管理（邀请、禁用、团队角色分配）属于 v2 的团队治理（见 §5「团队角色矩阵与组织/团队管理」），v1 只保证 `users` 表结构与最终设计一致，v2 不用改表。
+
+### 已知的生产前置项
+
+| 项 | 原因 |
+| --- | --- |
+| `dev-user` / `dev` | 明文弱口令且静态写在仓库里 |
+| `skillmesh-test` 的 direct grant | 只能在测试环境存在 |
+| Keycloak 自身 | 生产应换企业 IdP |
+| `SM_KEYCLOAK_ADMIN_PASSWORD` | `.env` 中的 Keycloak 管理员口令 |

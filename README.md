@@ -127,6 +127,52 @@ agents:
     user_skills_dir: ~/.codex/skills
 ```
 
+## 用户与身份
+
+身份源（Keycloak）和业务侧（SkillMesh `users` 表）是两套东西，别混。
+
+### Keycloak 侧：身份源
+
+开发用的用户在 [infra/keycloak/realm-skillmesh.json](infra/keycloak/realm-skillmesh.json) 里静态定义，`start-keycloak.sh` 首次启动时通过 `--import-realm` 导入。**这只是开发便利，生产不该这么建**——生产应接企业已有的 OIDC/LDAP/SSO。
+
+| 账号 | 密码 | 用途 |
+| --- | --- | --- |
+| `admin` | `admin` | Keycloak 自身的管理员（`KC_BOOTSTRAP_ADMIN_*`），用来建 realm、配客户端 |
+| `dev-user` | `dev` | 唯一的 SkillMesh 用户，realm role `skillmesh-user` |
+
+两个客户端：
+
+| client | 类型 | 登录方式 | 用途 |
+| --- | --- | --- | --- |
+| `skillmesh-cli` | public | 浏览器授权码 + **PKCE S256** | CLI `login` 走这个，令牌存进系统凭据管理器 |
+| `skillmesh-test` | public | direct grant（用户名密码直取 token） | **只给自动化测试用** |
+
+改 realm JSON 后，`.env` 里的 `SM_KEYCLOAK_TEST_USER` / `SM_KEYCLOAK_TEST_PASSWORD` 要同步改，否则后端测试取不到 token。
+
+### SkillMesh 侧：业务用户
+
+**没有"创建用户"这个操作**。[CurrentUserService.provision()](apps/api/src/main/java/com/skillmesh/api/auth/CurrentUserService.java) 在第一次调 `GET /api/v1/me` 时按 token 自动建档：
+
+```text
+用 (oidc_issuer, oidc_subject) 查 users 表 → 查不到就插一行
+  ├─ display_name ← token 的 name claim → 退到 preferred_username → 再退到 sub
+  ├─ email        ← token 的 email claim
+  └─ status       ← 'active'
+```
+
+也就是说：**只要能通过 Keycloak 认证，SkillMesh 侧就自动有账号**。v1 没有注册/邀请流程（realm 里 `registrationAllowed: false`），也没有团队/组织概念——`GET /me` 返回的 `organizations` 恒为空数组。
+
+显式的用户管理（邀请、禁用、团队角色分配）要等 v2 的团队治理才有。
+
+### 上生产前必须处理
+
+| 项 | 为什么 |
+| --- | --- |
+| `dev-user` / `dev` | 明文弱口令，且是静态写死在仓库里的 |
+| `skillmesh-test` 客户端的 direct grant | 等价于"知道用户名密码就能换 token"，只能留在测试环境 |
+| Keycloak 整体 | 生产应换成企业 IdP，SkillMesh 侧只认 OIDC issuer，代码不用改 |
+| `SM_KEYCLOAK_ADMIN_PASSWORD` | `.env` 里的 Keycloak 管理员口令 |
+
 ## 测试
 
 ```bash
