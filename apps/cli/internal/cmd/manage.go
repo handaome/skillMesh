@@ -82,6 +82,19 @@ func newListCmd() *cobra.Command {
 	}
 }
 
+// unregisterInstallations 把这个 Skill 在本机的安装记录标成已卸载。
+func unregisterInstallations(ctx context.Context, client *apiclient.Client, skillID string) {
+	rows, err := client.Installations(ctx, "")
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		if row.SkillID == skillID && row.Status == "active" {
+			_ = client.UnregisterInstallation(ctx, row.ID)
+		}
+	}
+}
+
 // warnRevoked 提示「装着的版本已经被撤回」。
 // 不自动卸载、不删本地文件——那是用户自己的机器（设计文档 §10 撤回）。
 func warnRevoked(ctx context.Context, client *apiclient.Client, lock lockfile.Lock) {
@@ -176,6 +189,7 @@ func newUninstallCmd() *cobra.Command {
 			if client, err := newClient(); err == nil && entry.SourceID != "" {
 				_ = client.ReportAuditEvent(cmd.Context(), "uninstall.completed",
 					entry.SourceID, "success", map[string]string{"name": entry.Name})
+				unregisterInstallations(cmd.Context(), client, entry.SourceID)
 			}
 			return nil
 		},

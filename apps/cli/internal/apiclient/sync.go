@@ -54,6 +54,12 @@ func (c *Client) RegisterDevice(ctx context.Context, key, platform, version stri
 }
 
 // SubmitChangeset 提交一次同步。幂等键由调用方给：断网重试时必须复用同一个。
+// DeviceID 返回本机在注册中心的设备 ID，没有就注册一个。
+func (c *Client) DeviceID(ctx context.Context) (string, error) {
+	device, err := c.RegisterDevice(ctx, MachineKey(), runtime.GOOS, "0.1.0")
+	return device.ID, err
+}
+
 func (c *Client) SubmitChangeset(ctx context.Context, deviceID, idempotencyKey string,
 	req SyncChangesetRequest) (SyncChangesetResponse, error) {
 

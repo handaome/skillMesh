@@ -143,6 +143,33 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 	return nil
 }
 
+// reportInstallation 把这次安装登记到注册中心：回答「我在哪些机器上装了什么」。
+// 登记失败不影响安装结果——东西已经装好了。
+func reportInstallation(ctx context.Context, client *apiclient.Client,
+	req installRequest, agentName, target string) {
+
+	deviceID, err := client.DeviceID(ctx)
+	if err != nil {
+		return
+	}
+	_, _ = client.RegisterInstallation(ctx, apiclient.RegisterInstallationInput{
+		SkillID:          req.SkillID,
+		DeviceID:         deviceID,
+		Agent:            agentName,
+		InstallScope:     req.Scope,
+		TargetPath:       target,
+		InstalledVersion: req.Version.Version,
+		InstalledSHA256:  artifactSHA256(req.Version),
+	})
+}
+
+func artifactSHA256(version apiclient.SkillVersion) string {
+	if version.Artifact == nil {
+		return ""
+	}
+	return version.Artifact.SHA256
+}
+
 // recordInstall 把注册中心安装写进锁文件。
 // 不写的话 list 看不到它，CI 的 --locked 也无从校验（设计文档 §9.2）。
 func recordInstall(projectRoot, name, skillID string, target apiclient.SkillVersion,

@@ -285,6 +285,15 @@ export SKILLMESH_TOKEN=<access-token>
 
 只支持注册中心来源（`install` 装的）。Git 来源要固定版本用 `skillmesh add <url> --ref <tag>`，或 `update` 之后手动 checkout 到指定 commit。
 
+### 我在哪些机器上装了什么
+
+```bash
+skillmesh installations                    # 跨设备看安装全貌
+skillmesh installations --status conflict  # 只看有问题的
+```
+
+`install` 和 `uninstall` 会自动登记（设备 + 目录 + 版本 + 制品摘要 + 有没有本地改过）。服务端只记事实，不替客户端决定装不装。
+
 ### 团队与审核
 
 ```bash
