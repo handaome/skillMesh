@@ -45,6 +45,7 @@ type syncOptions struct {
 	Agents    []string
 	Only      string // --skill，只同步这一个
 	Direction string // upload / download / both
+	SkipNew   bool   // 只同步「已经收编过」的，新发现的先留在本地
 	Resolve   string // keep-local / keep-cloud / keep-both，空表示不处理冲突
 	RetryOnly bool   // 只重试队列里到点的任务
 	DryRun    bool
@@ -67,6 +68,11 @@ func newSyncCmd() *cobra.Command {
 			}
 			results, queue, err := runSync(cmd.Context(), options)
 			if len(results) == 0 && err == nil {
+				if options.SkipNew {
+					fmt.Println("没有「已经收编过」的 Skill；首次发现的留在本地，" +
+						"去掉 --skip-new 才会备份。")
+					return nil
+				}
 				fmt.Println("授权目录里没有找到含 SKILL.md 的目录。")
 				return nil
 			}
@@ -80,6 +86,8 @@ func newSyncCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&options.Agents, "agent", nil, "只同步指定 Agent 的目录，不填用全部启用的")
 	cmd.Flags().StringVar(&options.Only, "skill", "", "只同步这一个 Skill")
 	cmd.Flags().StringVar(&options.Direction, "direction", "both", "同步方向：upload / download / both")
+	cmd.Flags().BoolVar(&options.SkipNew, "skip-new", false,
+		"只同步已经收编过的 Skill，新发现的先留在本地（设计文档 §3.1 首次发现策略）")
 	cmd.Flags().StringVar(&options.Resolve, "resolve", "",
 		"冲突解决方式：keep-local / keep-cloud / keep-both")
 	cmd.Flags().BoolVar(&options.RetryOnly, "retry-only", false, "只重试失败队列里到点的任务")
@@ -220,12 +228,18 @@ func syncTargets(options syncOptions) ([]syncTarget, error) {
 			if options.Only != "" && name != options.Only {
 				continue
 			}
-			target := syncTarget{Name: name, Agent: agentName, Path: path}
-			if entry, ok := state.Find(name, agentName); ok {
-				target.BaseHash = entry.BaseHash
-				target.SkillID = entry.SkillID
+			// 第一次看到就先记一笔，但不等于收编——收编由同步本身决定
+			entry, known := state.Find(name, agentName)
+			if !known {
+				entry = state.Discover(name, agentName)
 			}
-			targets = append(targets, target)
+			if options.SkipNew && state.New(name, agentName) {
+				continue
+			}
+			targets = append(targets, syncTarget{
+				Name: name, Agent: agentName, Path: path,
+				BaseHash: entry.BaseHash, SkillID: entry.SkillID,
+			})
 		}
 	}
 	return targets, nil

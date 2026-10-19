@@ -29,6 +29,9 @@ type Entry struct {
 	SkillID     string `yaml:"skill_id,omitempty"`
 	BaseHash    string `yaml:"base_hash,omitempty"`
 	LastVersion string `yaml:"last_version,omitempty"`
+	// FirstSeenAt 是第一次在授权目录里发现它的时间，与 SyncedAt 分开：
+	// 发现 ≠ 收编，用户可以先跳过（设计文档 §3.1 首次发现策略）。
+	FirstSeenAt string `yaml:"first_seen_at,omitempty"`
 	SyncedAt    string `yaml:"synced_at,omitempty"`
 }
 
@@ -72,12 +75,37 @@ func (s State) Find(name, agentName string) (Entry, bool) {
 
 // Upsert 更新或新增一条基线。
 func (s *State) Upsert(entry Entry) {
-	entry.SyncedAt = time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC().Format(time.RFC3339)
+	entry.SyncedAt = now
 	for i := range s.Skills {
 		if s.Skills[i].Name == entry.Name && s.Skills[i].Agent == entry.Agent {
+			if s.Skills[i].FirstSeenAt != "" {
+				entry.FirstSeenAt = s.Skills[i].FirstSeenAt
+			}
 			s.Skills[i] = entry
 			return
 		}
 	}
+	if entry.FirstSeenAt == "" {
+		entry.FirstSeenAt = now
+	}
 	s.Skills = append(s.Skills, entry)
+}
+
+// Discover 记下「我看到了它」，但不一定收编。
+func (s *State) Discover(name, agentName string) Entry {
+	if existing, ok := s.Find(name, agentName); ok {
+		return existing
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	s.Skills = append(s.Skills, Entry{
+		Name: name, Agent: agentName, FirstSeenAt: now,
+	})
+	return Entry{Name: name, Agent: agentName, FirstSeenAt: now}
+}
+
+// New 是不是这次刚发现的（从没同步过）。
+func (s State) New(name, agentName string) bool {
+	entry, ok := s.Find(name, agentName)
+	return ok && entry.BaseHash == ""
 }

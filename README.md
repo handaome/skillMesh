@@ -388,7 +388,10 @@ skillmesh sync --resolve keep-local   # 冲突时保留本地并上传
 skillmesh sync --resolve keep-cloud   # 冲突时保留云端并拉回
 skillmesh sync --resolve keep-both    # 本地备份一份，两边都留
 skillmesh sync --retry-only      # 只重试断网失败的任务
+skillmesh sync --skip-new        # 只同步已收编的，首次发现先留在本地
 ```
+
+**首次发现不等于收编**：新出现在授权目录里的 Skill 默认会被备份到个人私有空间（绝不自动公开），`--skip-new` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
 
 判定看三份摘要：**基线**（上次同步时）、**本地**、**云端**。
 
