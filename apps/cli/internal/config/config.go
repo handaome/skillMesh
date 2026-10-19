@@ -51,6 +51,19 @@ type Agent struct {
 	Enabled       bool   `yaml:"enabled"`
 	UserSkillsDir string `yaml:"user_skills_dir"`
 	ProjectSkills string `yaml:"project_skills_dir"`
+	// DetectedDir 是启动时在本机探测到的目录（设计文档 §8：
+	// 「按当前 Cursor 版本验证支持路径」）。空串表示没探测到，用的是配置值。
+	DetectedDir string `yaml:"-"`
+}
+
+// 在本机上确实存在的目录才算探测到——目录不存在说明这个 Cursor 版本
+// 可能根本不用它，写进去也没人读。
+func (a Agent) Detected() bool { return a.DetectedDir != "" }
+
+// dirExists 目录在不在。
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func defaults() Config {
@@ -71,16 +84,42 @@ func defaults() Config {
 				UserSkillsDir: filepath.Join(codexHome(), "skills"),
 				ProjectSkills: filepath.Join(".agents", "skills"),
 			},
-			// Cursor 的 Skill 目录约定随版本变过，这里用设计文档 §8 记的
-			// ~/.cursor/skills 与 .cursor/skills，落到别的路径就在 config.yaml 里改。
+			// Cursor 有两个候选用户级路径（设计文档 §8）：
+			// ~/.cursor/skills 与 ~/.agents/skills。启动时探测哪个真的存在，
+			// 探测到就用它，并在 agents detect 里说明用的是哪一个。
 			"cursor": {
-				Enabled:       false, // 默认关着：没验证过的适配器不该替用户决定
-				UserSkillsDir: filepath.Join(homeDir(), ".cursor", "skills"),
+				Enabled:       true,
+				UserSkillsDir: detectCursorDir(),
 				ProjectSkills: filepath.Join(".cursor", "skills"),
 			},
 		},
 		ConfigDir: configDir,
 		CacheDir:  cacheDir,
+	}
+}
+
+// detectCursorDir 在 Cursor 的候选目录里挑一个真的存在的。
+func detectCursorDir() string {
+	candidates := []string{
+		filepath.Join(homeDir(), ".cursor", "skills"),
+		filepath.Join(homeDir(), ".agents", "skills"),
+	}
+	for _, candidate := range candidates {
+		if dirExists(candidate) {
+			return candidate
+		}
+	}
+	// 都没找到：按文档列的第一个来，装的时候目录会被创建。
+	return candidates[0]
+}
+
+// markDetected 记录实际存在哪些 Agent 目录，供 agents detect 如实展示。
+func markDetected(cfg *Config) {
+	for name, agentCfg := range cfg.Agents {
+		if dirExists(agentCfg.UserSkillsDir) {
+			agentCfg.DetectedDir = agentCfg.UserSkillsDir
+			cfg.Agents[name] = agentCfg
+		}
 	}
 }
 
@@ -96,6 +135,7 @@ func Load() (Config, error) {
 
 	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "config.yaml"))
 	if os.IsNotExist(err) {
+		markDetected(&cfg) // 没配置文件也要探测：Cursor 路径本来就靠探测定
 		return cfg, nil
 	}
 	if err != nil {
@@ -126,6 +166,7 @@ func Load() (Config, error) {
 		cfg.Agents[name] = existing
 	}
 	cfg.Server = strings.TrimRight(cfg.Server, "/")
+	markDetected(&cfg)
 	return cfg, nil
 }
 

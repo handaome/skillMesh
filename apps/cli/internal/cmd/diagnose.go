@@ -99,7 +99,7 @@ func newAgentsCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			projectRoot := mustGetwd()
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "AGENT\t启用\t用户目录\t项目目录\t用户目录存在")
+			fmt.Fprintln(w, "AGENT\t启用\t用户目录\t项目目录\t目录状态")
 			for _, name := range agent.Supported {
 				agentCfg, ok := cfg.Agents[name]
 				if !ok {
@@ -110,12 +110,13 @@ func newAgentsCmd() *cobra.Command {
 				if resolved, err := agentDirFor(name, lockfile.LockedSkill{}, projectRoot); err == nil {
 					projectDir = resolved
 				}
-				exists := "否"
-				if _, err := os.Stat(agentCfg.UserSkillsDir); err == nil {
-					exists = "是"
+				// 目录状态要如实说：探测到的和「假设应该在这」的，含义不一样。
+				state := "不存在，安装时创建"
+				if agentCfg.Detected() {
+					state = "存在（本机探测到）"
 				}
 				fmt.Fprintf(w, "%s\t%v\t%s\t%s\t%s\n",
-					name, agentCfg.Enabled, agentCfg.UserSkillsDir, projectDir, exists)
+					name, agentCfg.Enabled, agentCfg.UserSkillsDir, projectDir, state)
 			}
 			return w.Flush()
 		},

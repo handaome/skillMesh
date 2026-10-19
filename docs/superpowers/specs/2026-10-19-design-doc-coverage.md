@@ -44,7 +44,7 @@
 | 本地发现 | ✅ | 分类扫描、去重、`.skillmeshignore`、首次发现策略 |
 | 同步引擎 | ✅ | fsnotify 文件事件 + 2 秒防抖触发扫描，轮询保留作兜底与启动全量 reconcile；增量按 manifest 判定，内容不变不重传 |
 | Git 来源 | ✅ | 公开/私有、子目录、ref 固定、更新检查 |
-| 安装适配器 | ◐ | Claude Code、Codex；Cursor 见 §8 |
+| 安装适配器 | ✅ | Claude Code、Codex、Cursor（路径探测） |
 | 版本治理 | ✅ | 不可变、锁文件、差异预览、回滚 |
 | 安全 | ✅ | 路径校验、敏感文件过滤、密钥扫描、可疑内容扫描 |
 | 团队管理 | ✅ | 组织/团队/角色/可见性/审批流 |
@@ -84,7 +84,7 @@
 | --- | --- | --- |
 | Claude Code | ✅ | `~/.claude/skills/` 与 `.claude/skills/`，已实测 |
 | Codex | ✅ | 尊重 `CODEX_HOME`，已实测 |
-| Cursor | ⏭ | 适配器存在但**默认关闭**：文档 §4 把 Cursor 列为后续增强/阶段 3；本机有 Cursor 配置目录但无 `skills` 目录、查不到版本，无法验证路径约定，不猜 |
+| Cursor | ✅ | §8 给了两个候选路径（`~/.cursor/skills`、`~/.agents/skills`），CLI 启动时**探测**哪个真的存在并用它；`agents detect` 如实标出「本机探测到」还是「假设位置」。本机探测到 `~/.agents/skills` |
 | 其他 Agent | ✅ | 配置驱动，`agents detect` 可列出 |
 
 ## §9 版本、锁文件与制品
@@ -164,6 +164,5 @@
 
 | 项 | 原因 |
 | --- | --- |
-| Cursor 启用 | 文档 §4 归入后续增强；本机无法验证路径约定 |
 | 目录监听的递归深度 | fsnotify 不递归，监听集合靠「Agent 根目录 + 每个 Skill 目录」维持，新增 Skill 目录在每次对账后补监听；更深层级的子目录（如 `references/`）不单独监听——内容变化会以所在 Skill 的摘要变化体现 |
 | 证书链 / PKI 供应链证明 | 文档 §10 只要求「签名 + 客户端验证」，已用 Ed25519 实现 |

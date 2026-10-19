@@ -154,7 +154,7 @@ skills/redis-cache   有
 | `<repo-url>` | 仓库地址。**必须是远程地址**——`NormalizeURL` 按设计拒绝 `file://` 和本地路径。支持 `git@owner:repo.git`、`ssh://`、`https://` 三种形式，**不能混写**（`git@` 形式不能带 `https://` 前缀） |
 | `--path` | 仓库里哪个子目录是 Skill。**只有候选恰好一个时才能省略**；有多个会报错并列出候选让你挑 |
 | `--all` | 装仓库里的**全部** Skill。与 `--path` 互斥 |
-| `--agent` | 装给哪个 Agent。`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → `~/.cursor/skills/`（默认未启用，目录约定还没在真实 Cursor 上验证过） |
+| `--agent` | 装给哪个 Agent。`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/`，用本机真实存在的那个 |
 | `--scope` | `user` 装到用户级（你所有项目都能用）；`project` 装到当前项目里（提交进版本控制，团队共享） |
 | `--ref` | 分支、标签或 commit。不填用仓库默认分支 |
 | `--install` | **关键开关**。不加只"登记"来源，不碰 Agent 目录；加了才真正安装 |
