@@ -13,14 +13,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// agentDirFor 解析某个 Agent 在当前项目下的安装目录。
-// 有 skillmesh.yaml 视为项目根，用 project 作用域；否则用 user 作用域。
-func agentDirFor(name, projectRoot string) (string, error) {
-	scope := "user"
-	if _, err := os.Stat(filepath.Join(projectRoot, lockfile.ManifestName)); err == nil {
-		scope = "project"
+// scopeOf 决定这次操作的作用域。锁文件里记了 scope 就以记录为准——
+// add 装到项目级、update 却写回用户目录，是很难查的一类错（设计文档 §8）。
+// 老锁文件没有这个字段，按有没有 skillmesh.yaml 兜底。
+func scopeOf(scope, projectRoot string) string {
+	if scope != "" {
+		return scope
 	}
-	return agent.Dir(cfg, name, scope, projectRoot)
+	if _, err := os.Stat(filepath.Join(projectRoot, lockfile.ManifestName)); err == nil {
+		return "project"
+	}
+	return "user"
+}
+
+// agentDirFor 解析某个 Agent 在当前项目下的安装目录。
+func agentDirFor(name string, entry lockfile.LockedSkill, projectRoot string) (string, error) {
+	return agent.Dir(cfg, name, scopeOf(entry.Scope, projectRoot), projectRoot)
 }
 
 func newListCmd() *cobra.Command {
@@ -46,7 +54,7 @@ func newListCmd() *cobra.Command {
 			fmt.Fprintln(w, "SKILL\tAGENT\t版本/commit\t路径\t受管")
 			for _, skill := range lock.Skills {
 				for _, agentName := range skill.Agents {
-					base, err := agentDirFor(agentName, projectRoot)
+					base, err := agentDirFor(agentName, skill, projectRoot)
 					if err != nil {
 						base = "?"
 					}
@@ -117,7 +125,7 @@ func newUninstallCmd() *cobra.Command {
 				return fmt.Errorf("锁文件中没有 %s", args[0])
 			}
 			for _, agentName := range entry.Agents {
-				base, err := agentDirFor(agentName, projectRoot)
+				base, err := agentDirFor(agentName, entry, projectRoot)
 				if err != nil {
 					return err
 				}

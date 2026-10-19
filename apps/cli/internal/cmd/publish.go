@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/packager"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/spf13/cobra"
 )
 
 // publishVisibility 是 v1 放开的可见性。
@@ -111,8 +111,14 @@ type publishResult struct {
 
 // locatePublishTargets 定位要发布的 Skill。
 // --all 时扫整棵目录树，否则就 path 本身这一个。
+// 路径先转绝对路径：在 Skill 目录里敲 publish . 时，Base(".") 是 "."，
+// 拿它当 slug 会被规则挡下来。
 func locatePublishTargets(path string, all bool) ([]publishTarget, error) {
-	info, err := os.Stat(path)
+	dir, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("路径不存在: %s", path)
 	}
@@ -120,9 +126,9 @@ func locatePublishTargets(path string, all bool) ([]publishTarget, error) {
 		return nil, fmt.Errorf("只能发布目录（Skill 是一个目录）：%s", path)
 	}
 	if !all {
-		return []publishTarget{{Dir: path, RelPath: filepath.Base(path)}}, nil
+		return []publishTarget{{Dir: dir, RelPath: filepath.Base(dir)}}, nil
 	}
-	candidates, err := skillscan.Candidates(path)
+	candidates, err := skillscan.Candidates(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +137,7 @@ func locatePublishTargets(path string, all bool) ([]publishTarget, error) {
 	}
 	targets := make([]publishTarget, 0, len(candidates))
 	for _, candidate := range candidates {
-		rel, err := filepath.Rel(path, candidate.Dir)
+		rel, err := filepath.Rel(dir, candidate.Dir)
 		if err != nil {
 			rel = candidate.Dir
 		}
@@ -190,17 +196,24 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 	}
 	if !found {
 		if options.DryRun {
-			skill = apiclient.Skill{ID: "<新建>", Slug: slug}
-		} else {
-			skill, err = client.CreateSkill(ctx, apiclient.CreateSkillRequest{
-				Slug:        slug,
-				Name:        displayName,
-				Description: description,
-				Visibility:  options.Visibility,
-			})
-			if err != nil {
-				return publishResult{}, err
-			}
+			// 云端还没有这个 Skill，没有版本可查——演练到这里就够了。
+			// 拿占位 ID 去调 Versions 会得到 500。
+			return publishResult{
+				Action:    "将发布",
+				Name:      displayName,
+				SkillID:   "<新建>",
+				Version:   orDefaultVersion(options.Version),
+				SizeBytes: artifact.SizeBytes,
+			}, nil
+		}
+		skill, err = client.CreateSkill(ctx, apiclient.CreateSkillRequest{
+			Slug:        slug,
+			Name:        displayName,
+			Description: description,
+			Visibility:  options.Visibility,
+		})
+		if err != nil {
+			return publishResult{}, err
 		}
 	}
 
@@ -231,12 +244,12 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 	}
 
 	created, err := client.CreateVersion(ctx, skill.ID, apiclient.CreateVersionRequest{
-		Version:    version,
-		Channel:    options.Channel,
-		SizeBytes:  artifact.SizeBytes,
-		FileCount:  len(artifact.Manifest),
-		SHA256:     artifact.SHA256,
-		Manifest:   toManifest(artifact.Manifest),
+		Version:   version,
+		Channel:   options.Channel,
+		SizeBytes: artifact.SizeBytes,
+		FileCount: len(artifact.Manifest),
+		SHA256:    artifact.SHA256,
+		Manifest:  toManifest(artifact.Manifest),
 	})
 	if err != nil {
 		return publishResult{}, err

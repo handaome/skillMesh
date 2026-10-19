@@ -40,7 +40,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newLoginCmd(), newLogoutCmd(),
 		newSearchCmd(), newInfoCmd(),
-		newSourceCmd(), newAddCmd(), newInstallCmd(), newPublishCmd(),
+		newSourceCmd(), newAddCmd(), newInstallCmd(), newPublishCmd(), newRollbackCmd(),
 		newListCmd(), newStatusCmd(), newUninstallCmd(),
 		newDoctorCmd(), newAgentsCmd(), newUpdateCmd(), newLockCmd(),
 	)

@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -22,6 +23,19 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ex.status()).body(Problem.of(
             BASE + ex.code().toLowerCase().replace('_', '-'),
             ex.code(), ex.status(), ex.code(), ex.getMessage(), requestId(req), false));
+    }
+
+    /**
+     * 路径参数类型不对（比如把截断的 ID 当成完整 UUID 传进来），
+     * 这是调用方的错，不该以 500 的形式暴露内部异常类型。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ResponseEntity<Problem> handleTypeMismatch(MethodArgumentTypeMismatchException ex,
+                                                HttpServletRequest req) {
+        Problem body = Problem.of(BASE + "invalid-parameter", ErrorCodes.VALIDATION_FAILED,
+            400, ErrorCodes.VALIDATION_FAILED,
+            "参数格式不对: " + ex.getName() + " = " + ex.getValue(), requestId(req), false);
+        return ResponseEntity.badRequest().body(body);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

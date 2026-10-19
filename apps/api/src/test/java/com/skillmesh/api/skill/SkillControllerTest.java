@@ -82,6 +82,14 @@ class SkillControllerTest {
     }
 
     @Test
+    void 非法ID返回400而不是500() throws Exception {
+        // CLI 的 search 曾经只显示截断的 ID，粘回来就是这个错。
+        mockMvc.perform(get("/api/v1/skills/{id}", "131b71e7").header("Authorization", auth))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    @Test
     void 搜索按关键字与标签过滤() throws Exception {
         create("alpha", "Alpha Skill", "java debugging", "java");
         create("beta", "Beta Skill", "rust stuff", "rust");

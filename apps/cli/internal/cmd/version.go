@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+// orDefaultVersion 用显式指定的版本号，没指定就是首个版本 1.0.0。
+func orDefaultVersion(version string) string {
+	if version == "" {
+		return "1.0.0"
+	}
+	return version
+}
+
 // nextVersion 在已有版本上累加 patch 位。
 // 第一个版本是 1.0.0。已有版本不是语义化版本时报错，让人用 --version 显式指定。
 func nextVersion(existing []string) (string, error) {

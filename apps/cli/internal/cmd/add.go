@@ -6,18 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/spf13/cobra"
 )
 
 func newAddCmd() *cobra.Command {
 	var (
 		ref, subpath, agentName, scope, credentialRef string
-		doInstall, replace, all, dryRun                bool
+		doInstall, replace, all, dryRun               bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add <repo-url>",
@@ -100,6 +100,7 @@ func newAddCmd() *cobra.Command {
 					RefType:        refTypeOf(ref),
 					Ref:            ref,
 					ResolvedCommit: commit,
+					Scope:          targetScope,
 					Agents:         []string{agentName},
 				})
 				installedItems = append(installedItems, item)

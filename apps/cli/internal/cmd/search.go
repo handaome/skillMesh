@@ -40,7 +40,7 @@ func newSearchCmd() *cobra.Command {
 					latest = *skill.LatestVersion
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					skill.Slug, skill.Name, skill.Visibility, latest, short(skill.ID))
+					skill.Slug, skill.Name, skill.Visibility, latest, skill.ID)
 			}
 			if err := w.Flush(); err != nil {
 				return err

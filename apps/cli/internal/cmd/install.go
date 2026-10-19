@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,46 +53,17 @@ func newInstallCmd() *cobra.Command {
 					args[0], target.Version, len(data), agentNames)
 				return nil
 			}
-
-			work, err := os.MkdirTemp("", "skillmesh-install-*")
-			if err != nil {
-				return err
+			targetScope := scope
+			if targetScope == "" {
+				targetScope = "user"
 			}
-			defer os.RemoveAll(work)
-
-			skillDir, err := installer.ExtractZip(data, work)
-			if err != nil {
-				return err
-			}
-			if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
-				return err
-			}
-			warnRisks(skillDir)
-			fmt.Println(skillscan.LicenseLine(skillDir))
-			name := skillscan.SkillName(skillDir)
-
-			for _, agentName := range agentNames {
-				base, err := agent.Dir(cfg, agentName, scope, projectRoot)
-				if err != nil {
-					return err
-				}
-				installPath := filepath.Join(base, name)
-				if err := checkTarget(installPath, replace); err != nil {
-					return err
-				}
-				if err := installer.InstallAtomic(skillDir, installPath, true); err != nil {
-					return err
-				}
-				if err := installer.MarkInstalled(installPath, "skillmesh:"+args[0]); err != nil {
-					return err
-				}
-				fmt.Printf("已安装 %s@%s 到 %s\n", name, target.Version, installPath)
-			}
-			if err := recordInstall(projectRoot, name, args[0], target, agentNames); err != nil {
-				return err
-			}
-			fmt.Printf("锁文件 %s\n", lockfile.FileName)
-			return nil
+			return installArtifact(cmd.Context(), client, projectRoot, installRequest{
+				SkillID: args[0],
+				Version: target,
+				Agents:  agentNames,
+				Scope:   targetScope,
+				Replace: replace,
+			})
 		},
 	}
 	cmd.Flags().StringSliceVar(&agentNames, "agent", []string{"claude-code"}, "目标 Agent，可重复指定")
@@ -103,10 +75,69 @@ func newInstallCmd() *cobra.Command {
 	return cmd
 }
 
+// installRequest 是一次注册中心安装的全部参数。
+type installRequest struct {
+	SkillID string
+	Version apiclient.SkillVersion
+	Agents  []string
+	Scope   string
+	Replace bool
+}
+
+// installArtifact 下载指定版本、校验、原子装进各 Agent 目录并写锁文件。
+// install 和 rollback 走同一条路——回滚就是装一个更早的不可变版本。
+func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot string,
+	req installRequest) error {
+
+	data, err := client.DownloadArtifact(ctx, req.Version.Artifact.ID)
+	if err != nil {
+		return err
+	}
+	work, err := os.MkdirTemp("", "skillmesh-install-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+
+	skillDir, err := installer.ExtractZip(data, work)
+	if err != nil {
+		return err
+	}
+	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
+		return err
+	}
+	warnRisks(skillDir)
+	fmt.Println(skillscan.LicenseLine(skillDir))
+	name := skillscan.SkillName(skillDir)
+
+	for _, agentName := range req.Agents {
+		base, err := agent.Dir(cfg, agentName, req.Scope, projectRoot)
+		if err != nil {
+			return err
+		}
+		installPath := filepath.Join(base, name)
+		if err := checkTarget(installPath, req.Replace); err != nil {
+			return err
+		}
+		if err := installer.InstallAtomic(skillDir, installPath, true); err != nil {
+			return err
+		}
+		if err := installer.MarkInstalled(installPath, "skillmesh:"+req.SkillID); err != nil {
+			return err
+		}
+		fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
+	}
+	if err := recordInstall(projectRoot, name, req.SkillID, req.Version, req.Scope, req.Agents); err != nil {
+		return err
+	}
+	fmt.Printf("锁文件 %s\n", lockfile.FileName)
+	return nil
+}
+
 // recordInstall 把注册中心安装写进锁文件。
 // 不写的话 list 看不到它，CI 的 --locked 也无从校验（设计文档 §9.2）。
 func recordInstall(projectRoot, name, skillID string, target apiclient.SkillVersion,
-	agents []string) error {
+	scope string, agents []string) error {
 
 	lock, err := lockfile.Load(projectRoot)
 	if err != nil {
@@ -118,6 +149,7 @@ func recordInstall(projectRoot, name, skillID string, target apiclient.SkillVers
 		RefType:  "version",
 		Ref:      target.Version,
 		Version:  target.Version,
+		Scope:    scope,
 		Agents:   agents,
 	}
 	if target.Artifact != nil {

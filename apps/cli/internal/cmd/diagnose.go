@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
+	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/spf13/cobra"
 )
 
@@ -74,7 +75,7 @@ func newAgentsCmd() *cobra.Command {
 					continue
 				}
 				projectDir := agentCfg.ProjectSkills
-				if resolved, err := agentDirFor(name, projectRoot); err == nil {
+				if resolved, err := agentDirFor(name, lockfile.LockedSkill{}, projectRoot); err == nil {
 					projectDir = resolved
 				}
 				exists := "否"

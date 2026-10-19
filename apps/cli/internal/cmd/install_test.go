@@ -13,7 +13,7 @@ func Test注册中心安装写进锁文件(t *testing.T) {
 		Version:  "1.2.0",
 		Artifact: &apiclient.ArtifactSummary{ID: "art-1", SHA256: "abc123"},
 	}
-	if err := recordInstall(root, "demo", "skill-1", target, []string{"claude-code"}); err != nil {
+	if err := recordInstall(root, "demo", "skill-1", target, "user", []string{"claude-code"}); err != nil {
 		t.Fatal(err)
 	}
 

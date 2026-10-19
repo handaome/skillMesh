@@ -33,6 +33,7 @@ type LockedSkill struct {
 	ResolvedCommit string   `yaml:"resolved_commit"`
 	Version        string   `yaml:"version,omitempty"`
 	SHA256         string   `yaml:"sha256,omitempty"`
+	Scope          string   `yaml:"scope,omitempty"`
 	Agents         []string `yaml:"agents"`
 }
 

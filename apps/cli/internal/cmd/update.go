@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
-	"github.com/spf13/cobra"
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/spf13/cobra"
 )
 
 // UpdateInfo 是一次检查更新的结果。
@@ -21,6 +21,7 @@ type UpdateInfo struct {
 	Repository   string
 	Path         string
 	Ref          string
+	Scope        string
 	Agents       []string
 	LocalCommit  string
 	RemoteCommit string
@@ -56,6 +57,7 @@ func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error)
 				Repository:   skill.Repository,
 				Path:         skill.Path,
 				Ref:          skill.Ref,
+				Scope:        skill.Scope,
 				Agents:       skill.Agents,
 				LocalCommit:  skill.ResolvedCommit,
 				RemoteCommit: remote,
@@ -66,7 +68,7 @@ func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error)
 }
 
 func newUpdateCmd() *cobra.Command {
-	var checkOnly, all bool
+	var checkOnly, all, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "update [skill-name]",
 		Short: "检查或应用更新",
@@ -103,8 +105,8 @@ func newUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			// 默认只报不装；--check 强制只报；--all 或指定了名字才动手
-			if checkOnly || (!all && len(args) == 0) {
+			// 默认只报不装；--check / --dry-run 强制只报；--all 或指定了名字才动手
+			if checkOnly || dryRun || (!all && len(args) == 0) {
 				fmt.Println("加 --all 应用全部更新，或指定 skill 名称只更新它。")
 				return nil
 			}
@@ -115,6 +117,7 @@ func newUpdateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "只检查不应用")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只报出会更新什么，不落盘")
 	cmd.Flags().BoolVar(&all, "all", false, "应用全部更新")
 	return cmd
 }
@@ -163,7 +166,7 @@ func applyOne(root, projectRoot string, lock *lockfile.Lock, update UpdateInfo, 
 	name := skillscan.SkillName(skillDir)
 
 	for _, agentName := range update.Agents {
-		base, err := agent.Dir(cfg, agentName, "user", projectRoot)
+		base, err := agent.Dir(cfg, agentName, scopeOf(update.Scope, projectRoot), projectRoot)
 		if err != nil {
 			return err
 		}
@@ -179,24 +182,14 @@ func applyOne(root, projectRoot string, lock *lockfile.Lock, update UpdateInfo, 
 		Name:           update.Name,
 		Repository:     update.Repository,
 		Path:           update.Path,
-		RefType:        lockfileRefType(update.Ref),
+		RefType:        refTypeOf(update.Ref),
 		Ref:            update.Ref,
 		ResolvedCommit: commit,
+		Scope:          scopeOf(update.Scope, projectRoot),
 		Agents:         update.Agents,
 	})
 	fmt.Printf("已更新 %s 到 %s\n", name, short(commit))
 	return nil
-}
-
-func lockfileRefType(ref string) string {
-	switch {
-	case ref == "":
-		return "default"
-	case len(ref) == 40:
-		return "commit"
-	default:
-		return "branch"
-	}
 }
 
 func newLockCmd() *cobra.Command {
