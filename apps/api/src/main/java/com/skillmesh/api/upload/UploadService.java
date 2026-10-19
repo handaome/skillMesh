@@ -3,6 +3,7 @@ package com.skillmesh.api.upload;
 import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.SigningService;
 import com.skillmesh.api.common.ContentDigest;
+import com.skillmesh.api.review.ReviewService;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.auth.CurrentUser;
@@ -45,11 +46,12 @@ public class UploadService {
     private final ScanRepository scans;
     private final AuditService audit;
     private final SigningService signing;
+    private final ReviewService review;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
                          SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
                          ArtifactScanner scanner, ScanRepository scans, AuditService audit,
-                         SigningService signing) {
+                         SigningService signing, ReviewService review) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
@@ -59,6 +61,7 @@ public class UploadService {
         this.scans = scans;
         this.audit = audit;
         this.signing = signing;
+        this.review = review;
     }
 
     @Transactional
@@ -105,14 +108,17 @@ public class UploadService {
 
         version.setArtifactId(artifact.getId());
         ScanResult scan = runScan(version, storage.get(finalKey));
-        version.setStatus(scan.blocked() ? "rejected" : "published");
-        if (!scan.blocked()) {
+        // 个人与公开的版本扫描通过就发布；团队与组织可见的要等人审
+        // （设计文档 §10.1 的 draft → scanning → pending_review → published）。
+        boolean needsReview = review.needsReview(version.getSkillId());
+        version.setStatus(scan.blocked() ? "rejected" : needsReview ? "pending_review" : "published");
+        if ("published".equals(version.getStatus())) {
             version.setPublishedBy(user.id());
             version.setPublishedAt(now);
         }
         versions.save(version);
 
-        if (!scan.blocked()) {
+        if ("published".equals(version.getStatus())) {
             skills.findById(version.getSkillId()).ifPresent(skill -> {
                 skill.setLatestVersion(version.getVersion());
                 skill.setUpdatedAt(now);
@@ -120,8 +126,13 @@ public class UploadService {
             });
         }
 
-        audit.record(user, scan.blocked() ? "skill.publish_rejected" : "skill.publish",
-            "skill", version.getSkillId(), scan.blocked() ? "failure" : "success",
+        String action = switch (version.getStatus()) {
+            case "rejected" -> "skill.publish_rejected";
+            case "pending_review" -> "skill.submit_for_review";
+            default -> "skill.publish";
+        };
+        audit.record(user, action, "skill", version.getSkillId(),
+            "rejected".equals(version.getStatus()) ? "failure" : "success",
             Map.of("version", version.getVersion(), "sha256", promoted.sha256(),
                 "scan_status", scan.status()));
 

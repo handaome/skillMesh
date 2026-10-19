@@ -151,6 +151,38 @@ public class OrgService {
         return result;
     }
 
+    /**
+     * 这个人在某个 Skill 所属范围里的最高角色。
+     * 团队成员优先于组织成员——同一个人可能两个身份都有，取更近的那个。
+     */
+    public String roleIn(UUID organizationId, UUID teamId, UUID userId) {
+        if (teamId != null) {
+            String teamRole = teamMembers
+                .findById(new MembershipEntities.TeamKey(teamId, userId))
+                .map(MembershipEntities.TeamMembership::getRole)
+                .orElse("");
+            if (!teamRole.isEmpty()) {
+                return teamRole;
+            }
+        }
+        if (organizationId == null) {
+            return "";
+        }
+        return orgMembers.findById(new MembershipEntities.OrgKey(organizationId, userId))
+            .map(MembershipEntities.OrgMembership::getRole)
+            .orElse("");
+    }
+
+    /** 角色是否达到要求（owner > admin > publisher > reviewer > member > viewer）。 */
+    public static boolean roleAtLeast(String actual, String required) {
+        int have = RANK.indexOf(actual);
+        int need = RANK.indexOf(required);
+        return have >= 0 && need >= 0 && have <= need;
+    }
+
+    private static final List<String> RANK = List.of(
+        "owner", "admin", "publisher", "reviewer", "member", "viewer");
+
     public List<UUID> myOrganizationIds(UUID userId) {
         return orgMembers.findByIdUserId(userId).stream()
             .map(membership -> membership.getId().getOrganizationId())

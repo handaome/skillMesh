@@ -264,6 +264,15 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 	if session.Status != "completed" {
 		return publishResult{}, fmt.Errorf("服务端校验未通过：%s %s", session.Status, session.ErrorCode)
 	}
+	// 团队/组织可见的版本会停在待审核，这里提前说清楚，别让人以为已经发出去了
+	if needsReview, err := client.NeedsReview(ctx, skill.ID); err == nil && needsReview {
+		return publishResult{
+			Action:  "已提交审核",
+			Name:    displayName,
+			SkillID: skill.ID,
+			Version: version,
+		}, nil
+	}
 	return publishResult{
 		Action:    "已发布",
 		Name:      displayName,

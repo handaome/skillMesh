@@ -41,6 +41,7 @@ func newRootCmd() *cobra.Command {
 		newLoginCmd(), newLogoutCmd(),
 		newSearchCmd(), newInfoCmd(),
 		newSourceCmd(), newAddCmd(), newInstallCmd(), newPublishCmd(), newRollbackCmd(),
+		newReviewCmd(),
 		newListCmd(), newStatusCmd(), newUninstallCmd(),
 		newScanCmd(), newSyncCmd(), newRestoreCmd(),
 		newDoctorCmd(), newAgentsCmd(), newUpdateCmd(), newLockCmd(),

@@ -175,3 +175,29 @@ func (c *Client) send(ctx context.Context, method, path string, body []byte, out
 }
 
 var _ = strconv.Itoa
+
+// ReviewVersion 提交审核或给出审核结论（设计文档 §12）。
+func (c *Client) ReviewVersion(ctx context.Context, skillID, version, action,
+	comment string) (map[string]any, error) {
+
+	body := map[string]string{}
+	if comment != "" {
+		body["comment"] = comment
+	}
+	var out map[string]any
+	if err := c.doWith(ctx, http.MethodPost,
+		"/skills/"+skillID+"/versions/"+version+"/"+action, nil, body, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NeedsReview 问服务端这个 Skill 的新版本要不要走审核。
+// 猜错的后果是误导用户说「已发布」，所以这里问一句而不是客户端自己判断。
+func (c *Client) NeedsReview(ctx context.Context, skillID string) (bool, error) {
+	skill, err := c.Skill(ctx, skillID)
+	if err != nil {
+		return false, err
+	}
+	return skill.Visibility == "team" || skill.Visibility == "organization", nil
+}

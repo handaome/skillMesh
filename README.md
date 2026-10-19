@@ -285,6 +285,26 @@ export SKILLMESH_TOKEN=<access-token>
 
 只支持注册中心来源（`install` 装的）。Git 来源要固定版本用 `skillmesh add <url> --ref <tag>`，或 `update` 之后手动 checkout 到指定 commit。
 
+### 团队与审核
+
+```bash
+skillmesh review submit  <skill-id> <version> --comment "初版"
+skillmesh review approve <skill-id> <version> --comment "没问题"
+skillmesh review reject  <skill-id> <version> --comment "第 3 节有危险命令"
+```
+
+个人与公开的 Skill 扫描通过即发布；**团队与组织可见的版本会停在待审核**（设计文档 §10.1），publisher 及以上提交，reviewer 及以上放行，且**不能审自己发的版本**。审核结论写 `skill_reviews`，同时进审计流水。
+
+可见性规则：public 谁都能看，private 只有属主，`team` 要团队成员，`organization` 要组织成员——搜索也按这个过滤（不是查出来再在内存里筛）。
+
+```bash
+curl -X POST .../api/v1/organizations -d '{"slug":"acme","name":"Acme"}'
+curl -X POST .../api/v1/organizations/<id>/teams -d '{"slug":"platform","name":"平台组"}'
+curl -X POST .../api/v1/teams/<id>/members -d '{"user_id":"...","role":"reviewer"}'
+```
+
+角色从高到低：owner / admin / publisher / reviewer / member / viewer。建组织的人自动是 owner。`GET /api/v1/me` 会列出你所在的组织和角色。
+
 ### 本地项目状态
 
 | 命令 | 作用 |
