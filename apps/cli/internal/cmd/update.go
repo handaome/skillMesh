@@ -31,6 +31,32 @@ type UpdateInfo struct {
 // lsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
 var lsRemote = gitx.LsRemote
 
+// autoSafe 数一数有多少个来源声明了「无本地改动时自动更新」。
+func autoSafe(lock lockfile.Lock) int {
+	count := 0
+	for _, entry := range lock.Skills {
+		if entry.UpdatePolicy == "auto_safe" && entry.Repository != "" {
+			count++
+		}
+	}
+	return count
+}
+
+// filterAutoSafe 只保留 auto_safe 的来源，其余交给用户显式处理。
+func filterAutoSafe(lock lockfile.Lock, updates []UpdateInfo) []UpdateInfo {
+	policies := map[string]string{}
+	for _, entry := range lock.Skills {
+		policies[entry.Name] = entry.UpdatePolicy
+	}
+	var kept []UpdateInfo
+	for _, update := range updates {
+		if policies[update.Name] == "auto_safe" {
+			kept = append(kept, update)
+		}
+	}
+	return kept
+}
+
 // CheckUpdates 只调 git ls-remote，不下载内容（详细设计 §3.7）。
 //
 // 一个仓库里可能装了几十个 Skill（--all 装的），但远端 commit 只有一个：
@@ -70,7 +96,7 @@ func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error)
 }
 
 func newUpdateCmd() *cobra.Command {
-	var checkOnly, all, dryRun bool
+	var checkOnly, all, dryRun, auto bool
 	cmd := &cobra.Command{
 		Use:   "update [skill-name]",
 		Short: "检查或应用更新",
@@ -107,13 +133,24 @@ func newUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			// 不给名字也不给 --all 就只报不动；--check / --dry-run 走到预览为止。
-			targeted := all || len(args) > 0
+			// 不给名字也不给 --all：只报；除非这些来源的策略是 auto_safe，
+			// 那就该在确认没本地改动后自动更新（设计文档 §7.2）。
+			targeted := auto || all || len(args) > 0
 			if !targeted {
 				fmt.Println("加 --all 应用全部更新，或指定 skill 名称只更新它。")
 				return nil
 			}
-			if err := applyUpdates(cmd.Context(), projectRoot, &lock, updates, dryRun || checkOnly); err != nil {
+			// 只给了 --auto 时，只动 auto_safe 的来源；手动指定的名字/--all 照旧全量
+			selected := updates
+			if auto {
+				selected = filterAutoSafe(lock, updates)
+				if len(selected) == 0 {
+					fmt.Println("没有标记 auto_safe 的来源，跳过。")
+					return nil
+				}
+			}
+			if err := applyUpdates(cmd.Context(), projectRoot, &lock, selected,
+				dryRun || checkOnly); err != nil {
 				return err
 			}
 			if dryRun || checkOnly {
@@ -124,6 +161,7 @@ func newUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "只检查不应用")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只报出会更新什么，不落盘")
+	cmd.Flags().BoolVar(&auto, "auto", false, "只应用标记了 auto_safe 且本地无改动的来源")
 	cmd.Flags().BoolVar(&all, "all", false, "应用全部更新")
 	return cmd
 }

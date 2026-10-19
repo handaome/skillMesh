@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
+	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 	"github.com/spf13/cobra"
 )
@@ -210,11 +211,15 @@ func runWatchLoop(ctx context.Context, interval time.Duration) error {
 	}
 }
 
-// reconcile 跑一轮完整同步，并把结果写进日志。
+// reconcile 跑一轮完整同步，并把 auto_safe 的 Git 来源也更新掉
+// （设计文档 §7.2：自动更新只在「无本地冲突且策略允许」时发生）。
 func reconcile(ctx context.Context) error {
 	results, _, err := runSync(ctx, syncOptions{})
 	if err != nil {
 		return err
+	}
+	if err := applyAutoSafeUpdates(ctx); err != nil {
+		logf("自动更新失败: %v", err)
 	}
 	for _, result := range results {
 		if result.Outcome == failed || result.Outcome == conflicted {
@@ -224,6 +229,28 @@ func reconcile(ctx context.Context) error {
 		logf("%s %s：%s", result.Name, result.Outcome, oneLine(result.Detail))
 	}
 	return nil
+}
+
+// applyAutoSafeUpdates 更新标记了 auto_safe 的 Git 来源。
+// 本地有改动的那些由 applyUpdates 里的守卫挡掉，不会被覆盖。
+func applyAutoSafeUpdates(ctx context.Context) error {
+	projectRoot := mustGetwd()
+	lock, err := lockfile.Load(projectRoot)
+	if err != nil {
+		return err
+	}
+	if autoSafe(lock) == 0 {
+		return nil
+	}
+	updates, err := CheckUpdates(ctx, lock)
+	if err != nil {
+		return err
+	}
+	selected := filterAutoSafe(lock, updates)
+	if len(selected) == 0 {
+		return nil
+	}
+	return applyUpdates(ctx, projectRoot, &lock, selected, false)
 }
 
 // skillSnapshot 拍一张「每个 Skill 的内容摘要」快照。

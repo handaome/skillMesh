@@ -35,6 +35,7 @@ type LockedSkill struct {
 	SHA256         string   `yaml:"sha256,omitempty"`
 	InstalledHash  string   `yaml:"installed_hash,omitempty"`
 	Scope          string   `yaml:"scope,omitempty"`
+	UpdatePolicy   string   `yaml:"update_policy,omitempty"`
 	Agents         []string `yaml:"agents"`
 }
 

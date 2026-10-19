@@ -18,12 +18,16 @@ func newAddCmd() *cobra.Command {
 	var (
 		ref, subpath, agentName, scope, credentialRef string
 		doInstall, replace, all, dryRun               bool
+		updatePolicy                                  string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <repo-url>",
 		Short: "登记一个 Git 来源（加 --install 才安装到 Agent 目录）",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !contains([]string{"manual", "notify", "auto_safe"}, updatePolicy) {
+				return fmt.Errorf("--update-policy 只能是 manual / notify / auto_safe")
+			}
 			repo, err := gitx.NormalizeURL(args[0])
 			if err != nil {
 				return err
@@ -101,6 +105,7 @@ func newAddCmd() *cobra.Command {
 					Ref:            ref,
 					ResolvedCommit: commit,
 					Scope:          targetScope,
+					UpdatePolicy:   updatePolicy,
 					InstalledHash:  installedDigest(item.Target),
 					Agents:         []string{agentName},
 				})
@@ -133,6 +138,8 @@ func newAddCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "安装仓库里的全部 Skill")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只列出会装什么，不实际安装")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
+	cmd.Flags().StringVar(&updatePolicy, "update-policy", "notify",
+		"更新策略：manual（不动）/ notify（默认，只提示）/ auto_safe（无本地改动时自动更新）")
 	return cmd
 }
 
