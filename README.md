@@ -8,6 +8,7 @@ Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本�
 | --- | --- |
 | [CLI 使用手册](docs/cli-使用手册.md) | 从 Git 安装、发布到云端、更新与差异、同步与冲突、回收站、诊断 |
 | [团队治理与安全](docs/团队治理.md) | 组织与团队、角色与可见性、发布审核、安装登记、审计、制品签名与可疑内容扫描 |
+| [团队控制台使用手册](docs/团队控制台.md) | 浏览器登录、邀请入组、发布到团队、审核放行、安装与排错 |
 | [部署、备份与排障](docs/部署与排障.md) | 备份与恢复验证、身份源、生产前清单、受限网络下访问 GitHub、端口 |
 | [设计文档](docs/设计文档.md) | 产品目标、用户场景、功能范围、同步引擎设计、安全治理 |
 | [详细设计](docs/详细设计.md) | 数据库 DDL、API 契约、CLI 命令与配置、部署说明 |
@@ -19,7 +20,7 @@ Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本�
 apps/api/     Spring Boot 3.5 · Java 21 · JPA · Flyway · PostgreSQL · MinIO SDK · Keycloak OIDC
 apps/cli/     Go · cobra · OIDC 授权码+PKCE · 调系统 git
 apps/web/     Vue 3 · Vite · TypeScript
-db/migrations/ V1__init.sql（19 张表，与设计文档 §1.2 一致）
+db/migrations/ V1__init.sql、V2__normalize_version_manifest.sql、V3__team_console.sql（20 张表）
 infra/        本机 MinIO / Keycloak 启动脚本与 realm 定义
 docs/        设计文档、详细设计与使用手册
 ```
