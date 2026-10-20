@@ -24,6 +24,7 @@ body { margin: 0; font-family: var(--el-font-family); }
 .sm-nav a:hover { background: var(--el-fill-color-light); }
 .sm-nav a.router-link-active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .sm-topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.sm-org-switch { width: 10rem; }
 
 .sm-main { flex: 1; padding: 24px; max-width: 72rem; width: 100%; margin: 0 auto; }
 

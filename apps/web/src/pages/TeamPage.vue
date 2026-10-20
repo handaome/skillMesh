@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import {
   ApiError,
   createInvitation,
@@ -10,16 +10,21 @@ import {
   revokeInvitation,
   updateOrgRole,
 } from '../api'
-import { session } from '../auth/session'
+import { currentOrg } from '../auth/currentOrg'
 import type { Invitation, Member, Team } from '../types'
 
-const org = computed(() => session.organizations[0] ?? null)
+const org = currentOrg
 const teams = ref<Team[]>([])
 const members = ref<Member[]>([])
 const invitations = ref<Invitation[]>([])
-const error = ref('')
+const loading = ref(false)
+/** 成员区的错（改角色、读成员、读团队） */
+const memberError = ref('')
+/** 邀请区的错（生成、撤销、读邀请） */
+const inviteError = ref('')
 const notice = ref('')
 const inviteLink = ref('')
+const inviteToken = ref('')
 const selectedTeam = ref('')
 const inviteRole = ref('member')
 const inviteOrgRole = ref('member')
@@ -47,31 +52,38 @@ async function loadMembers() {
   members.value = teamMembers.map((m) => ({ ...m, role: roles.get(m.user_id) ?? m.role }))
 }
 
-async function load() {
-  if (!org.value) return
-  error.value = ''
+/** 重读成员表。切团队、改角色之后都走这里。 */
+async function refreshMembers() {
+  memberError.value = ''
   try {
-    teams.value = await listTeams(org.value.id)
     await loadMembers()
-    invitations.value = await listInvitations(org.value.id)
   } catch (e) {
-    error.value = errorText(e)
+    memberError.value = errorText(e)
   }
 }
 
-/** 重读成员表。切团队、改角色之后都走这里。 */
-async function refreshMembers() {
-  error.value = ''
+async function load() {
+  if (!org.value) return
+  loading.value = true
+  memberError.value = ''
+  inviteError.value = ''
   try {
+    teams.value = await listTeams(org.value.id)
     await loadMembers()
   } catch (e) {
-    error.value = errorText(e)
+    memberError.value = errorText(e)
   }
+  try {
+    invitations.value = await listInvitations(org.value.id)
+  } catch (e) {
+    inviteError.value = errorText(e)
+  }
+  loading.value = false
 }
 
 async function invite() {
   if (!org.value) return
-  error.value = ''
+  inviteError.value = ''
   notice.value = ''
   try {
     const created = await createInvitation(org.value.id, {
@@ -81,35 +93,49 @@ async function invite() {
       team_role: selectedTeam.value ? inviteRole.value : undefined,
     })
     inviteLink.value = created.invite_url
+    inviteToken.value = created.token
     notice.value = '邀请已生成，把链接发给对方。'
     await load()
   } catch (e) {
-    error.value = errorText(e)
+    inviteError.value = errorText(e)
   }
 }
 
 async function revoke(id: string) {
   if (!org.value) return
-  error.value = ''
+  inviteError.value = ''
   try {
     await revokeInvitation(org.value.id, id)
     await load()
   } catch (e) {
-    error.value = errorText(e)
+    inviteError.value = errorText(e)
   }
 }
 
 /** 改组织角色。被邀请进来的人默认是 member，要往团队发布得有 publisher 以上。 */
 async function changeRole(member: Member, role: string) {
   if (!org.value || role === member.role) return
-  error.value = ''
+  memberError.value = ''
   try {
     await updateOrgRole(org.value.id, member.user_id, role)
-    await refreshMembers()
   } catch (e) {
-    error.value = errorText(e)
+    memberError.value = errorText(e)
+    return
   }
+  await refreshMembers()
 }
+
+// 换组织：团队、成员、邀请都是按组织拉的，得重取一遍。
+watch(() => org.value?.id, async () => {
+  selectedTeam.value = ''
+  teams.value = []
+  members.value = []
+  invitations.value = []
+  inviteLink.value = ''
+  inviteToken.value = ''
+  notice.value = ''
+  await load()
+})
 
 onMounted(load)
 </script>
@@ -140,7 +166,17 @@ onMounted(load)
           </el-select>
         </div>
 
-        <el-table :data="members" size="small">
+        <el-alert
+          v-if="memberError"
+          data-test="error"
+          :title="memberError"
+          type="error"
+          :closable="false"
+          show-icon
+          class="sm-mb-12"
+        />
+
+        <el-table v-if="!loading" :data="members" size="small">
           <el-table-column label="成员" min-width="140">
             <template #default="scope">
               <span data-test="member-row">{{ scope.row.display_name }}</span>
@@ -172,7 +208,7 @@ onMounted(load)
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!members.length" description="还没有成员" :image-size="60" />
+        <el-empty v-if="!loading && !members.length" description="还没有成员" :image-size="60" />
       </el-card>
 
       <el-card shadow="never" class="sm-mb-16">
@@ -202,6 +238,9 @@ onMounted(load)
           show-icon
           class="sm-mb-12"
         />
+        <p v-if="inviteToken" class="sm-muted sm-mb-12">
+          原始 token（链接指向本机时，把这个发给对方）：<code class="sm-mono" data-test="invite-token">{{ inviteToken }}</code>
+        </p>
         <el-alert
           v-if="notice"
           :title="notice"
@@ -209,14 +248,32 @@ onMounted(load)
           :closable="false"
           class="sm-mb-12"
         />
+        <el-alert
+          v-if="inviteError"
+          data-test="invite-error"
+          :title="inviteError"
+          type="error"
+          :closable="false"
+          show-icon
+          class="sm-mb-12"
+        />
 
-        <el-table :data="invitations" size="small">
+        <el-table v-if="!loading" :data="invitations" size="small">
           <el-table-column label="团队" min-width="120">
             <template #default="scope">
               <span data-test="invitation-row">{{ scope.row.team_name ?? '—' }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="team_role" label="角色" width="110" />
+          <el-table-column label="组织角色" width="110">
+            <template #default="scope">
+              <span data-test="invitation-org-role">{{ scope.row.org_role }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="团队角色" width="110">
+            <template #default="scope">
+              <span data-test="invitation-team-role">{{ scope.row.team_name ? scope.row.team_role : '—' }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="110">
             <template #default="scope">
               <el-tag
@@ -241,17 +298,8 @@ onMounted(load)
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!invitations.length" description="还没有发出过邀请" :image-size="60" />
+        <el-empty v-if="!loading && !invitations.length" description="还没有发出过邀请" :image-size="60" />
       </el-card>
-
-      <el-alert
-        v-if="error"
-        data-test="error"
-        :title="error"
-        type="error"
-        :closable="false"
-        show-icon
-      />
     </template>
   </section>
 </template>

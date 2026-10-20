@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { currentOrg, selectOrganization } from './auth/currentOrg'
 import { ensureFresh, loadMe, logout, session } from './auth/session'
 
 const router = useRouter()
+
+/** 顶栏的组织选择器。选了谁，团队页就跟谁。 */
+const orgId = computed({
+  get: () => currentOrg.value?.id ?? '',
+  set: (id: string) => selectOrganization(id),
+})
 
 onMounted(async () => {
   if (!session.accessToken) return
@@ -35,6 +42,20 @@ function signOut() {
         <router-link to="/reviews">审核</router-link>
       </nav>
       <div class="sm-topbar-right">
+        <el-select
+          v-if="session.organizations.length"
+          v-model="orgId"
+          data-test="org-switch"
+          size="small"
+          class="sm-org-switch"
+        >
+          <el-option
+            v-for="o in session.organizations"
+            :key="o.id"
+            :label="o.name"
+            :value="o.id"
+          />
+        </el-select>
         <el-tag v-if="session.user" type="info" effect="plain" data-test="who">
           {{ session.user.display_name }}
         </el-tag>

@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import TeamPage from '../src/pages/TeamPage.vue'
 import { session } from '../src/auth/session'
+
+// 组件监听当前组织，测试之间不卸载会让上一次的 watcher 继续发请求。
+enableAutoUnmount(afterEach)
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, statusText: 'OK', json: async () => body }
@@ -40,7 +43,7 @@ const TEAM = {
 
 const INVITATION = {
   id: 'i1', organization_name: 'Acme', team_name: 'Platform',
-  org_role: 'member', team_role: 'member', status: 'pending',
+  org_role: 'publisher', team_role: 'member', status: 'pending',
   expires_at: '2026-10-27T00:00:00Z', created_at: '2026-10-20T00:00:00Z',
 }
 
@@ -63,6 +66,9 @@ describe('TeamPage', () => {
 
     expect(wrapper.find('[data-test="member-row"]').text()).toContain('Dev Two')
     expect(wrapper.find('[data-test="invitation-row"]').text()).toContain('Platform')
+    // 列表给的是「实际授予的组织角色」，团队角色另列
+    expect(wrapper.find('[data-test="invitation-org-role"]').text()).toBe('publisher')
+    expect(wrapper.find('[data-test="invitation-team-role"]').text()).toBe('member')
   })
 
   it('改组织角色会 PATCH 并重读成员列表', async () => {
@@ -164,5 +170,41 @@ describe('TeamPage', () => {
     // 给了团队角色就必须给团队，否则服务端 400
     expect(JSON.parse(String(post?.[1]?.body))).toEqual({ org_role: 'member' })
     expect(wrapper.find('[data-test="invite-link"]').text()).toContain('/invite/tok')
+  })
+
+  it('选了团队时邀请带上 team_id 与 team_role', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({
+          id: 'i3', organization_slug: 'acme', organization_name: 'Acme',
+          team_slug: 'platform', team_name: 'Platform',
+          org_role: 'member', team_role: 'member',
+          expires_at: '2026-10-27T00:00:00Z',
+          invite_url: 'http://127.0.0.1:5174/invite/raw-tok', token: 'raw-tok',
+        })
+      }
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="team-select"]')
+    teamSelect.vm.$emit('update:modelValue', 't1')
+    teamSelect.vm.$emit('change', 't1')
+    await flushPromises()
+
+    await wrapper.find('[data-test="invite"]').trigger('click')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      team_id: 't1', org_role: 'member', team_role: 'member',
+    })
+    // 链接指向本机，原始 token 得单独给出来（设计文档 §5.1）
+    expect(wrapper.find('[data-test="invite-token"]').text()).toBe('raw-tok')
   })
 })
