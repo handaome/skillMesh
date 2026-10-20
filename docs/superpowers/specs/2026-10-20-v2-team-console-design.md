@@ -17,7 +17,7 @@ v2 的目标不是加功能面，而是把「两个人用 SkillMesh 协作」这
 
 | 不做 | 原因 |
 | --- | --- |
-| 审计台 | `GET /audit-events` 现在是全表 `findAll` 后内存过滤，要改就得连分页一起重做，与本闭环无关，下一轮处理 |
+| 审计台 | 后端查询已改成一条 join（不再全表扫描），但**审计台页面**仍不做，与本闭环无关，下一轮处理 |
 | 成员自助注册 | 成员只能被邀请进来，不存在"注册即入组" |
 | SSO / LDAP | 现有 Keycloak OIDC 够用，企业身份源是另一个方向 |
 | MCP 工具服务、桌面端、更多 Agent 适配器 | 属设计文档 §15 阶段 3，与本闭环无依赖 |
@@ -363,10 +363,10 @@ Keycloak realm 需要**第二个账号**。在 `infra/keycloak/realm-skillmesh.j
 
 | 项 | 说明 |
 | --- | --- |
-| 制品 key 后缀是 `.tar.gz` 但内容是 zip | 历史遗留（`ArtifactService` 拼 key 时按 tar.gz 命名，实际 `content_type` 是 `application/zip`，CLI 用 `archive/zip` 打包，服务端用 `ZipInputStream` 扫描）。**本次不改 key**，避免存量制品失效；diff 代码按 zip 处理。写代码时不要被 key 后缀误导。 |
+| 制品 key 后缀曾是 `.tar.gz` 但内容是 zip | **已修**：`ArtifactService` 的 key 后缀改成 `.zip`（同项目的 `SyncUploadService` 早就用 `.zip`）。存量制品的 key 记在 `artifacts.storage_key`，下载走库里的 key，不受影响。 |
 | Web token 存 localStorage | 有 XSS 面。内部管理工具的常规取舍；换 sessionStorage 则刷新页面即掉线，影响体验。 |
 | 邀请链接指向本机 | `skillmesh.web.base-url` 默认 `http://127.0.0.1:5174`。跨机访问需改该配置；Web 端同时展示原始 token 便于复制。 |
 | 邀请无邮件投递 | 没有 SMTP 依赖，管理员手动把链接发给对方。 |
 | 审核 diff 无缓存 | 每次查看重新解包。低频场景可接受。 |
-| 审计仍只在 Skill 维度 | `GET /audit-events` 的全表扫描问题留到下一轮。 |
+| 审计仍只在 Skill 维度 | 全表扫描已修（`GET /audit-events` 改成一条 join 查询，可见性条件与搜索共用 `VisibleSkills`），但**审计台页面**仍不做。 |
 | 多设备冲突可视化 | 仍只在 CLI 侧处理。 |
