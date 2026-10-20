@@ -31,13 +31,20 @@ public class ArtifactService {
         storage.ensureBucket();
     }
 
-    /** 临时对象与正式对象分开：临时对象设过期，正式对象按摘要寻址且不可覆盖（附录 A.2）。 */
+    /**
+     * 临时对象与正式对象分开：临时对象设过期，正式对象按摘要寻址且不可覆盖（附录 A.2）。
+     *
+     * 后缀是 .zip：制品本来就是 zip——CLI 用 archive/zip 打包，
+     * content_type 是 application/zip，服务端用 ZipInputStream 扫描。
+     * （这里曾误写成 .tar.gz，存量制品的 key 记在 artifacts.storage_key，
+     *   下载走库里的 key，不受影响。）
+     */
     public String tempKey(UUID skillId, UUID versionId) {
-        return "tmp/%s/%s/%s.tar.gz".formatted(skillId, versionId, UUID.randomUUID());
+        return "tmp/%s/%s/%s.zip".formatted(skillId, versionId, UUID.randomUUID());
     }
 
     public String finalKey(UUID skillId, String version, String sha256) {
-        return "%s/%s/%s.tar.gz".formatted(skillId, version, sha256);
+        return "%s/%s/%s.zip".formatted(skillId, version, sha256);
     }
 
     /**
