@@ -8,6 +8,12 @@ BIN="$ROOT/infra/bin"
 WORK="${TMPDIR:-/tmp}/skillmesh-minio-build"
 VERSION="v0.0.0-20260212201848-7aac2a2c5b7c"
 
+# .env 里有 SKILLMESH_GO_BIN（指向 windows-amd64 版 Go）。
+# 不加载它就会用系统的 32 位 Go，linker 链大二进制时 OOM。
+set -a
+[ -f "$ROOT/.env" ] && . "$ROOT/.env"
+set +a
+
 # 选择 Go 工具链。32 位工具链的 linker 链 amd64 大二进制会 OOM
 # （mapping output file failed: Not enough memory），因此用 SKILLMESH_GO_BIN
 # 指向一个 windows-amd64 版 Go。
