@@ -33,7 +33,7 @@ class FlywayMigrationTest {
     }
 
     @Test
-    void 迁移建出全部19张表() {
+    void 迁移建出全部20张表() {
         List<String> tables = jdbc.queryForList(
             "select table_name from information_schema.tables "
                 + "where table_schema = current_schema() and table_name not like 'flyway%' "
@@ -44,7 +44,8 @@ class FlywayMigrationTest {
             "skills", "skill_sources", "artifacts", "skill_versions", "skill_scans",
             "skill_reviews", "skill_permissions", "devices", "installations",
             "sync_states", "sync_changesets", "sync_conflicts", "upload_sessions",
-            "audit_events");
+            "audit_events", "org_invitations");
+        assertThat(tables).hasSize(20);
     }
 
     @Test
