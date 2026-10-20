@@ -15,8 +15,14 @@ import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.support.DatabaseCleaner;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -113,28 +119,45 @@ class MemberManagementTest {
     }
 
     @Test
-    void 最后一个owner不能被降级() {
+    void admin不能降级owner() {
         UUID orgId = createOrganizationQuietly("acme");
         CurrentUser admin = stranger();
         orgs.addOrgMember(owner, orgId, admin.id(), "admin");
 
-        // 组织里就 owner 一个 owner，admin 把他降级，组织就永久没有 owner 了
+        // 改 owner 身份只能由 owner 动手：admin 把 owner 降级，
+        // 等于做了只有 owner 该做的事。
         assertThatThrownBy(() -> orgs.updateOrgRole(admin, orgId, owner.id(), "admin"))
             .isInstanceOfSatisfying(ApiException.class, ex -> {
-                assertThat(ex.status()).isEqualTo(400);
-                assertThat(ex.code()).isEqualTo(ErrorCodes.VALIDATION_FAILED);
+                assertThat(ex.status()).isEqualTo(403);
+                assertThat(ex.code()).isEqualTo(ErrorCodes.FORBIDDEN);
             });
         assertThat(orgs.orgMembers(orgId))
             .anyMatch(m -> owner.id().equals(m.userId()) && "owner".equals(m.role()));
     }
 
     @Test
-    void 加成员时也不能把最后一个owner降级() {
+    void admin加成员时也不能改owner身份() {
         UUID orgId = createOrganizationQuietly("acme");
         CurrentUser admin = stranger();
         orgs.addOrgMember(owner, orgId, admin.id(), "admin");
 
+        // 加成员也会改角色，同一道闸得同样堵住
         assertThatThrownBy(() -> orgs.addOrgMember(admin, orgId, owner.id(), "member"))
+            .isInstanceOfSatisfying(ApiException.class, ex -> {
+                assertThat(ex.status()).isEqualTo(403);
+                assertThat(ex.code()).isEqualTo(ErrorCodes.FORBIDDEN);
+            });
+        assertThat(orgs.orgMembers(orgId))
+            .anyMatch(m -> owner.id().equals(m.userId()) && "owner".equals(m.role()));
+    }
+
+    @Test
+    void 最后一个owner不能被降级() {
+        UUID orgId = createOrganizationQuietly("acme");
+
+        // 组织里就一个 owner，他把自己降级——降了之后
+        // requireOwnerToGrantOwner 再也满足不了，组织永久失去 owner。
+        assertThatThrownBy(() -> orgs.addOrgMember(owner, orgId, owner.id(), "member"))
             .isInstanceOfSatisfying(ApiException.class, ex -> {
                 assertThat(ex.status()).isEqualTo(400);
                 assertThat(ex.code()).isEqualTo(ErrorCodes.VALIDATION_FAILED);
@@ -210,6 +233,120 @@ class MemberManagementTest {
                 .content("{\"role\":\"superuser\"}"))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    void 跨组织的花名册看不见() throws Exception {
+        UUID orgA = createOrganization("acme");           // 调用者是 A 的 owner
+        UUID teamA = createTeam(orgA, "platform");
+        CurrentUser other = stranger();
+        UUID orgB = orgs.createOrganization(other, "beta", "Beta").getId();
+        UUID teamB = orgs.createTeam(other, orgB, "payments", "Payments", null).getId();
+        orgs.addTeamMember(other, teamB, other.id(), "member");
+
+        // B 的组织花名册：调用者不是 B 的成员
+        mockMvc.perform(get("/api/v1/organizations/{id}/members", orgB)
+                .header("Authorization", auth))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+        mockMvc.perform(get("/api/v1/organizations/{id}/teams/{tid}/members", orgB, teamB)
+                .header("Authorization", auth))
+            .andExpect(status().isNotFound());
+
+        // 拿 A 的组织 id 要 B 的团队花名册：团队不在 A 里，看不见
+        mockMvc.perform(get("/api/v1/organizations/{id}/teams/{tid}/members", orgA, teamB)
+                .header("Authorization", auth))
+            .andExpect(status().isNotFound());
+
+        // 写路径也得过团队归属这一道：同一个资源路径，读写答案要一致
+        mockMvc.perform(patch("/api/v1/organizations/{id}/teams/{tid}/members/{uid}",
+                orgA, teamB, other.id())
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"role\":\"viewer\"}"))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(delete("/api/v1/organizations/{id}/teams/{tid}/members/{uid}",
+                orgA, teamB, other.id())
+                .header("Authorization", auth))
+            .andExpect(status().isNotFound());
+        assertThat(orgs.teamMembers(teamB)).as("写路径被挡下，成员没被动").isNotEmpty();
+
+        // 对照：自己组织的团队花名册看得见
+        mockMvc.perform(get("/api/v1/organizations/{id}/teams/{tid}/members", orgA, teamA)
+                .header("Authorization", auth))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    void 非publisher不能建团队可见的Skill() throws Exception {
+        CurrentUser other = stranger();
+        UUID orgId = orgs.createOrganization(other, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(other, orgId, "platform", "Platform", null).getId();
+        orgs.addOrgMember(other, orgId, owner.id(), "member");   // 调用者只是 member
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", "sneaky-team", "name", "Sneaky", "description", "",
+                    "visibility", "team",
+                    "organization_id", orgId.toString(),
+                    "owner_team_id", teamId.toString()))))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    void 非publisher不能建组织可见的Skill() throws Exception {
+        CurrentUser other = stranger();
+        UUID orgId = orgs.createOrganization(other, "acme", "Acme").getId();
+        orgs.addOrgMember(other, orgId, owner.id(), "member");   // 调用者只是 member
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", "sneaky-org", "name", "Sneaky", "description", "",
+                    "visibility", "organization",
+                    "organization_id", orgId.toString()))))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    void 并发降级不会把owner降光() throws Exception {
+        UUID orgId = createOrganizationQuietly("acme");
+        CurrentUser second = stranger();
+        orgs.addOrgMember(owner, orgId, second.id(), "owner");
+
+        // 两个 owner 互相降级：不串行化的话两边都看到 ownerCount == 2，
+        // 各自降一个，组织就剩 0 个 owner——永久锁死。
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            Future<Boolean> a = pool.submit(() -> demote(start, owner, orgId, second.id()));
+            Future<Boolean> b = pool.submit(() -> demote(start, second, orgId, owner.id()));
+            start.countDown();
+            assertThat(List.of(a.get(20, TimeUnit.SECONDS), b.get(20, TimeUnit.SECONDS)))
+                .as("恰好一个降级成功，另一个被守卫挡下")
+                .containsExactlyInAnyOrder(true, false);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(orgs.orgMembers(orgId))
+            .filteredOn(m -> "owner".equals(m.role()))
+            .as("组织里还剩 owner").hasSize(1);
+    }
+
+    /** 降级成功返回 true，被守卫挡下返回 false。 */
+    private boolean demote(CountDownLatch start, CurrentUser actor, UUID orgId, UUID target) {
+        try {
+            start.await();
+            orgs.updateOrgRole(actor, orgId, target, "admin");
+            return true;
+        } catch (ApiException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private CurrentUser currentUser() throws Exception {

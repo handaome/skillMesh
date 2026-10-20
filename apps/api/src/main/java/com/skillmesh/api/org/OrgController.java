@@ -4,6 +4,7 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.dto.MemberResponse;
+import com.skillmesh.api.org.dto.RoleRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -94,9 +95,9 @@ public class OrgController {
                                                 @PathVariable UUID teamId) {
         CurrentUser user = currentUserService.current(jwt);
         // 团队必须在这个组织里——否则换个组织 id 就能看别的团队的成员。
-        if (!orgs.teamInOrg(organizationId, teamId)
-            || (!orgs.isTeamMember(teamId, user.id())
-                && !orgs.isOrgMember(organizationId, user.id()))) {
+        orgs.requireTeamInOrg(organizationId, teamId);
+        if (!orgs.isTeamMember(teamId, user.id())
+            && !orgs.isOrgMember(organizationId, user.id())) {
             throw ApiException.notFound("团队");
         }
         return orgs.teamMembers(teamId).stream().map(OrgController::toResponse).toList();
@@ -117,6 +118,9 @@ public class OrgController {
                                                   @PathVariable UUID teamId,
                                                   @PathVariable UUID userId,
                                                   @Valid @RequestBody RoleRequest req) {
+        // 写路径也要校验团队属于该组织——GET 校验了、写入不校验，
+        // 同一资源路径会给出不一致的答案。
+        orgs.requireTeamInOrg(organizationId, teamId);
         orgs.updateTeamRole(currentUserService.current(jwt), teamId, userId, req.role());
         return ResponseEntity.noContent().build();
     }
@@ -126,6 +130,7 @@ public class OrgController {
                                                   @PathVariable UUID organizationId,
                                                   @PathVariable UUID teamId,
                                                   @PathVariable UUID userId) {
+        orgs.requireTeamInOrg(organizationId, teamId);
         orgs.removeTeamMember(currentUserService.current(jwt), teamId, userId);
         return ResponseEntity.noContent().build();
     }
@@ -158,6 +163,4 @@ public class OrgController {
     public record AddMemberRequest(
         @NotBlank String user_id,
         @NotBlank String role) {}
-
-    public record RoleRequest(@NotBlank String role) {}
 }

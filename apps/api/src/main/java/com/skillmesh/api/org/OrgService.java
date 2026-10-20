@@ -96,14 +96,22 @@ public class OrgService {
 
     @Transactional
     public void addOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
+        // 锁必须先拿：owner 计数是「读-判-写」，不串行化就会竞态。
+        lockOrgForRoleChange(organizationId);
         requireOrgRole(actor, organizationId, Set.of("owner", "admin"));
         requireRole(role, Roles.ORG_ROLES);
         requireOwnerToGrantOwner(actor, organizationId, role);
-        requireNotLastOwner(organizationId, memberId, role);
-        MembershipEntities.OrgMembership membership = new MembershipEntities.OrgMembership();
-        membership.setId(new MembershipEntities.OrgKey(organizationId, memberId));
+        MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
+        MembershipEntities.OrgMembership membership = orgMembers.findById(key).orElse(null);
+        // 加成员也会改角色（老成员会被覆盖），同样可能剥夺 owner 身份。
+        requireOwnerChangeAllowed(actor, organizationId,
+            membership == null ? null : membership.getRole(), role);
+        if (membership == null) {
+            membership = new MembershipEntities.OrgMembership();
+            membership.setId(key);
+            membership.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        }
         membership.setRole(role);
-        membership.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
         orgMembers.save(membership);
         audit.record(actor, "organization.membership.grant", "organization", organizationId,
             "success", Map.of("user_id", memberId.toString(), "role", role));
@@ -299,6 +307,8 @@ public class OrgService {
      */
     @Transactional
     public void updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
+        // 锁必须先拿：owner 计数是「读-判-写」，不串行化就会竞态。
+        lockOrgForRoleChange(organizationId);
         requireOrgAdmin(actor, organizationId);
         requireRole(role, Roles.ORG_ROLES);
         // 授予 owner 同样要现任 owner 在场——这个方法不走 upsertOrgMember，
@@ -310,7 +320,7 @@ public class OrgService {
         MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
         MembershipEntities.OrgMembership membership = orgMembers.findById(key)
             .orElseThrow(() -> ApiException.notFound("成员"));
-        requireNotLastOwner(organizationId, memberId, role);
+        requireOwnerChangeAllowed(actor, organizationId, membership.getRole(), role);
         membership.setRole(role);
         orgMembers.save(membership);
         audit.record(actor, "organization.membership.update", "organization", organizationId,
@@ -349,6 +359,16 @@ public class OrgService {
         return teams.findById(teamId)
             .map(team -> team.getOrganizationId().equals(organizationId))
             .orElse(false);
+    }
+
+    /**
+     * 团队必须属于这个组织。读路径和写路径都要过这一道，
+     * 否则同一个资源路径会给出不一致的答案。
+     */
+    public void requireTeamInOrg(UUID organizationId, UUID teamId) {
+        if (!teamInOrg(organizationId, teamId)) {
+            throw ApiException.notFound("团队");
+        }
     }
 
     // ponytail: 逐个查 users（N+1），成员表规模不大；量大时改成一次批量查。
@@ -396,28 +416,48 @@ public class OrgService {
     }
 
     /**
-     * 不能把组织里最后一个 owner 降级。
-     * 降了之后 requireOwnerToGrantOwner 再也满足不了——组织永久失去 owner。
+     * 改变 owner 身份（授予或剥夺）只能由 owner 动手；
+     * 且组织里最后一个 owner 不能被降级——降了之后
+     * requireOwnerToGrantOwner 再也满足不了，组织永久失去 owner。
      *
-     * 两个 owner 时降掉一个是允许的：还剩一个 owner 能任命人。
+     * currentRole 由调用方传入：调用方已经把这行读出来了，
+     * 这里再查一遍只会拿到可能过期的值。
      */
-    private void requireNotLastOwner(UUID organizationId, UUID memberId, String role) {
-        if ("owner".equals(role)) {
+    private void requireOwnerChangeAllowed(CurrentUser actor, UUID organizationId,
+                                           String currentRole, String newRole) {
+        boolean touchesOwnership = "owner".equals(currentRole) || "owner".equals(newRole);
+        if (!touchesOwnership) {
             return;
         }
-        boolean isOwner = orgMembers.findById(new MembershipEntities.OrgKey(organizationId, memberId))
-            .map(membership -> "owner".equals(membership.getRole()))
-            .orElse(false);
-        if (!isOwner) {
-            return;
+        if (!hasOrgRole(actor, organizationId, Set.of("owner"))) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织 owner 能改变 owner 身份");
         }
-        long ownerCount = orgMembers.findByIdOrganizationId(organizationId).stream()
-            .filter(membership -> "owner".equals(membership.getRole()))
-            .count();
-        if (ownerCount <= 1) {
+        if ("owner".equals(currentRole) && !"owner".equals(newRole)
+            && ownerCount(organizationId) <= 1) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "不能降级组织里唯一的 owner");
         }
+    }
+
+    /** 组织里 owner 角色的成员数。 */
+    private long ownerCount(UUID organizationId) {
+        return orgMembers.findByIdOrganizationId(organizationId).stream()
+            .filter(membership -> "owner".equals(membership.getRole()))
+            .count();
+    }
+
+    /**
+     * 锁住组织行（SELECT ... FOR UPDATE）：组织内的角色变更串行化。
+     *
+     * owner 计数是「读-判-写」，不串行化的话两个并发降级都能看到 ownerCount == 2，
+     * 各自降一个，组织就剩 0 个 owner——永久锁死。
+     *
+     * 必须是事务里的第一条语句：成员行一旦进了持久化上下文，
+     * 锁之后的读还是旧值，判断就建立在陈旧数据上了。
+     */
+    private void lockOrgForRoleChange(UUID organizationId) {
+        // 组织不存在就当没锁住——后面的权限校验会给出 403。
+        organizations.findByIdForUpdate(organizationId);
     }
 
     /** 我在某个组织里的身份。 */

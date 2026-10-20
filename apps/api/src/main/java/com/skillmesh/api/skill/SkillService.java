@@ -181,6 +181,9 @@ public class SkillService {
     /**
      * 创建时的可见性校验：team 必须挂到组织下的某个团队，
      * 组织内可见需要组织成员身份（不能凭空建一个没人看得到的团队 Skill）。
+     *
+     * 团队/组织可见还要 publisher 及以上——CLI 的检查只是建议，
+     * 直接打 API 也得有服务端这道闸。
      */
     private void requireVisibilitySupported(CurrentUser user, CreateSkillRequest req) {
         String visibility = req.visibility();
@@ -198,9 +201,32 @@ public class SkillService {
         if (!orgs.isOrgMember(req.organization_id(), user.id())) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "你不是该组织的成员");
         }
-        if ("team".equals(visibility) && req.owner_team_id() == null) {
-            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "team 可见必须指定 owner_team_id");
+        if ("team".equals(visibility)) {
+            if (req.owner_team_id() == null) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                    "team 可见必须指定 owner_team_id");
+            }
+            // 团队得挂在同一个组织下，否则「组织角色」与「团队角色」是两回事，
+            // 下面的 publisher 判断就无从谈起。
+            if (!orgs.teamInOrg(req.organization_id(), req.owner_team_id())) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                    "owner_team_id 必须属于 organization_id");
+            }
+            // 往团队发布是团队范围内的动作，判的是发起人在这个团队里的角色。
+            // roleIn 优先取团队角色，没有才退回组织角色——正好符合语义。
+            String role = orgs.roleIn(req.organization_id(), req.owner_team_id(), user.id());
+            if (!OrgService.roleAtLeast(role, "publisher")) {
+                throw new ApiException(403, ErrorCodes.FORBIDDEN,
+                    "在该团队里需要 publisher 及以上角色才能发布");
+            }
+        }
+        if ("organization".equals(visibility)) {
+            // 发到组织是组织范围内的动作，判的是组织角色。
+            String role = orgs.roleIn(req.organization_id(), null, user.id());
+            if (!OrgService.roleAtLeast(role, "publisher")) {
+                throw new ApiException(403, ErrorCodes.FORBIDDEN,
+                    "在该组织里需要 publisher 及以上角色才能发布");
+            }
         }
     }
 
