@@ -37,6 +37,8 @@ skillmesh:
     access-key: ${SM_MINIO_ACCESS_KEY}
     secret-key: ${SM_MINIO_SECRET_KEY}
     bucket: ${SM_MINIO_BUCKET}
+  web:
+    base-url: ${SM_WEB_BASE_URL:http://127.0.0.1:5174}
 
 management:
   endpoints:

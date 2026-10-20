@@ -1,0 +1,117 @@
+package com.skillmesh.api.invite;
+
+import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.invite.dto.AcceptInvitationResponse;
+import com.skillmesh.api.invite.dto.CreateInvitationRequest;
+import com.skillmesh.api.invite.dto.InvitationResponse;
+import com.skillmesh.api.invite.dto.InvitationSummary;
+import com.skillmesh.api.org.OrganizationEntity;
+import com.skillmesh.api.org.TeamEntity;
+import jakarta.validation.Valid;
+import java.net.URI;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/** 邀请端点（设计文档 §10 团队管理）。 */
+@RestController
+@RequestMapping("/api/v1")
+public class InvitationController {
+
+    private final InvitationService invitations;
+    private final CurrentUserService currentUserService;
+
+    public InvitationController(InvitationService invitations, CurrentUserService currentUserService) {
+        this.invitations = invitations;
+        this.currentUserService = currentUserService;
+    }
+
+    @PostMapping("/organizations/{organizationId}/invitations")
+    public ResponseEntity<InvitationResponse> create(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable UUID organizationId,
+            @Valid @RequestBody(required = false) CreateInvitationRequest req) {
+        CurrentUser user = currentUserService.current(jwt);
+        CreateInvitationRequest body = req == null
+            ? new CreateInvitationRequest(null, "member", "member", null) : req;
+        InvitationService.Created created = invitations.create(user, organizationId,
+            body.team_id(), body.org_role(), body.team_role(), body.subject());
+        InvitationEntity entity = created.invitation();
+        OrganizationEntity org = invitations.organizationOf(entity);
+        TeamEntity team = invitations.teamOf(entity);
+        return ResponseEntity.created(URI.create("/api/v1/invitations/" + created.id()))
+            .body(new InvitationResponse(entity.getId(),
+                org == null ? null : org.getSlug(),
+                org == null ? null : org.getName(),
+                team == null ? null : team.getSlug(),
+                team == null ? null : team.getName(),
+                entity.getOrgRole(), entity.getTeamRole(), entity.getExpiresAt(),
+                invitations.inviteUrl(created.token()), created.token()));
+    }
+
+    @GetMapping("/organizations/{organizationId}/invitations")
+    public List<InvitationSummary> list(@AuthenticationPrincipal Jwt jwt,
+                                        @PathVariable UUID organizationId) {
+        CurrentUser user = currentUserService.current(jwt);
+        invitations.requireOrgMember(user, organizationId);
+        return invitations.list(organizationId).stream().map(entity -> {
+            OrganizationEntity org = invitations.organizationOf(entity);
+            TeamEntity team = invitations.teamOf(entity);
+            return new InvitationSummary(entity.getId(),
+                org == null ? null : org.getName(),
+                team == null ? null : team.getName(),
+                entity.getOrgRole(), entity.getTeamRole(),
+                effectiveStatus(entity), entity.getExpiresAt(), entity.getCreatedAt());
+        }).toList();
+    }
+
+    @DeleteMapping("/organizations/{organizationId}/invitations/{invitationId}")
+    public ResponseEntity<Void> revoke(@AuthenticationPrincipal Jwt jwt,
+                                       @PathVariable UUID organizationId,
+                                       @PathVariable UUID invitationId) {
+        invitations.revoke(currentUserService.current(jwt), organizationId, invitationId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** 公开：没登录的人也要看得懂这份邀请是什么。 */
+    @GetMapping("/invitations/{token}")
+    public InvitationSummary publicView(@PathVariable String token) {
+        InvitationEntity entity = invitations.summary(token);
+        OrganizationEntity org = invitations.organizationOf(entity);
+        TeamEntity team = invitations.teamOf(entity);
+        return new InvitationSummary(entity.getId(),
+            org == null ? null : org.getName(),
+            team == null ? null : team.getName(),
+            entity.getOrgRole(), entity.getTeamRole(),
+            effectiveStatus(entity), entity.getExpiresAt(), entity.getCreatedAt());
+    }
+
+    @PostMapping("/invitations/{token}/accept")
+    public AcceptInvitationResponse accept(@AuthenticationPrincipal Jwt jwt,
+                                           @PathVariable String token) {
+        InvitationService.Accepted accepted = invitations.accept(currentUserService.current(jwt), token);
+        return new AcceptInvitationResponse(accepted.invitationId(), accepted.organizationId(),
+            accepted.teamId(), accepted.orgRole(), accepted.teamRole(), "已加入");
+    }
+
+    /** 过期不改库状态，按时间算。 */
+    private static String effectiveStatus(InvitationEntity entity) {
+        if ("pending".equals(entity.getStatus())
+            && entity.getExpiresAt().isBefore(OffsetDateTime.now(ZoneOffset.UTC))) {
+            return "expired";
+        }
+        return entity.getStatus();
+    }
+}

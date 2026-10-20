@@ -199,6 +199,62 @@ public class OrgService {
         return teams.findByOrganizationIdOrderByCreatedAtAsc(organizationId);
     }
 
+    /** 组织管理员以上才能管成员与邀请。 */
+    public void requireOrgAdmin(CurrentUser user, UUID organizationId) {
+        requireOrgRole(user, organizationId, Set.of("owner", "admin"));
+    }
+
+    /** 团队管理员：组织 owner/admin 或团队 admin 都能管团队成员。 */
+    public void requireTeamAdmin(CurrentUser user, UUID teamId) {
+        TeamEntity team = teams.findById(teamId).orElseThrow(() -> ApiException.notFound("团队"));
+        if (hasOrgRole(user, team.getOrganizationId(), Set.of("owner", "admin"))) {
+            return;
+        }
+        boolean teamAdmin = teamMembers.findById(new MembershipEntities.TeamKey(teamId, user.id()))
+            .map(MembershipEntities.TeamMembership::getRole)
+            .filter("admin"::equals)
+            .isPresent();
+        if (!teamAdmin) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织或团队管理员能管成员");
+        }
+    }
+
+    /**
+     * 落位成员关系：已存在就改角色，不报冲突。
+     * 邀请可以被重复接受，所以这里必须是 upsert 而不是 insert。
+     */
+    @Transactional
+    public void upsertOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
+        requireRole(role, Set.of("owner", "admin", "publisher", "reviewer", "member", "viewer"));
+        MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
+        MembershipEntities.OrgMembership membership = orgMembers.findById(key).orElseGet(() -> {
+            MembershipEntities.OrgMembership created = new MembershipEntities.OrgMembership();
+            created.setId(key);
+            created.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            return created;
+        });
+        membership.setRole(role);
+        orgMembers.save(membership);
+        audit.record(actor, "organization.membership.grant", "organization", organizationId,
+            "success", Map.of("user_id", memberId.toString(), "role", role));
+    }
+
+    @Transactional
+    public void upsertTeamMember(CurrentUser actor, UUID teamId, UUID memberId, String role) {
+        requireRole(role, Set.of("admin", "publisher", "reviewer", "member", "viewer"));
+        MembershipEntities.TeamKey key = new MembershipEntities.TeamKey(teamId, memberId);
+        MembershipEntities.TeamMembership membership = teamMembers.findById(key).orElseGet(() -> {
+            MembershipEntities.TeamMembership created = new MembershipEntities.TeamMembership();
+            created.setId(key);
+            created.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            return created;
+        });
+        membership.setRole(role);
+        teamMembers.save(membership);
+        audit.record(actor, "team.membership.grant", "team", teamId,
+            "success", Map.of("user_id", memberId.toString(), "role", role));
+    }
+
     private void requireOrgRole(CurrentUser user, UUID organizationId, Set<String> allowed) {
         if (!hasOrgRole(user, organizationId, allowed)) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "组织权限不足");

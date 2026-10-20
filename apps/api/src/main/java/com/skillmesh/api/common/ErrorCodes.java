@@ -10,6 +10,7 @@ public final class ErrorCodes {
     public static final String DIGEST_MISMATCH = "DIGEST_MISMATCH";
     public static final String ARTIFACT_MISSING = "ARTIFACT_MISSING";
     public static final String SLUG_TAKEN = "SLUG_TAKEN";
+    public static final String INVITATION_INVALID = "INVITATION_INVALID";
     public static final String INTERNAL = "INTERNAL";
 
     private ErrorCodes() {}
