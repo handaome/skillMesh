@@ -51,6 +51,9 @@
 
 ## 踩到的坑
 
+0. **验收用的技能目录没有进仓库**：`skills/java-debug/` 与 `skills/java-debug-v2/` 是本次验收
+   临时造的（含 `SKILL.md`），只用于喂给 `skillmesh publish`，**未提交**（plan 的 Step 7
+   只让提交 3 个文件）。重跑第 6 步前得先自己造一个含 `SKILL.md` 的目录。
 1. **Keycloak 的 realm 导入不覆盖已存在的用户**——改了 `realm-skillmesh.json` 之后，
    已经跑过的本机实例里还是没有 `dev-user2`。这就是 `infra/scripts/add-second-user.sh` 存在的理由。
 2. **邀请的 `subject` 字段比的是 OIDC 的 `sub`（一串 UUID），不是用户名**。第一次验收时给邀请传了
