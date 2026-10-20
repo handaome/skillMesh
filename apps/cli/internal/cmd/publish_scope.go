@@ -1,0 +1,167 @@
+package cmd
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
+)
+
+// errTeamNeedsOrg 是「给了 --team 没给 --org」的错误。
+var errTeamNeedsOrg = errors.New("指定 --team 时必须同时指定 --org")
+
+// publishScope 是发布到组织/团队时要带的 id 与可见性。
+type publishScope struct {
+	OrganizationID string
+	TeamID         string
+	Visibility     string
+}
+
+// findOrganization 按 slug 找组织。
+func findOrganization(orgs []apiclient.OrgMembership, slug string) (*apiclient.OrgMembership, error) {
+	for i := range orgs {
+		if orgs[i].Slug == slug {
+			return &orgs[i], nil
+		}
+	}
+	slugs := make([]string, 0, len(orgs))
+	for _, org := range orgs {
+		slugs = append(slugs, org.Slug)
+	}
+	return nil, fmt.Errorf("组织 %q 不存在或你不是成员，可选：%s",
+		slug, strings.Join(slugs, " / "))
+}
+
+// findTeam 按 slug 找团队。
+func findTeam(teams []apiclient.Team, slug string) (*apiclient.Team, error) {
+	for i := range teams {
+		if teams[i].Slug == slug {
+			return &teams[i], nil
+		}
+	}
+	slugs := make([]string, 0, len(teams))
+	for _, team := range teams {
+		slugs = append(slugs, team.Slug)
+	}
+	return nil, fmt.Errorf("团队 %q 不存在，可选：%s", slug, strings.Join(slugs, " / "))
+}
+
+// checkScopeFlags 校验 --org / --team 的组合：给了团队就必须同时给组织。
+func checkScopeFlags(orgSlug, teamSlug string) error {
+	if orgSlug == "" && teamSlug != "" {
+		return errTeamNeedsOrg
+	}
+	return nil
+}
+
+// checkVisibilityFlag 校验显式给的 --visibility 与 --org/--team 是否自洽。
+// requested 是用户显式给的 --visibility，没给就是空串（默认值不算）。
+func checkVisibilityFlag(orgSlug, teamSlug, requested string) error {
+	if requested == "" {
+		return nil
+	}
+	if orgSlug == "" {
+		if requested == "team" || requested == "organization" {
+			return fmt.Errorf("可见性 %q 需要配合 --org（团队可见还要 --team）", requested)
+		}
+		return nil
+	}
+	if requested == "team" && teamSlug == "" {
+		return errors.New("可见性 team 需要同时指定 --team")
+	}
+	want := "organization"
+	if teamSlug != "" {
+		want = "team"
+	}
+	if requested != want {
+		return fmt.Errorf("可见性 %q 与 --org/--team 冲突：指定了归属，可见性只能是 %q", requested, want)
+	}
+	return nil
+}
+
+// resolvePublishScope 定出发布范围：org 已经查好，teams 是该组织的团队列表。
+//
+// 指定团队 → visibility=team（组织与团队 id 都要带）；
+// 只指定组织 → visibility=organization；都不指定 → 用原可见性。
+func resolvePublishScope(org *apiclient.OrgMembership, teams []apiclient.Team,
+	teamSlug, visibility string) (publishScope, error) {
+
+	if org == nil {
+		if teamSlug != "" {
+			return publishScope{}, errTeamNeedsOrg
+		}
+		return publishScope{Visibility: visibility}, nil
+	}
+	if !roleAtLeast(org.Role, "publisher") {
+		return publishScope{}, fmt.Errorf(
+			"你在组织 %q 的角色是 %s，发布到组织/团队需要 publisher 及以上", org.Slug, org.Role)
+	}
+	scope := publishScope{OrganizationID: org.ID, Visibility: "organization"}
+	if teamSlug == "" {
+		return scope, nil
+	}
+	team, err := findTeam(teams, teamSlug)
+	if err != nil {
+		return publishScope{}, err
+	}
+	if team.Status != "active" {
+		return publishScope{}, fmt.Errorf("团队 %q 不是 active 状态（当前 %q），不能作为发布目标",
+			teamSlug, team.Status)
+	}
+	scope.TeamID = team.ID
+	scope.Visibility = "team"
+	return scope, nil
+}
+
+// loadPublishScope 取我可见的组织与团队，再解析成发布范围。
+func loadPublishScope(ctx context.Context, client *apiclient.Client,
+	orgSlug, teamSlug, visibility string) (publishScope, error) {
+
+	if err := checkScopeFlags(orgSlug, teamSlug); err != nil {
+		return publishScope{}, err
+	}
+	if orgSlug == "" {
+		return publishScope{Visibility: visibility}, nil
+	}
+	me, err := client.Me(ctx)
+	if err != nil {
+		return publishScope{}, err
+	}
+	org, err := findOrganization(me.Organizations, orgSlug)
+	if err != nil {
+		return publishScope{}, err
+	}
+	var teams []apiclient.Team
+	if teamSlug != "" {
+		// 只有发到团队才需要团队列表：组织可见不用多打这一趟，
+		// 团队接口挂了也不该把「发到组织」一起拖下水。
+		teams, err = client.Teams(ctx, org.ID)
+		if err != nil {
+			return publishScope{}, err
+		}
+	}
+	return resolvePublishScope(org, teams, teamSlug, visibility)
+}
+
+// checkExistingSkill 已有 Skill 的归属与可见性都改不动——
+// 服务端 PATCH /skills/{id} 只收名称、描述、标签，slug 与可见性不收。
+// 带着新要求去发布只会让人以为生效了，直接说清楚。
+func checkExistingSkill(skill apiclient.Skill, scope publishScope, requested string) error {
+	if scope.OrganizationID != "" || scope.TeamID != "" {
+		return fmt.Errorf("Skill %q 已存在，--org/--team 只在新建时生效", skill.Slug)
+	}
+	if requested != "" && requested != skill.Visibility {
+		return fmt.Errorf("Skill %q 已存在，可见性改不了（现在是 %s）", skill.Slug, skill.Visibility)
+	}
+	return nil
+}
+
+// optionalString 空串转 nil——omitempty 才知道不传。
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
