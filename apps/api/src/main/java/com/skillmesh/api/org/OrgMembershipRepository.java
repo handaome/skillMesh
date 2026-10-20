@@ -8,4 +8,6 @@ public interface OrgMembershipRepository
     extends JpaRepository<MembershipEntities.OrgMembership, MembershipEntities.OrgKey> {
 
     List<MembershipEntities.OrgMembership> findByIdUserId(UUID userId);
+
+    List<MembershipEntities.OrgMembership> findByIdOrganizationId(UUID organizationId);
 }

@@ -3,6 +3,7 @@ package com.skillmesh.api.org;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.org.dto.MemberResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -14,7 +15,9 @@ import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -75,6 +78,63 @@ public class OrgController {
         return orgs.teamsOf(organizationId).stream().map(OrgController::toResponse).toList();
     }
 
+    @GetMapping("/organizations/{organizationId}/members")
+    public List<MemberResponse> listOrgMembers(@AuthenticationPrincipal Jwt jwt,
+                                               @PathVariable UUID organizationId) {
+        CurrentUser user = currentUserService.current(jwt);
+        if (!orgs.isOrgMember(organizationId, user.id())) {
+            throw ApiException.notFound("组织");
+        }
+        return orgs.orgMembers(organizationId).stream().map(OrgController::toResponse).toList();
+    }
+
+    @GetMapping("/organizations/{organizationId}/teams/{teamId}/members")
+    public List<MemberResponse> listTeamMembers(@AuthenticationPrincipal Jwt jwt,
+                                                @PathVariable UUID organizationId,
+                                                @PathVariable UUID teamId) {
+        CurrentUser user = currentUserService.current(jwt);
+        // 团队必须在这个组织里——否则换个组织 id 就能看别的团队的成员。
+        if (!orgs.teamInOrg(organizationId, teamId)
+            || (!orgs.isTeamMember(teamId, user.id())
+                && !orgs.isOrgMember(organizationId, user.id()))) {
+            throw ApiException.notFound("团队");
+        }
+        return orgs.teamMembers(teamId).stream().map(OrgController::toResponse).toList();
+    }
+
+    @PatchMapping("/organizations/{organizationId}/members/{userId}")
+    public ResponseEntity<Void> updateOrgMember(@AuthenticationPrincipal Jwt jwt,
+                                                 @PathVariable UUID organizationId,
+                                                 @PathVariable UUID userId,
+                                                 @Valid @RequestBody RoleRequest req) {
+        orgs.updateOrgRole(currentUserService.current(jwt), organizationId, userId, req.role());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PatchMapping("/organizations/{organizationId}/teams/{teamId}/members/{userId}")
+    public ResponseEntity<Void> updateTeamMember(@AuthenticationPrincipal Jwt jwt,
+                                                  @PathVariable UUID organizationId,
+                                                  @PathVariable UUID teamId,
+                                                  @PathVariable UUID userId,
+                                                  @Valid @RequestBody RoleRequest req) {
+        orgs.updateTeamRole(currentUserService.current(jwt), teamId, userId, req.role());
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/organizations/{organizationId}/teams/{teamId}/members/{userId}")
+    public ResponseEntity<Void> removeTeamMember(@AuthenticationPrincipal Jwt jwt,
+                                                  @PathVariable UUID organizationId,
+                                                  @PathVariable UUID teamId,
+                                                  @PathVariable UUID userId) {
+        orgs.removeTeamMember(currentUserService.current(jwt), teamId, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    private static MemberResponse toResponse(OrgService.Member member) {
+        return new MemberResponse(member.userId(), member.displayName(), member.email(),
+            member.role(), member.joinedAt());
+    }
+
     private static Map<String, Object> toResponse(OrganizationEntity org) {
         return Map.of("id", org.getId().toString(), "slug", org.getSlug(),
             "name", org.getName(), "status", org.getStatus());
@@ -98,4 +158,6 @@ public class OrgController {
     public record AddMemberRequest(
         @NotBlank String user_id,
         @NotBlank String role) {}
+
+    public record RoleRequest(@NotBlank String role) {}
 }

@@ -2,6 +2,8 @@ package com.skillmesh.api.org;
 
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.auth.UserEntity;
+import com.skillmesh.api.auth.UserRepository;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import java.time.OffsetDateTime;
@@ -29,15 +31,17 @@ public class OrgService {
     private final OrgMembershipRepository orgMembers;
     private final TeamMembershipRepository teamMembers;
     private final AuditService audit;
+    private final UserRepository users;
 
     public OrgService(OrgRepository organizations, TeamRepository teams,
                       OrgMembershipRepository orgMembers, TeamMembershipRepository teamMembers,
-                      AuditService audit) {
+                      AuditService audit, UserRepository users) {
         this.organizations = organizations;
         this.teams = teams;
         this.orgMembers = orgMembers;
         this.teamMembers = teamMembers;
         this.audit = audit;
+        this.users = users;
     }
 
     @Transactional
@@ -95,6 +99,7 @@ public class OrgService {
         requireOrgRole(actor, organizationId, Set.of("owner", "admin"));
         requireRole(role, Roles.ORG_ROLES);
         requireOwnerToGrantOwner(actor, organizationId, role);
+        requireNotLastOwner(organizationId, memberId, role);
         MembershipEntities.OrgMembership membership = new MembershipEntities.OrgMembership();
         membership.setId(new MembershipEntities.OrgKey(organizationId, memberId));
         membership.setRole(role);
@@ -270,6 +275,94 @@ public class OrgService {
             "success", Map.of("user_id", memberId.toString(), "role", role));
     }
 
+    /** 组织成员列表，带上人的显示名。 */
+    public List<Member> orgMembers(UUID organizationId) {
+        return orgMembers.findByIdOrganizationId(organizationId).stream()
+            .map(membership -> toMember(membership.getId().getUserId(),
+                membership.getRole(), membership.getJoinedAt()))
+            .toList();
+    }
+
+    /** 团队成员列表。 */
+    public List<Member> teamMembers(UUID teamId) {
+        return teamMembers.findByIdTeamId(teamId).stream()
+            .map(membership -> toMember(membership.getId().getUserId(),
+                membership.getRole(), membership.getJoinedAt()))
+            .toList();
+    }
+
+    /**
+     * 改组织角色。
+     *
+     * 不走 upsertOrgMember：那个只升不降，这里就是要能降。
+     * 所以 owner 守卫得自己调一次，指望不上上游。
+     */
+    @Transactional
+    public void updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
+        requireOrgAdmin(actor, organizationId);
+        requireRole(role, Roles.ORG_ROLES);
+        // 授予 owner 同样要现任 owner 在场——这个方法不走 upsertOrgMember，
+        // 所以必须自己调一次守卫，不能指望上游覆盖。
+        requireOwnerToGrantOwner(actor, organizationId, role);
+        if (actor.id().equals(memberId)) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "不能改自己的组织角色");
+        }
+        MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
+        MembershipEntities.OrgMembership membership = orgMembers.findById(key)
+            .orElseThrow(() -> ApiException.notFound("成员"));
+        requireNotLastOwner(organizationId, memberId, role);
+        membership.setRole(role);
+        orgMembers.save(membership);
+        audit.record(actor, "organization.membership.update", "organization", organizationId,
+            "success", Map.of("user_id", memberId.toString(), "role", role));
+    }
+
+    /** 改团队角色。 */
+    @Transactional
+    public void updateTeamRole(CurrentUser actor, UUID teamId, UUID memberId, String role) {
+        requireTeamAdmin(actor, teamId);
+        requireRole(role, Roles.TEAM_ROLES);
+        MembershipEntities.TeamKey key = new MembershipEntities.TeamKey(teamId, memberId);
+        MembershipEntities.TeamMembership membership = teamMembers.findById(key)
+            .orElseThrow(() -> ApiException.notFound("成员"));
+        membership.setRole(role);
+        teamMembers.save(membership);
+        audit.record(actor, "team.membership.update", "team", teamId,
+            "success", Map.of("user_id", memberId.toString(), "role", role));
+    }
+
+    /** 移出团队。不动组织成员身份——两套身份是独立的。 */
+    @Transactional
+    public void removeTeamMember(CurrentUser actor, UUID teamId, UUID memberId) {
+        requireTeamAdmin(actor, teamId);
+        MembershipEntities.TeamKey key = new MembershipEntities.TeamKey(teamId, memberId);
+        if (teamMembers.findById(key).isEmpty()) {
+            throw ApiException.notFound("成员");
+        }
+        teamMembers.deleteById(key);
+        audit.record(actor, "team.membership.remove", "team", teamId,
+            "success", Map.of("user_id", memberId.toString()));
+    }
+
+    /** 这个团队是不是这个组织的？换个组织 id 就能看别人团队成员，那不行。 */
+    public boolean teamInOrg(UUID organizationId, UUID teamId) {
+        return teams.findById(teamId)
+            .map(team -> team.getOrganizationId().equals(organizationId))
+            .orElse(false);
+    }
+
+    // ponytail: 逐个查 users（N+1），成员表规模不大；量大时改成一次批量查。
+    private Member toMember(UUID userId, String role, OffsetDateTime joinedAt) {
+        String displayName = userId.toString();
+        String email = null;
+        UserEntity user = users.findById(userId).orElse(null);
+        if (user != null) {
+            displayName = user.getDisplayName();
+            email = user.getEmail();
+        }
+        return new Member(userId, displayName, email, role, joinedAt);
+    }
+
     private void requireOrgRole(CurrentUser user, UUID organizationId, Set<String> allowed) {
         if (!hasOrgRole(user, organizationId, allowed)) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "组织权限不足");
@@ -302,6 +395,35 @@ public class OrgService {
         }
     }
 
+    /**
+     * 不能把组织里最后一个 owner 降级。
+     * 降了之后 requireOwnerToGrantOwner 再也满足不了——组织永久失去 owner。
+     *
+     * 两个 owner 时降掉一个是允许的：还剩一个 owner 能任命人。
+     */
+    private void requireNotLastOwner(UUID organizationId, UUID memberId, String role) {
+        if ("owner".equals(role)) {
+            return;
+        }
+        boolean isOwner = orgMembers.findById(new MembershipEntities.OrgKey(organizationId, memberId))
+            .map(membership -> "owner".equals(membership.getRole()))
+            .orElse(false);
+        if (!isOwner) {
+            return;
+        }
+        long ownerCount = orgMembers.findByIdOrganizationId(organizationId).stream()
+            .filter(membership -> "owner".equals(membership.getRole()))
+            .count();
+        if (ownerCount <= 1) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "不能降级组织里唯一的 owner");
+        }
+    }
+
     /** 我在某个组织里的身份。 */
     public record Membership(UUID id, String slug, String name, String role) {}
+
+    /** 成员列表项。 */
+    public record Member(UUID userId, String displayName, String email, String role,
+                         OffsetDateTime joinedAt) {}
 }

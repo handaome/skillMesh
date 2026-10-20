@@ -48,6 +48,10 @@ final class MembershipEntities {
             this.role = role;
         }
 
+        public OffsetDateTime getJoinedAt() {
+            return joinedAt;
+        }
+
         public void setJoinedAt(OffsetDateTime joinedAt) {
             this.joinedAt = joinedAt;
         }
@@ -81,6 +85,10 @@ final class MembershipEntities {
 
         public void setRole(String role) {
             this.role = role;
+        }
+
+        public OffsetDateTime getJoinedAt() {
+            return joinedAt;
         }
 
         public void setJoinedAt(OffsetDateTime joinedAt) {
