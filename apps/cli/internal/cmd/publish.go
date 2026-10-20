@@ -15,9 +15,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// publishVisibility 是 v1 放开的可见性。
-// team / organization 需要组织与成员概念，v2 才有。
-var publishVisibility = []string{"private", "public"}
+// publishVisibility 是发布时允许的可见性。
+// team / organization 需要组织与成员概念，v2 起可用。
+var publishVisibility = []string{"private", "public", "team", "organization"}
 
 // publishTarget 是待发布的一个 Skill。
 type publishTarget struct {
@@ -28,7 +28,8 @@ type publishTarget struct {
 func newPublishCmd() *cobra.Command {
 	var (
 		version, visibility, channel, slug, name, description string
-		all, dryRun, skipSecretScan                           bool
+		orgSlug, teamSlug                                   string
+		all, dryRun, skipSecretScan                         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "publish <path>",
@@ -36,7 +37,7 @@ func newPublishCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !contains(publishVisibility, visibility) {
-				return fmt.Errorf("v1 只支持可见性 %s，收到 %q",
+				return fmt.Errorf("只支持可见性 %s，收到 %q",
 					strings.Join(publishVisibility, " / "), visibility)
 			}
 			targets, err := locatePublishTargets(args[0], all)
@@ -44,6 +45,10 @@ func newPublishCmd() *cobra.Command {
 				return err
 			}
 			client, err := newClient()
+			if err != nil {
+				return err
+			}
+			scope, err := loadPublishScope(cmd.Context(), client, orgSlug, teamSlug, visibility)
 			if err != nil {
 				return err
 			}
@@ -56,6 +61,7 @@ func newPublishCmd() *cobra.Command {
 				Description:    description,
 				DryRun:         dryRun,
 				SkipSecretScan: skipSecretScan,
+				Scope:          scope,
 			}
 			published, failed := 0, 0
 			for _, target := range targets {
@@ -77,11 +83,13 @@ func newPublishCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&version, "version", "", "版本号，不填则在已有版本上累加 patch 位")
-	cmd.Flags().StringVar(&visibility, "visibility", "private", "可见性：private 或 public")
+	cmd.Flags().StringVar(&visibility, "visibility", "private", "可见性：private / public / team / organization")
 	cmd.Flags().StringVar(&channel, "channel", "stable", "发布通道：stable / beta / dev")
 	cmd.Flags().StringVar(&slug, "slug", "", "覆盖 slug，默认取目录名")
 	cmd.Flags().StringVar(&name, "name", "", "覆盖展示名，默认取 SKILL.md frontmatter 的 name")
 	cmd.Flags().StringVar(&description, "description", "", "覆盖描述，默认取 SKILL.md frontmatter 的 description")
+	cmd.Flags().StringVar(&orgSlug, "org", "", "发布到的组织（slug）")
+	cmd.Flags().StringVar(&teamSlug, "team", "", "发布到的团队（slug），需同时指定 --org")
 	cmd.Flags().BoolVar(&all, "all", false, "发布目录树里的全部 Skill")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只走完流程不真的发布")
 	cmd.Flags().BoolVar(&skipSecretScan, "skip-secret-scan", false,
@@ -99,6 +107,17 @@ type publishOptions struct {
 	Description    string
 	DryRun         bool
 	SkipSecretScan bool
+	Scope          publishScope
+}
+
+// visibilityFor 定出这次发布的可见性。
+// 指定了 --org/--team 时 Scope 里已经定了（可能是 team / organization）；
+// sync 这类内部调用不给 Scope，就用原来的 Visibility。
+func (o publishOptions) visibilityFor() string {
+	if o.Scope.Visibility != "" {
+		return o.Scope.Visibility
+	}
+	return o.Visibility
 }
 
 // publishResult 是一次发布的结果。
@@ -108,6 +127,117 @@ type publishResult struct {
 	SkillID   string
 	Version   string
 	SizeBytes int64
+}
+
+// publishScope 是发布到团队时要带的组织与团队 id。
+type publishScope struct {
+	OrganizationID string
+	TeamID         string
+	Visibility     string
+}
+
+// findOrganization 按 slug 找组织。
+func findOrganization(orgs []apiclient.OrgMembership, slug string) (*apiclient.OrgMembership, error) {
+	for i := range orgs {
+		if orgs[i].Slug == slug {
+			return &orgs[i], nil
+		}
+	}
+	slugs := make([]string, 0, len(orgs))
+	for _, org := range orgs {
+		slugs = append(slugs, org.Slug)
+	}
+	return nil, fmt.Errorf("组织 %q 不存在或你不是成员，可选：%s",
+		slug, strings.Join(slugs, " / "))
+}
+
+// findTeam 按 slug 找团队。
+func findTeam(teams []apiclient.Team, slug string) (*apiclient.Team, error) {
+	for i := range teams {
+		if teams[i].Slug == slug {
+			return &teams[i], nil
+		}
+	}
+	slugs := make([]string, 0, len(teams))
+	for _, team := range teams {
+		slugs = append(slugs, team.Slug)
+	}
+	return nil, fmt.Errorf("团队 %q 不存在，可选：%s", slug, strings.Join(slugs, " / "))
+}
+
+// checkScopeFlags 校验 --org / --team 的组合：给了团队就必须同时给组织。
+func checkScopeFlags(orgSlug, teamSlug string) error {
+	if orgSlug == "" && teamSlug != "" {
+		return errors.New("指定 --team 时必须同时指定 --org")
+	}
+	return nil
+}
+
+// resolvePublishScope 把 --org/--team 的 slug 解析成 id，并定出可见性。
+//
+// 指定团队 → visibility=team（组织与团队 id 都要带）；
+// 只指定组织 → visibility=organization；都不指定 → 用原可见性。
+func resolvePublishScope(orgs []apiclient.OrgMembership, teams []apiclient.Team,
+	orgSlug, teamSlug, visibility string) (publishScope, error) {
+
+	if err := checkScopeFlags(orgSlug, teamSlug); err != nil {
+		return publishScope{}, err
+	}
+	if orgSlug == "" {
+		return publishScope{Visibility: visibility}, nil
+	}
+	org, err := findOrganization(orgs, orgSlug)
+	if err != nil {
+		return publishScope{}, err
+	}
+	if !roleAtLeast(org.Role, "publisher") {
+		return publishScope{}, fmt.Errorf(
+			"你在组织 %q 的角色是 %s，发布团队 Skill 需要 publisher 及以上", orgSlug, org.Role)
+	}
+	scope := publishScope{OrganizationID: org.ID, Visibility: "organization"}
+	if teamSlug == "" {
+		return scope, nil
+	}
+	team, err := findTeam(teams, teamSlug)
+	if err != nil {
+		return publishScope{}, err
+	}
+	scope.TeamID = team.ID
+	scope.Visibility = "team"
+	return scope, nil
+}
+
+// loadPublishScope 取我可见的组织与团队，再解析成发布范围。
+func loadPublishScope(ctx context.Context, client *apiclient.Client,
+	orgSlug, teamSlug, visibility string) (publishScope, error) {
+
+	if err := checkScopeFlags(orgSlug, teamSlug); err != nil {
+		return publishScope{}, err
+	}
+	if orgSlug == "" {
+		return publishScope{Visibility: visibility}, nil
+	}
+	me, err := client.Me(ctx)
+	if err != nil {
+		return publishScope{}, err
+	}
+	org, err := findOrganization(me.Organizations, orgSlug)
+	if err != nil {
+		return publishScope{}, err
+	}
+	teams, err := client.Teams(ctx, org.ID)
+	if err != nil {
+		return publishScope{}, err
+	}
+	return resolvePublishScope(me.Organizations, teams, orgSlug, teamSlug, visibility)
+}
+
+// optionalString 空串转 nil——omitempty 才知道不传。
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 // locatePublishTargets 定位要发布的 Skill。
@@ -208,10 +338,12 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 			}, nil
 		}
 		skill, err = client.CreateSkill(ctx, apiclient.CreateSkillRequest{
-			Slug:        slug,
-			Name:        displayName,
-			Description: description,
-			Visibility:  options.Visibility,
+			Slug:           slug,
+			Name:           displayName,
+			Description:    description,
+			Visibility:     options.visibilityFor(),
+			OrganizationID: optionalString(options.Scope.OrganizationID),
+			OwnerTeamID:    optionalString(options.Scope.TeamID),
 		})
 		if err != nil {
 			return publishResult{}, err

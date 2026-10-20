@@ -21,6 +21,9 @@ type CreateSkillRequest struct {
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	// Source 是来源元数据（设计文档 §7.1）；本地直接发布的 Skill 记 local_import。
 	Source *SkillSource `json:"source,omitempty"`
+	// OrganizationID 与 OwnerTeamID 决定可见性范围（团队可见必须两个都带）。
+	OrganizationID *string `json:"organization_id,omitempty"`
+	OwnerTeamID    *string `json:"owner_team_id,omitempty"`
 }
 
 // ManifestEntry 对应 OpenAPI 的 CreateVersionRequest.manifest。

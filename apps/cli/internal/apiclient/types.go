@@ -89,10 +89,5 @@ type MeResponse struct {
 		Email       string `json:"email"`
 		Status      string `json:"status"`
 	} `json:"user"`
-	Organizations []struct {
-		ID   string `json:"id"`
-		Slug string `json:"slug"`
-		Name string `json:"name"`
-		Role string `json:"role"`
-	} `json:"organizations"`
+	Organizations []OrgMembership `json:"organizations"`
 }
