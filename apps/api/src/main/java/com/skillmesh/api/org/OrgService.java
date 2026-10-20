@@ -93,7 +93,7 @@ public class OrgService {
     @Transactional
     public void addOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
         requireOrgRole(actor, organizationId, Set.of("owner", "admin"));
-        requireRole(role, Set.of("owner", "admin", "publisher", "reviewer", "member", "viewer"));
+        requireRole(role, Roles.ORG_ROLES);
         requireOwnerToGrantOwner(actor, organizationId, role);
         MembershipEntities.OrgMembership membership = new MembershipEntities.OrgMembership();
         membership.setId(new MembershipEntities.OrgKey(organizationId, memberId));
@@ -118,7 +118,7 @@ public class OrgService {
         if (!orgAdmin && !teamAdmin) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织或团队管理员能加成员");
         }
-        requireRole(role, Set.of("admin", "publisher", "reviewer", "member", "viewer"));
+        requireRole(role, Roles.TEAM_ROLES);
         MembershipEntities.TeamMembership membership = new MembershipEntities.TeamMembership();
         membership.setId(new MembershipEntities.TeamKey(teamId, memberId));
         membership.setRole(role);
@@ -176,13 +176,14 @@ public class OrgService {
 
     /** 角色是否达到要求（owner > admin > publisher > reviewer > member > viewer）。 */
     public static boolean roleAtLeast(String actual, String required) {
-        int have = RANK.indexOf(actual);
-        int need = RANK.indexOf(required);
+        // List.of 的 indexOf 不接受 null（会抛 NPE），没角色就当不达标。
+        if (actual == null || required == null) {
+            return false;
+        }
+        int have = Roles.ORG_RANK.indexOf(actual);
+        int need = Roles.ORG_RANK.indexOf(required);
         return have >= 0 && need >= 0 && have <= need;
     }
-
-    private static final List<String> RANK = List.of(
-        "owner", "admin", "publisher", "reviewer", "member", "viewer");
 
     public List<UUID> myOrganizationIds(UUID userId) {
         return orgMembers.findByIdUserId(userId).stream()
@@ -223,10 +224,17 @@ public class OrgService {
     /**
      * 落位成员关系：已存在就改角色，不报冲突。
      * 邀请可以被重复接受，所以这里必须是 upsert 而不是 insert。
+     *
+     * 只升不降——当前角色已经 ≥ 给的角色就保持不变。
+     * 否则唯一 owner 接受一份 member 邀请会被降级，组织从此没有 owner，
+     * 而 owner 只能由现任 owner 任命——那是永久锁死。
+     *
+     * 前置条件：调用方要自己保证 actor 有资格改这个人的角色。
+     * 这里只挡了 owner 这一档（requireOwnerToGrantOwner），别的角色档位由调用方把关。
      */
     @Transactional
     public void upsertOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
-        requireRole(role, Set.of("owner", "admin", "publisher", "reviewer", "member", "viewer"));
+        requireRole(role, Roles.ORG_ROLES);
         requireOwnerToGrantOwner(actor, organizationId, role);
         MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
         MembershipEntities.OrgMembership membership = orgMembers.findById(key).orElseGet(() -> {
@@ -235,15 +243,18 @@ public class OrgService {
             created.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
             return created;
         });
-        membership.setRole(role);
+        if (!roleAtLeast(membership.getRole(), role)) {
+            membership.setRole(role);
+        }
         orgMembers.save(membership);
         audit.record(actor, "organization.membership.grant", "organization", organizationId,
             "success", Map.of("user_id", memberId.toString(), "role", role));
     }
 
+    /** 同 upsertOrgMember：只升不降，调用方自己保证 actor 有资格。 */
     @Transactional
     public void upsertTeamMember(CurrentUser actor, UUID teamId, UUID memberId, String role) {
-        requireRole(role, Set.of("admin", "publisher", "reviewer", "member", "viewer"));
+        requireRole(role, Roles.TEAM_ROLES);
         MembershipEntities.TeamKey key = new MembershipEntities.TeamKey(teamId, memberId);
         MembershipEntities.TeamMembership membership = teamMembers.findById(key).orElseGet(() -> {
             MembershipEntities.TeamMembership created = new MembershipEntities.TeamMembership();
@@ -251,7 +262,9 @@ public class OrgService {
             created.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
             return created;
         });
-        membership.setRole(role);
+        if (!roleAtLeast(membership.getRole(), role)) {
+            membership.setRole(role);
+        }
         teamMembers.save(membership);
         audit.record(actor, "team.membership.grant", "team", teamId,
             "success", Map.of("user_id", memberId.toString(), "role", role));
@@ -280,8 +293,10 @@ public class OrgService {
     /**
      * 授予 owner 只能由现任 owner 亲手做。
      * admin 能任命 owner，就等于能把自己人提上去再踢出组织——那是提权。
+     *
+     * 包内可见：同包的改角色入口（updateOrgRole）要自己调这道守卫。
      */
-    private void requireOwnerToGrantOwner(CurrentUser actor, UUID organizationId, String role) {
+    void requireOwnerToGrantOwner(CurrentUser actor, UUID organizationId, String role) {
         if ("owner".equals(role) && !hasOrgRole(actor, organizationId, Set.of("owner"))) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织 owner 能授予 owner 角色");
         }

@@ -10,8 +10,6 @@ import com.skillmesh.api.org.OrganizationEntity;
 import com.skillmesh.api.org.TeamEntity;
 import jakarta.validation.Valid;
 import java.net.URI;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
@@ -66,15 +64,7 @@ public class InvitationController {
                                         @PathVariable UUID organizationId) {
         CurrentUser user = currentUserService.current(jwt);
         invitations.requireOrgMember(user, organizationId);
-        return invitations.list(organizationId).stream().map(entity -> {
-            OrganizationEntity org = invitations.organizationOf(entity);
-            TeamEntity team = invitations.teamOf(entity);
-            return new InvitationSummary(entity.getId(),
-                org == null ? null : org.getName(),
-                team == null ? null : team.getName(),
-                entity.getOrgRole(), entity.getTeamRole(),
-                effectiveStatus(entity), entity.getExpiresAt(), entity.getCreatedAt());
-        }).toList();
+        return invitations.list(organizationId).stream().map(this::toSummary).toList();
     }
 
     @DeleteMapping("/organizations/{organizationId}/invitations/{invitationId}")
@@ -88,14 +78,7 @@ public class InvitationController {
     /** 公开：没登录的人也要看得懂这份邀请是什么。 */
     @GetMapping("/invitations/{token}")
     public InvitationSummary publicView(@PathVariable String token) {
-        InvitationEntity entity = invitations.summary(token);
-        OrganizationEntity org = invitations.organizationOf(entity);
-        TeamEntity team = invitations.teamOf(entity);
-        return new InvitationSummary(entity.getId(),
-            org == null ? null : org.getName(),
-            team == null ? null : team.getName(),
-            entity.getOrgRole(), entity.getTeamRole(),
-            effectiveStatus(entity), entity.getExpiresAt(), entity.getCreatedAt());
+        return toSummary(invitations.summary(token));
     }
 
     @PostMapping("/invitations/{token}/accept")
@@ -106,12 +89,14 @@ public class InvitationController {
             accepted.teamId(), accepted.orgRole(), accepted.teamRole(), "已加入");
     }
 
-    /** 过期不改库状态，按时间算。 */
-    private static String effectiveStatus(InvitationEntity entity) {
-        if ("pending".equals(entity.getStatus())
-            && entity.getExpiresAt().isBefore(OffsetDateTime.now(ZoneOffset.UTC))) {
-            return "expired";
-        }
-        return entity.getStatus();
+    /** 邀请 → 摘要。列表与公开页共用一份映射，字段口径不会各说各话。 */
+    private InvitationSummary toSummary(InvitationEntity entity) {
+        OrganizationEntity org = invitations.organizationOf(entity);
+        TeamEntity team = invitations.teamOf(entity);
+        return new InvitationSummary(entity.getId(),
+            org == null ? null : org.getName(),
+            team == null ? null : team.getName(),
+            entity.getOrgRole(), entity.getTeamRole(),
+            invitations.effectiveStatus(entity), entity.getExpiresAt(), entity.getCreatedAt());
     }
 }

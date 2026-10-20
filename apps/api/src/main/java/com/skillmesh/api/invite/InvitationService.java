@@ -7,6 +7,7 @@ import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.org.OrgRepository;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.OrganizationEntity;
+import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.org.TeamEntity;
 import com.skillmesh.api.org.TeamRepository;
 import java.nio.charset.StandardCharsets;
@@ -61,8 +62,13 @@ public class InvitationService {
     public Created create(CurrentUser actor, UUID organizationId, UUID teamId,
                           String orgRole, String teamRole, String subject) {
         orgs.requireOrgAdmin(actor, organizationId);
-        if ("owner".equals(orgRole)) {
-            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "owner 角色不能通过邀请授予");
+        String role = orDefault(orgRole, "member");
+        if (!Roles.INVITABLE_ORG_ROLES.contains(role)) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "owner 角色不能通过邀请授予，可授予的是 " + String.join(" / ", Roles.INVITABLE_ORG_RANK));
+        }
+        if (teamId == null && teamRole != null && !teamRole.isBlank()) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "给了团队角色就必须给团队");
         }
         if (teamId != null) {
             TeamEntity team = teams.findById(teamId)
@@ -78,7 +84,7 @@ public class InvitationService {
         entity.setId(UUID.randomUUID());
         entity.setOrganizationId(organizationId);
         entity.setTeamId(teamId);
-        entity.setOrgRole(orDefault(orgRole, "member"));
+        entity.setOrgRole(role);
         entity.setTeamRole(orDefault(teamRole, "member"));
         entity.setTokenHash(sha256Hex(token));
         entity.setStatus("pending");
@@ -94,18 +100,23 @@ public class InvitationService {
         return new Created(entity.getId(), token, entity);
     }
 
-    /** 接受邀请。已接受过就是幂等返回，不报错。 */
+    /** 接受邀请。同一个人重复接受是幂等的；别人再来是 409。 */
     @Transactional
     public Accepted accept(CurrentUser user, String rawToken) {
         InvitationEntity entity = require(rawToken);
         if ("accepted".equals(entity.getStatus())) {
-            return toAccepted(entity);
+            // 真正的幂等只有「同一个人」成立：别人拿着链接再来，
+            // 他根本没进组，却会拿到一句「已加入」。
+            if (user.id().equals(entity.getAcceptedBy())) {
+                return toAccepted(entity);
+            }
+            throw new ApiException(409, ErrorCodes.INVITATION_INVALID, "邀请已被接受");
         }
         if (!"pending".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.INVITATION_INVALID, "邀请已失效");
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        if (entity.getExpiresAt().isBefore(now)) {
+        if (isExpired(entity, now)) {
             throw new ApiException(409, ErrorCodes.INVITATION_INVALID, "邀请已过期");
         }
         if (entity.getSubject() != null && !entity.getSubject().isBlank()
@@ -123,6 +134,21 @@ public class InvitationService {
         audit.record(user, "invitation.accept", "invitation", entity.getId(), "success",
             Map.of("organization_id", entity.getOrganizationId().toString()));
         return toAccepted(entity);
+    }
+
+    /**
+     * 这份邀请现在是什么状态。过期按时间算，不改库里的 status。
+     * 摘要页与接受邀请用同一套口径。
+     */
+    public String effectiveStatus(InvitationEntity entity) {
+        if ("pending".equals(entity.getStatus()) && isExpired(entity, OffsetDateTime.now(ZoneOffset.UTC))) {
+            return "expired";
+        }
+        return entity.getStatus();
+    }
+
+    private static boolean isExpired(InvitationEntity entity, OffsetDateTime now) {
+        return entity.getExpiresAt().isBefore(now);
     }
 
     public List<InvitationEntity> list(UUID organizationId) {

@@ -15,6 +15,7 @@ import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -92,9 +93,11 @@ class InvitationFlowTest {
 
     @Test
     void 接受邀请后落成员关系且可重复接受() throws Exception {
-        UUID orgId = createOrganization("acme");
-        UUID teamId = createTeam(orgId, "platform");
-        String token = createInvitation(orgId, teamId);
+        // 组织由别人建：真令牌的用户在里面还没有身份，接受之后才有。
+        CurrentUser admin = stranger();
+        UUID orgId = orgs.createOrganization(admin, "acme", "acme").getId();
+        UUID teamId = orgs.createTeam(admin, orgId, "platform", "platform", null).getId();
+        String token = invitations.create(admin, orgId, teamId, "member", "member", null).token();
 
         mockMvc.perform(post("/api/v1/invitations/{token}/accept", token)
                 .header("Authorization", auth))
@@ -102,10 +105,48 @@ class InvitationFlowTest {
             .andExpect(jsonPath("$.org_role").value("member"))
             .andExpect(jsonPath("$.team_id").value(teamId.toString()));
 
-        // 重复接受不报错
+        // 成员关系真的落库了——响应体是拿 invitation 拼的，不能当落库的证据
+        assertThat(orgs.roleIn(orgId, null, owner.id())).isEqualTo("member");
+        assertThat(orgs.roleIn(orgId, teamId, owner.id())).isEqualTo("member");
+
+        // 重复接受幂等，角色不会被重授一遍
         mockMvc.perform(post("/api/v1/invitations/{token}/accept", token)
                 .header("Authorization", auth))
             .andExpect(status().isOk());
+        assertThat(orgs.roleIn(orgId, null, owner.id())).isEqualTo("member");
+        assertThat(orgs.roleIn(orgId, teamId, owner.id())).isEqualTo("member");
+    }
+
+    /** 邀请被一个人接受后，另一个人拿着同一条链接再来不能拿到「已加入」。 */
+    @Test
+    void 邀请被接受后别人再来是409() throws Exception {
+        CurrentUser admin = stranger();
+        UUID orgId = orgs.createOrganization(admin, "acme", "acme").getId();
+        String token = invitations.create(admin, orgId, null, "member", null, null).token();
+
+        invitations.accept(owner, token);
+
+        ApiException ex = catchThrowableOfType(
+            () -> invitations.accept(stranger(), token), ApiException.class);
+        assertThat(ex).as("别人不能复用别人的邀请").isNotNull();
+        assertThat(ex.status()).isEqualTo(409);
+        assertThat(ex.code()).isEqualTo("INVITATION_INVALID");
+    }
+
+    /**
+     * 接受邀请只升不降：唯一 owner 接受一份 member 邀请，
+     * 组织从此没有 owner，而 owner 只能由现任 owner 任命——那是永久锁死。
+     */
+    @Test
+    void 接受邀请不会降级已有角色() throws Exception {
+        UUID orgId = createOrganization("acme");
+        String token = createInvitation(orgId, null);
+
+        mockMvc.perform(post("/api/v1/invitations/{token}/accept", token)
+                .header("Authorization", auth))
+            .andExpect(status().isOk());
+
+        assertThat(orgs.roleIn(orgId, null, owner.id())).isEqualTo("owner");
     }
 
     @Test
@@ -135,10 +176,12 @@ class InvitationFlowTest {
         UUID orgId = createOrganization("acme");
         UUID teamId = createTeam(orgId, "platform");
         // 权限要在服务层断言：HTTP 层只有一个真实令牌，造不出「非属主」的身份
-        assertThatThrownBy(() -> invitations.create(stranger(), orgId, teamId,
-            "member", "member", null))
-            .isInstanceOf(ApiException.class)
-            .hasMessageContaining("权限不足");
+        ApiException ex = catchThrowableOfType(
+            () -> invitations.create(stranger(), orgId, teamId, "member", "member", null),
+            ApiException.class);
+        assertThat(ex).isNotNull();
+        assertThat(ex.status()).isEqualTo(403);
+        assertThat(ex.code()).isEqualTo("FORBIDDEN");
     }
 
     /** token_hash 是 UNIQUE——哈希撞了得让数据库拦下来，不能存两条一样的凭据。 */
@@ -150,12 +193,14 @@ class InvitationFlowTest {
         String hash = jdbc.queryForObject(
             "select token_hash from org_invitations limit 1", String.class);
 
+        // 断言到具体约束名——NOT NULL / 外键违规也抛 DataIntegrityViolationException
         assertThatThrownBy(() -> jdbc.update(
             "insert into org_invitations (id, organization_id, org_role, team_role, "
                 + "token_hash, status, created_at, expires_at) "
                 + "values (?, ?, 'member', 'member', ?, 'pending', now(), now() + interval '7 days')",
             UUID.randomUUID(), orgId, hash))
-            .isInstanceOf(DataIntegrityViolationException.class);
+            .isInstanceOf(DataIntegrityViolationException.class)
+            .hasMessageContaining("org_invitations_token_hash_key");
     }
 
     /** owner 不能通过邀请拿到——邀请只能给到 admin 及以下。 */
@@ -180,6 +225,19 @@ class InvitationFlowTest {
         assertThat(ex).as("服务层也要拒 owner 邀请").isNotNull();
         assertThat(ex.status()).isEqualTo(400);
         assertThat(ex.code()).isEqualTo("VALIDATION_FAILED");
+    }
+
+    /** 给了团队角色却没给团队：那个角色永远用不上，不能装作给了。 */
+    @Test
+    void 给了团队角色却没给团队是400() throws Exception {
+        UUID orgId = createOrganization("acme");
+
+        mockMvc.perform(post("/api/v1/organizations/{id}/invitations", orgId)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "org_role", "member", "team_role", "admin"))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
     }
 
     /** admin 任命 owner 等于提权：owner 只能由现任 owner 亲手给。 */
@@ -214,13 +272,19 @@ class InvitationFlowTest {
     }
 
     private String createInvitation(UUID orgId, UUID teamId) throws Exception {
-        String body = mockMvc.perform(post("/api/v1/organizations/{id}/invitations", orgId)
+        Map<String, Object> body = new HashMap<>();
+        body.put("org_role", "member");
+        // 给了团队角色就必须给团队——所以团队角色跟着团队一起给
+        if (teamId != null) {
+            body.put("team_id", teamId.toString());
+            body.put("team_role", "member");
+        }
+        String response = mockMvc.perform(post("/api/v1/organizations/{id}/invitations", orgId)
                 .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
-                .content(json.writeValueAsString(Map.of(
-                    "team_id", teamId.toString(), "org_role", "member", "team_role", "member"))))
+                .content(json.writeValueAsString(body)))
             .andExpect(status().isCreated())
             .andReturn().getResponse().getContentAsString();
-        return json.readTree(body).path("token").asText();
+        return json.readTree(response).path("token").asText();
     }
 
     private UUID invitationId(String token) throws Exception {
@@ -231,8 +295,8 @@ class InvitationFlowTest {
 
     private UUID createOrganization(String slug) throws Exception {
         String body = mockMvc.perform(post("/api/v1/organizations").header("Authorization", auth)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(json.writeValueAsString(Map.of("slug", slug, "name", slug))))
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json.writeValueAsString(Map.of("slug", slug, "name", slug))))
             .andExpect(status().isCreated())
             .andReturn().getResponse().getContentAsString();
         return UUID.fromString(json.readTree(body).path("id").asText());
@@ -240,8 +304,8 @@ class InvitationFlowTest {
 
     private UUID createTeam(UUID orgId, String slug) throws Exception {
         String body = mockMvc.perform(post("/api/v1/organizations/{id}/teams", orgId)
-                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
-                .content(json.writeValueAsString(Map.of("slug", slug, "name", slug))))
+            .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+            .content(json.writeValueAsString(Map.of("slug", slug, "name", slug))))
             .andExpect(status().isCreated())
             .andReturn().getResponse().getContentAsString();
         return UUID.fromString(json.readTree(body).path("id").asText());
