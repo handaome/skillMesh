@@ -254,6 +254,56 @@ func TestPublishOne归属与可见性(t *testing.T) {
 			t.Fatalf("错误信息该说明 Skill 已存在: %v", err)
 		}
 	})
+
+	// 「已提交审核」那条分支也得报出真实大小——漏填 SizeBytes 时输出恒为「0 字节」，
+	// 用户会以为传了个空包上去。
+	t.Run("待审的版本也报出制品大小", func(t *testing.T) {
+		var putBytes int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodGet && r.URL.Path == "/skills":
+				w.Write([]byte(`{"items":[],"has_more":false}`))
+			case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1/versions":
+				w.Write([]byte(`{"items":[],"has_more":false}`))
+			case r.Method == http.MethodPost && r.URL.Path == "/skills":
+				w.Write([]byte(`{"id":"skill-1","slug":"demo","visibility":"team"}`))
+			case r.Method == http.MethodPost && r.URL.Path == "/skills/skill-1/versions":
+				w.Write([]byte(`{"version_id":"v-1","status":"draft","upload":{
+					"session_id":"s-1","method":"PUT","url":"` + "http://" + r.Host + `/put","headers":{}}}`))
+			case r.Method == http.MethodPut && r.URL.Path == "/put":
+				raw, _ := io.ReadAll(r.Body)
+				putBytes = len(raw)
+				w.WriteHeader(http.StatusOK)
+			case r.Method == http.MethodPost && r.URL.Path == "/uploads/s-1/complete":
+				w.Write([]byte(`{"id":"s-1","status":"completed"}`))
+			case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1":
+				w.Write([]byte(`{"id":"skill-1","slug":"demo","visibility":"team"}`))
+			default:
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+		defer srv.Close()
+
+		result, err := publishOne(context.Background(), apiclient.New(srv.URL, "tok", 0),
+			publishTarget{Dir: demoSkillDir(t), RelPath: "demo"},
+			publishOptions{
+				Slug:  "demo",
+				Scope: publishScope{OrganizationID: "org-1", TeamID: "team-1", Visibility: "team"},
+			})
+		if err != nil {
+			t.Fatalf("发布不该报错: %v", err)
+		}
+		if result.Action != "已提交审核" {
+			t.Fatalf("团队可见的版本该说「已提交审核」，实际 %q", result.Action)
+		}
+		if result.SizeBytes <= 0 {
+			t.Fatalf("「已提交审核」也得报出制品大小，实际 %d 字节", result.SizeBytes)
+		}
+		if result.SizeBytes != int64(putBytes) {
+			t.Fatalf("报的大小该等于实际传的字节数：报 %d，实际传 %d", result.SizeBytes, putBytes)
+		}
+	})
 }
 
 // loadPublishScope 要向服务端问组织与团队，slug 解析错了用户只会看到一句空话。
