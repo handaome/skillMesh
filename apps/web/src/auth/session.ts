@@ -84,13 +84,13 @@ export function logout() {
  * 后发的那份才是更新的快照，先发的那份晚到也不能把组织列表回滚掉。
  */
 let meSeq = 0
-/** 已落地的最高代次。比它旧的响应一律丢弃。 */
+/** 已生效的最高代次。比它旧的响应一律丢弃——失败也算生效（它挂出了错误横幅）。 */
 let meApplied = 0
 
 /**
  * 拉一次 /me，顺便把组织列表带回来。
  *
- * 只接受比已落地结果更新的那份：受邀者点「接受邀请」后 App 挂载那次
+ * 只接受比已生效结果更新的那份：受邀者点「接受邀请」后 App 挂载那次
  * 慢响应才落地的话，它带的是接受之前的组织列表——盖回去会让「去团队页」
  * 落进另一个组织。
  */
@@ -101,8 +101,13 @@ export async function loadMe(apiBase = '/api/v1') {
   })
   if (!response.ok) {
     const message = `拉取当前用户失败: ${response.status}`
-    // 已经有更新的结果落地了，这份失败是过时的事，别拿它报当前的警。
-    if (seq > meApplied) meError.value = message
+    // 已经有更新的结果生效了，这份失败是过时的事，别拿它报当前的警。
+    // 否则就轮到自己生效：比它旧的响应（哪怕是成功的）不准再来清这个横幅，
+    // 也不准把过期的组织列表盖回来。
+    if (seq > meApplied) {
+      meApplied = seq
+      meError.value = message
+    }
     throw new Error(message)
   }
   const body = await response.json()
@@ -111,6 +116,8 @@ export async function loadMe(apiBase = '/api/v1') {
     session.user = body.user
     session.organizations = body.organizations ?? []
     persist()
+    // 只有当前生效的这代能清横幅：更旧的成功响应是「更早的快照」，
+    // 它落地不代表当前状态没问题。
     meError.value = ''
   }
   return body

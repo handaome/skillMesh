@@ -181,6 +181,36 @@ describe('TeamPage', () => {
     expect(wrapper.find('[data-test="member-row"]').text()).toContain('Team Dev')
   })
 
+  it('切团队时旧团队的行不会留在表里', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    // 新团队的成员请求挂住不返回，模拟「切了团队、响应还没回来」
+    let releaseTeamMembers: (v: unknown) => void = () => {}
+    const pendingTeamMembers = new Promise((resolve) => { releaseTeamMembers = resolve })
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/teams/t2/members')) return pendingTeamMembers
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM, { ...TEAM, id: 't2', slug: 'infra', name: 'Infra' }])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+    expect(wrapper.find('[data-test="member-row"]').text()).toContain('Dev Two')
+
+    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="team-select"]')
+    teamSelect.vm.$emit('update:modelValue', 't2')
+    teamSelect.vm.$emit('change', 't2')
+    await flushPromises()
+
+    // 响应回来之前，旧团队的行不能还在表里：那行的下拉还能改角色，
+    // 而 PATCH 打到的是新团队——改错了人。
+    expect(wrapper.find('[data-test="member-row"]').exists()).toBe(false)
+
+    releaseTeamMembers(jsonResponse([{ ...MEMBER, user_id: 'u2', display_name: 'Infra Dev' }]))
+    await flushPromises()
+    expect(wrapper.find('[data-test="member-row"]').text()).toContain('Infra Dev')
+  })
+
   it('没选团队时邀请不带 team_role', async () => {
     session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {

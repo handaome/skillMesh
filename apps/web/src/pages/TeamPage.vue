@@ -18,6 +18,10 @@ import type { Invitation, Member, Team } from '../types'
 const org = currentOrg
 const teams = ref<Team[]>([])
 const members = ref<Member[]>([])
+/** 成员表正在读。切范围时旧行已经清空，这时更不能显示「还没有成员」。 */
+const membersLoading = ref(false)
+/** 当前表格里的行属于哪个范围（组织/团队）。切范围时旧行得先清掉。 */
+const membersScope = ref('')
 const invitations = ref<Invitation[]>([])
 const loading = ref(false)
 /** 成员区的错（改角色、读成员、读团队） */
@@ -57,6 +61,7 @@ async function loadMembers(orgId: string, teamId: string) {
     : await listOrgMembers(orgId)
   if (org.value?.id !== orgId || selectedTeam.value !== teamId) return
   members.value = list
+  membersScope.value = `${orgId}/${teamId}`
 }
 
 /** 重读成员表。切团队、改角色之后都走这里。 */
@@ -64,6 +69,10 @@ async function refreshMembers() {
   const orgId = org.value?.id
   if (!orgId) return
   memberError.value = ''
+  // 切范围时旧行必须先走：表格里的下拉还能改角色，而 PATCH 打到的是新范围——
+  // 改错了人。响应回来再填新的。
+  if (membersScope.value !== `${orgId}/${selectedTeam.value}`) members.value = []
+  membersLoading.value = true
   try {
     await loadMembers(orgId, selectedTeam.value)
   } catch (e) {
@@ -71,6 +80,8 @@ async function refreshMembers() {
     // 读失败就把上一份名单清掉：那是上一个团队的成员，配上错误提示页面在骗人。
     members.value = []
     memberError.value = errorText(e)
+  } finally {
+    membersLoading.value = false
   }
 }
 
@@ -242,7 +253,7 @@ onMounted(load)
           </el-table-column>
         </el-table>
         <el-empty
-          v-if="!loading && !memberError && !members.length"
+          v-if="!loading && !membersLoading && !memberError && !members.length"
           description="还没有成员"
           :image-size="60"
         />

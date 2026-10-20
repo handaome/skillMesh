@@ -204,6 +204,32 @@ describe('B2 两次 /me 刷新', () => {
     await first
     expect(session.organizations.map((o) => o.id)).toEqual(['org9'])
   })
+
+  it('后发的那次失败先到，旧的成功后到时错误横幅还在', async () => {
+    // 后发的是「接受邀请」之后那次，它先回——但失败了（500）；
+    // 先发的那次（接受之前的快照）后回。
+    const responses: (() => void)[] = []
+    let call = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      const index = call++
+      if (index === 1) return problemResponse(500, 'INTERNAL', '炸了')
+      await new Promise<void>((resolve) => responses.push(resolve))
+      return jsonResponse({
+        user: { id: 'u1', display_name: 'Dev', email: null, status: 'active' },
+        organizations: [],
+      })
+    }))
+
+    const older = loadMe()
+    const newer = loadMe()
+    await expect(newer).rejects.toThrow('500')
+    expect(meError.value).not.toBe('')
+
+    // 旧的成功响应这时才落地：它不能把较新那次失败留下的横幅清掉
+    responses[0]()
+    await older
+    expect(meError.value).not.toBe('')
+  })
 })
 
 describe('B5 /me 拉取失败', () => {
