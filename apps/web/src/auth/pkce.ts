@@ -7,7 +7,8 @@ const TOKEN_ENDPOINT = `${ISSUER}/protocol/openid-connect/token`
 
 export interface TokenResponse {
   access_token: string
-  refresh_token: string
+  /** RFC 6749 §6：refresh 响应可以不带这个字段。 */
+  refresh_token?: string
   expires_in: number
 }
 

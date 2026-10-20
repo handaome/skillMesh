@@ -15,7 +15,7 @@ onMounted(async () => {
   try {
     await loadMe()
   } catch {
-    // 拉不到就当没登录，路由守卫会处理
+    // 拉不到就留着空用户；登出按钮按 accessToken 渲染，用户还能手动登出
   }
 })
 
@@ -38,7 +38,7 @@ function signOut() {
         <el-tag v-if="session.user" type="info" effect="plain" data-test="who">
           {{ session.user.display_name }}
         </el-tag>
-        <el-button v-if="session.user" text data-test="logout" @click="signOut">
+        <el-button v-if="session.accessToken" text data-test="logout" @click="signOut">
           登出
         </el-button>
       </div>

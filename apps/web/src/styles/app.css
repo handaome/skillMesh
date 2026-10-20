@@ -1,6 +1,7 @@
 /* 布局与工具类。组件外观用 Element Plus，这里只管骨架。 */
 
-body { margin: 0; }
+/* Element Plus 不给 body 设字体族，不补就退回浏览器默认衬线体。 */
+body { margin: 0; font-family: var(--el-font-family); }
 
 .sm-shell { min-height: 100vh; display: flex; flex-direction: column; }
 

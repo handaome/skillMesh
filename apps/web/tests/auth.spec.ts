@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { codeChallenge, randomVerifier } from '../src/auth/pkce'
-import { session, logout } from '../src/auth/session'
+import { ensureFresh, session, logout } from '../src/auth/session'
+import { searchSkills } from '../src/api'
 import router from '../src/router'
 import LoginPage from '../src/pages/LoginPage.vue'
 
@@ -11,8 +12,20 @@ const VERIFIER_KEY = 'skillmesh_pkce_verifier'
 const STATE_KEY = 'skillmesh_pkce_state'
 const REDIRECT_KEY = 'skillmesh_login_redirect'
 
+// fetch 的桩会漏到后面的用例。
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, statusText: 'OK', json: async () => body }
+}
+
+function unauthorized() {
+  return {
+    ok: false, status: 401, statusText: 'Unauthorized',
+    json: async () => ({ code: 'UNAUTHORIZED', detail: '令牌无效' }),
+  }
 }
 
 /** 令牌端点与 /me 一起打桩。 */
@@ -119,5 +132,68 @@ describe('路由守卫', () => {
 
     await router.push('/invite/abc')
     expect(router.currentRoute.value.path).toBe('/invite/abc')
+  })
+})
+
+describe('会话续期', () => {
+  it('临近过期又续不上时会话被清空', async () => {
+    session.accessToken = 'a'
+    session.refreshToken = 'r'
+    session.expiresAt = Date.now() + 1000
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('refresh 失败')
+    }))
+
+    expect(await ensureFresh()).toBe(false)
+    // 僵尸会话会让守卫以为还登录着，用户卡在满屏 401 里
+    expect(session.accessToken).toBe('')
+
+    // 另一条续不上的路：过期了又没有 refresh token。
+    // 这条只能直接调 ensureFresh 才看得出差别——走 api.ts 时它自己也会登出。
+    session.accessToken = 'a'
+    session.refreshToken = ''
+    session.expiresAt = Date.now() - 1000
+
+    expect(await ensureFresh()).toBe(false)
+    expect(session.accessToken).toBe('')
+  })
+
+  it('401 时静默续期并重试原请求一次', async () => {
+    session.accessToken = 'old'
+    session.refreshToken = 'r'
+    session.expiresAt = Date.now() - 1000
+    let skillCalls = 0
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes('/protocol/openid-connect/token')) {
+        return jsonResponse({ access_token: 'new', refresh_token: 'r2', expires_in: 60 })
+      }
+      skillCalls += 1
+      if (skillCalls === 1) return unauthorized()
+      return jsonResponse({ items: [], next_cursor: null, has_more: false })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await searchSkills('x')
+    expect(page.items).toEqual([])
+    // 一次 401 + 一次重试，不会更多
+    expect(skillCalls).toBe(2)
+    const calls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/skills'))
+    const headers = calls[1][1]?.headers as Record<string, string>
+    expect(headers.Authorization).toBe('Bearer new')
+  })
+
+  it('会话过期又没有 refresh token 时清会话并跳登录页', async () => {
+    session.accessToken = 'old'
+    session.refreshToken = ''
+    session.expiresAt = Date.now() - 1000
+    session.organizations = []
+    vi.stubGlobal('fetch', vi.fn(async () => unauthorized()))
+
+    await router.push('/team')
+    await expect(searchSkills('x')).rejects.toMatchObject({ code: 'UNAUTHORIZED', status: 401 })
+    expect(session.accessToken).toBe('')
+    // 跳登录页要带上原来想去哪
+    expect(router.currentRoute.value.path).toBe('/login')
+    expect(router.currentRoute.value.query.redirect).toBe('/team')
   })
 })

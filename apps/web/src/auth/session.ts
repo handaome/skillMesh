@@ -35,8 +35,11 @@ function load(): Session {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return empty()
-    const parsed = JSON.parse(raw) as Session
-    return { ...empty(), ...parsed }
+    const parsed = JSON.parse(raw) as Partial<Session>
+    const organizations = parsed.organizations ?? []
+    // 形状不对就当没登录：畸形的 accessToken 会变成 `Bearer [object Object]`。
+    if (typeof parsed.accessToken !== 'string' || !Array.isArray(organizations)) return empty()
+    return { ...empty(), ...parsed, organizations }
   } catch {
     return empty()
   }
@@ -54,9 +57,10 @@ function persist() {
   }))
 }
 
-export function setTokens(tokens: { access_token: string; refresh_token: string; expires_in: number }) {
+export function setTokens(tokens: { access_token: string; refresh_token?: string; expires_in: number }) {
   session.accessToken = tokens.access_token
-  session.refreshToken = tokens.refresh_token
+  // RFC 6749 §6：refresh 响应可以不带 refresh_token，这时保留旧的。
+  session.refreshToken = tokens.refresh_token ?? session.refreshToken
   session.expiresAt = Date.now() + tokens.expires_in * 1000
   persist()
 }
@@ -79,11 +83,20 @@ export async function loadMe(apiBase = '/api/v1') {
   return body
 }
 
-/** 快过期就续期。续不了就登出，交给调用方跳登录页。 */
-export async function ensureFresh(): Promise<boolean> {
+/**
+ * 快过期就续期。`force` 无视过期时间直接续——401 之后要用（令牌被服务端拒了，
+ * 但本地时间未必看得出来）。
+ * 续不了就登出，交给调用方跳登录页。
+ */
+export async function ensureFresh(force = false): Promise<boolean> {
   if (!session.accessToken) return false
-  if (session.expiresAt - Date.now() > REFRESH_MARGIN_MS) return true
-  if (!session.refreshToken) return false
+  if (!force && session.expiresAt - Date.now() > REFRESH_MARGIN_MS) return true
+  if (!session.refreshToken) {
+    // 过期了又没有 refresh token：清会话。
+    // 不清的话守卫看令牌还在就放行，用户卡在一个全 401 的僵尸会话里。
+    logout()
+    return false
+  }
   try {
     setTokens(await refreshToken(session.refreshToken))
     return true

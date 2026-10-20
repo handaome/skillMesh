@@ -1,4 +1,5 @@
-import { session } from './auth/session'
+import { ensureFresh, logout, session } from './auth/session'
+import router from './router'
 import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation } from './types'
 
 const BASE = '/api/v1'
@@ -19,6 +20,7 @@ async function request<T>(
   method = 'GET',
   body?: unknown,
   token?: string,
+  retried = false,
 ): Promise<T> {
   const bearer = token ?? session.accessToken
   const response = await fetch(BASE + path, {
@@ -29,6 +31,20 @@ async function request<T>(
     },
     body: body ? JSON.stringify(body) : undefined,
   })
+  // 会话过期：静默续期后重试一次；续不上就登出并送回登录页。
+  // 显式传了 token 的调用没有会话，不走这条路；retried 保证只重试一次
+  // （refresh token 本身失效时否则会无限循环）。
+  if (response.status === 401 && token === undefined && bearer && !retried) {
+    if (await ensureFresh(true)) {
+      return request<T>(path, method, body, token, true)
+    }
+    logout()
+    // 跳不动也不该盖掉 401 本身（下面的 ApiError 才是调用方要的东西）。
+    await router.push({
+      path: '/login',
+      query: { redirect: router.currentRoute.value.fullPath },
+    }).catch(() => {})
+  }
   if (!response.ok) {
     let code = `HTTP_${response.status}`
     let message = response.statusText
