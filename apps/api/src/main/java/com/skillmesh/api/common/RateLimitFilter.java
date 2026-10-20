@@ -39,6 +39,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
         this.windowMillis = windowSeconds * 1000;
     }
 
+    /** 距离当前窗口重置还有多少秒。最少 1 秒，让客户端有个明确的等待点。 */
+    private long secondsUntilReset(long windowStart) {
+        long elapsed = System.currentTimeMillis() - windowStart;
+        long remaining = (windowMillis - elapsed) / 1000;
+        return Math.max(1, remaining);
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
@@ -55,6 +62,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         response.setHeader("X-RateLimit-Remaining", String.valueOf(Math.max(0, limit - window.count)));
         if (window.count > limit) {
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+            // 告诉客户端等到窗口重置再试。给固定秒数没用：窗口还没翻过去，
+            // 重试多少次都还是超。
+            response.setHeader("Retry-After", String.valueOf(secondsUntilReset(window.startedAt)));
             response.setContentType("application/problem+json");
             response.setCharacterEncoding("UTF-8");
             response.getWriter().write("""

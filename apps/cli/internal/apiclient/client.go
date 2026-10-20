@@ -38,6 +38,26 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 func (c *Client) doWith(ctx context.Context, method, path string, query url.Values,
 	body any, out any, headers ...map[string]string) error {
 
+	// 批量操作（一次同步十几个 Skill）本来就会撞上写接口的频率上限，
+	// 撞上了就按服务端给的时间退避重试，而不是直接失败。
+	for attempt := 0; ; attempt++ {
+		retry, err := c.doOnce(ctx, method, path, query, body, out, headers...)
+		if err == nil {
+			return nil
+		}
+		if !retry || attempt >= maxRateLimitRetries {
+			return err
+		}
+	}
+}
+
+// maxRateLimitRetries 是被限流后最多重试几次。
+const maxRateLimitRetries = 3
+
+// doOnce 发一次请求。第二个返回值表示「被限流了，可以退避重试」。
+func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values,
+	body any, out any, headers ...map[string]string) (bool, error) {
+
 	target := c.base + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
@@ -46,13 +66,13 @@ func (c *Client) doWith(ctx context.Context, method, path string, query url.Valu
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return false, err
 		}
 		reader = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -68,17 +88,43 @@ func (c *Client) doWith(ctx context.Context, method, path string, query url.Valu
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("请求 %s 失败: %w", target, err)
+		return false, fmt.Errorf("请求 %s 失败: %w", target, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		wait := rateLimitWait(resp)
+		if err := sleepContext(ctx, wait); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return decodeProblem(resp)
+		return false, decodeProblem(resp)
 	}
 	if out == nil {
 		_, _ = io.Copy(io.Discard, resp.Body)
+		return false, nil
+	}
+	return false, json.NewDecoder(resp.Body).Decode(out)
+}
+
+// rateLimitWait 读服务端的 Retry-After，没有就按固定节奏退避。
+func rateLimitWait(resp *http.Response) time.Duration {
+	if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return 5 * time.Second
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func decodeProblem(resp *http.Response) error {
