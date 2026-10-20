@@ -159,7 +159,7 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
 
 | 方法与路径 | 权限 | 用途 |
 | --- | --- | --- |
-| `GET /reviews?status=pending_review&limit=&cursor=` | reviewer+ | 待审版本列表 |
+| `GET /reviews?status=pending_review&limit=` | reviewer+ | 待审版本列表 |
 | `GET /reviews/{skillId}/{version}` | reviewer+ | 审核详情（含 diff） |
 
 列表项：
@@ -168,7 +168,7 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
 {
   "skill_id": "<uuid>", "skill_slug": "java-debug", "skill_name": "Java Debug",
   "version": "1.0.0", "channel": "stable",
-  "submitted_by": {"id": "<uuid>", "display_name": "Dev Two"},
+  "submitted_by": "Dev Two",
   "submitted_at": "2026-10-20T10:00:00Z",
   "scan": {"status": "passed", "summary": "3 findings, 0 blocking"},
   "source": {"provider": "git", "repository": "https://github.com/owner/skills.git",
@@ -176,13 +176,18 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
 }
 ```
 
+`submitted_by` 是提交人的**显示名**（不是对象）——审核页要的是「谁提交的」这个名字。
+
 **可见范围**：只返回「我在其所属范围里是 reviewer 及以上」的待审版本。
 
 - 技能的 `owner_team_id` 非空 → 看我在该团队的角色。
 - 否则 `organization_id` 非空 → 看我在该组织的角色。
 - 两者都空（个人 Skill）→ 不进审核流（个人与公开可见的版本扫描通过即发布，见 `ReviewService.needsReview`）。
 
-游标语义沿用现有做法：base64 编码的 `submitted_at|version_id`，按 `(submitted_at DESC, id DESC)` 排序。
+排序按 `(submitted_at DESC, id DESC)`。
+
+v2 **不做游标分页**——队列只有 `limit`（上限 200），待审量在团队规模下足够小。
+要翻页时再按现有做法加：base64 编码的 `submitted_at|version_id` 游标。
 
 详情在列表项基础上增加：
 
@@ -378,6 +383,8 @@ Keycloak realm 需要**第二个账号**。在 `infra/keycloak/realm-skillmesh.j
 | 邀请链接指向本机 | `skillmesh.web.base-url` 默认 `http://127.0.0.1:5174`。跨机访问需改该配置；Web 端同时展示原始 token 便于复制。 |
 | 邀请无邮件投递 | 没有 SMTP 依赖，管理员手动把链接发给对方。 |
 | 审核 diff 无缓存 | 每次查看重新解包。低频场景可接受。 |
+| 审核队列无游标分页 | v2 只有 `limit`（上限 200），超过 200 条待审取不到。团队规模下队列不长，先这样；要翻页时按 §5.3 的说明加游标。 |
+| 审核队列不排除「自己提交的版本」 | 提交人自己会在队列里看到自己发的版本，但点「通过」会被服务端 403（不能审自己发的版本）。前端拿不到提交人的 id（`submitted_by` 只是显示名），没法预先禁用按钮。 |
 | 审计仍只在 Skill 维度 | 全表扫描已修（`GET /audit-events` 改成一条 join 查询，可见性条件与搜索共用 `VisibleSkills`），但**审计台页面**仍不做。 |
 | `install` 收 Skill ID 而非 slug | v1 的实现就是这样（`install <skill-id>`），设计文档 §7.4 的命令表写的是 slug。`skillmesh search` 输出的最后一列就是完整 ID，所以闭环走得通；让 install 同时吃 slug 是 v1 的可用性缺口，不在 v2 范围。 |
 | 发布到团队的权限看的是**组织角色** | CLI 的 `publish --org/--team` 拿到的身份来自 `GET /me`，那里只有组织角色，没有团队角色。服务端也按组织角色判（§10.1），两边同口径——否则 CLI 放行、服务端 403，而按手册提了组织角色也没用（接受邀请会写一行 `team_role=member`，查团队角色会被它遮住）。所以被邀请进来的人默认是组织 `member`，要往团队发布得先把组织角色提到 publisher 以上（团队页的成员表可改）。 |
