@@ -104,3 +104,56 @@ export interface AcceptedInvitation {
   team_role: string
   message: string
 }
+
+// 审核相关：字段名与 review/dto、diff/FileChange 逐字段对齐。
+export interface ReviewScan {
+  status: string
+  summary: string
+}
+
+export interface ReviewSource {
+  provider: string | null
+  repository: string | null
+  ref: string | null
+  commit: string | null
+}
+
+export interface PendingReview {
+  skill_id: string
+  skill_slug: string | null
+  skill_name: string | null
+  version: string
+  channel: string
+  submitted_by: string | null
+  submitted_at: string | null
+  scan: ReviewScan
+  source: ReviewSource
+}
+
+export interface FileChange {
+  path: string
+  kind: 'added' | 'modified' | 'removed'
+  added: number
+  removed: number
+  truncated: boolean
+}
+
+/** 扫描命中项。键与 UploadService.toJson 写进 findings_json 的一致。 */
+export interface ReviewFinding {
+  path: string
+  line: number
+  rule: string
+  detail: string
+}
+
+export interface ReviewDetail {
+  item: PendingReview
+  skill_md: string
+  changelog: string | null
+  findings: ReviewFinding[]
+  diff: {
+    base_version: string
+    truncated: boolean
+    files: FileChange[]
+  }
+}

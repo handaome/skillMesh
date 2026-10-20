@@ -1,6 +1,6 @@
 import { ensureFresh, logout, session } from './auth/session'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
 
 const BASE = '/api/v1'
 
@@ -118,4 +118,23 @@ export function acceptInvitation(token: string): Promise<AcceptedInvitation> {
   // method 在第二位：写成 body 位会发成 GET，接受了也不算数。
   return request<AcceptedInvitation>(
     `/invitations/${encodeURIComponent(token)}/accept`, 'POST')
+}
+
+/** 待审队列。服务端默认 limit=50。 */
+export function listReviews(status = 'pending_review'): Promise<PendingReview[]> {
+  return request<PendingReview[]>(`/reviews?status=${encodeURIComponent(status)}`)
+}
+
+export function getReviewDetail(skillId: string, version: string): Promise<ReviewDetail> {
+  return request<ReviewDetail>(`/reviews/${skillId}/${encodeURIComponent(version)}`)
+}
+
+export function approveVersion(skillId: string, version: string, comment = ''): Promise<unknown> {
+  return request<unknown>(
+    `/skills/${skillId}/versions/${encodeURIComponent(version)}/approve`, 'POST', { comment })
+}
+
+export function rejectVersion(skillId: string, version: string, comment = ''): Promise<unknown> {
+  return request<unknown>(
+    `/skills/${skillId}/versions/${encodeURIComponent(version)}/reject`, 'POST', { comment })
 }
