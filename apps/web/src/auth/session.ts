@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { exchangeCode, refreshToken } from './pkce'
 
 const STORAGE_KEY = 'skillmesh_session'
@@ -47,6 +47,14 @@ function load(): Session {
 
 export const session = reactive<Session>(load())
 
+/**
+ * 最近一次拉 /me 的失败原因。空着就是没失败。
+ *
+ * 放共享单例里而不是某个页面的局部状态：拉不到的不只是顶栏的用户名，
+ * 组织列表也是空的——团队页会因此对真正的组织成员说「你还没有加入任何组织」。
+ */
+export const meError = ref('')
+
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     accessToken: session.accessToken,
@@ -67,19 +75,44 @@ export function setTokens(tokens: { access_token: string; refresh_token?: string
 
 export function logout() {
   Object.assign(session, empty())
+  meError.value = ''
   localStorage.removeItem(STORAGE_KEY)
 }
 
-/** 拉一次 /me，顺便把组织列表带回来。 */
+/**
+ * /me 的代次。App 挂载与接受邀请各会拉一次，两次互不知情——
+ * 后发的那份才是更新的快照，先发的那份晚到也不能把组织列表回滚掉。
+ */
+let meSeq = 0
+/** 已落地的最高代次。比它旧的响应一律丢弃。 */
+let meApplied = 0
+
+/**
+ * 拉一次 /me，顺便把组织列表带回来。
+ *
+ * 只接受比已落地结果更新的那份：受邀者点「接受邀请」后 App 挂载那次
+ * 慢响应才落地的话，它带的是接受之前的组织列表——盖回去会让「去团队页」
+ * 落进另一个组织。
+ */
 export async function loadMe(apiBase = '/api/v1') {
+  const seq = ++meSeq
   const response = await fetch(`${apiBase}/me`, {
     headers: { Authorization: `Bearer ${session.accessToken}` },
   })
-  if (!response.ok) throw new Error(`拉取当前用户失败: ${response.status}`)
+  if (!response.ok) {
+    const message = `拉取当前用户失败: ${response.status}`
+    // 已经有更新的结果落地了，这份失败是过时的事，别拿它报当前的警。
+    if (seq > meApplied) meError.value = message
+    throw new Error(message)
+  }
   const body = await response.json()
-  session.user = body.user
-  session.organizations = body.organizations ?? []
-  persist()
+  if (seq > meApplied) {
+    meApplied = seq
+    session.user = body.user
+    session.organizations = body.organizations ?? []
+    persist()
+    meError.value = ''
+  }
   return body
 }
 

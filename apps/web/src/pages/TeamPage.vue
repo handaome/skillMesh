@@ -12,6 +12,7 @@ import {
   updateTeamRole,
 } from '../api'
 import { currentOrg } from '../auth/currentOrg'
+import { meError } from '../auth/session'
 import type { Invitation, Member, Team } from '../types'
 
 const org = currentOrg
@@ -46,43 +47,62 @@ function errorText(e: unknown): string {
  *
  * 角色列显示的就是列表给的那个角色：团队视图给的是团队角色（管审核放行权），
  * 叠上组织角色会让人改错地方——团队角色才是这里能改的那一层。
+ *
+ * 响应回来时对不上发起时的组织/团队就丢掉：换组织后旧组织那轮慢响应
+ * 落地会把新组织的数据盖掉（页面顶上写着组织 B，列表里却是组织 A 的）。
  */
-async function loadMembers() {
-  if (!org.value) return
-  if (!selectedTeam.value) {
-    members.value = await listOrgMembers(org.value.id)
-    return
-  }
-  members.value = await listTeamMembers(org.value.id, selectedTeam.value)
+async function loadMembers(orgId: string, teamId: string) {
+  const list = teamId
+    ? await listTeamMembers(orgId, teamId)
+    : await listOrgMembers(orgId)
+  if (org.value?.id !== orgId || selectedTeam.value !== teamId) return
+  members.value = list
 }
 
 /** 重读成员表。切团队、改角色之后都走这里。 */
 async function refreshMembers() {
+  const orgId = org.value?.id
+  if (!orgId) return
   memberError.value = ''
   try {
-    await loadMembers()
+    await loadMembers(orgId, selectedTeam.value)
   } catch (e) {
+    if (org.value?.id !== orgId) return
+    // 读失败就把上一份名单清掉：那是上一个团队的成员，配上错误提示页面在骗人。
+    members.value = []
     memberError.value = errorText(e)
   }
 }
 
 async function load() {
-  if (!org.value) return
+  // 记下发起时的组织：响应回来时组织已经变了就丢弃，否则旧组织那轮慢响应
+  // 会盖掉新组织的数据（页面顶上写着组织 B，列表里却是组织 A 的）。
+  const orgId = org.value?.id
+  if (!orgId) {
+    loading.value = false
+    return
+  }
   loading.value = true
   memberError.value = ''
   inviteError.value = ''
   try {
-    teams.value = await listTeams(org.value.id)
-    await loadMembers()
+    const list = await listTeams(orgId)
+    if (org.value?.id !== orgId) return
+    teams.value = list
+    await loadMembers(orgId, selectedTeam.value)
   } catch (e) {
+    if (org.value?.id !== orgId) return
     memberError.value = errorText(e)
   }
   try {
-    invitations.value = await listInvitations(org.value.id)
+    const list = await listInvitations(orgId)
+    if (org.value?.id !== orgId) return
+    invitations.value = list
   } catch (e) {
+    if (org.value?.id !== orgId) return
     inviteError.value = errorText(e)
   }
-  loading.value = false
+  if (org.value?.id === orgId) loading.value = false
 }
 
 async function invite() {
@@ -155,7 +175,10 @@ onMounted(load)
   <section>
     <h1 class="sm-h1">团队</h1>
 
-    <el-empty v-if="!org" description="你还没有加入任何组织。" />
+    <el-empty
+      v-if="!org"
+      :description="meError ? '加载用户信息失败，还不知道你有没有组织。' : '你还没有加入任何组织。'"
+    />
 
     <template v-else>
       <p class="sm-muted">
@@ -187,7 +210,11 @@ onMounted(load)
           class="sm-mb-12"
         />
 
-        <el-table v-if="!loading" :data="members" size="small">
+        <!--
+          表格只在有数据时渲染：Element Plus 自带的「No Data」也是一句谎话
+          （读失败不是没有成员）。改角色失败时列表仍然有效，表格照常显示。
+        -->
+        <el-table v-if="!loading && members.length > 0" :data="members" size="small">
           <el-table-column label="成员" min-width="140">
             <template #default="scope">
               <span data-test="member-row">{{ scope.row.display_name }}</span>
@@ -214,7 +241,11 @@ onMounted(load)
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!loading && !members.length" description="还没有成员" :image-size="60" />
+        <el-empty
+          v-if="!loading && !memberError && !members.length"
+          description="还没有成员"
+          :image-size="60"
+        />
       </el-card>
 
       <el-card shadow="never" class="sm-mb-16">
@@ -264,7 +295,8 @@ onMounted(load)
           class="sm-mb-12"
         />
 
-        <el-table v-if="!loading" :data="invitations" size="small">
+        <!-- 邀请区同理：读失败不是「没有发出过邀请」。 -->
+        <el-table v-if="!loading && invitations.length > 0" :data="invitations" size="small">
           <el-table-column label="团队" min-width="120">
             <template #default="scope">
               <span data-test="invitation-row">{{ scope.row.team_name ?? '—' }}</span>
@@ -304,7 +336,11 @@ onMounted(load)
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!loading && !invitations.length" description="还没有发出过邀请" :image-size="60" />
+        <el-empty
+          v-if="!loading && !inviteError && !invitations.length"
+          description="还没有发出过邀请"
+          :image-size="60"
+        />
       </el-card>
     </template>
   </section>

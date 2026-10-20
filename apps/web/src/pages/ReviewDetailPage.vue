@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, approveVersion, getReviewDetail, rejectVersion } from '../api'
 import type { ReviewDetail } from '../types'
@@ -11,6 +11,12 @@ const detail = ref<ReviewDetail | null>(null)
 const error = ref('')
 const notice = ref('')
 const busy = ref(false)
+
+/**
+ * 只有待审核的版本能过审。已过审/已拒绝的版本再点一次，服务端会回
+ * 409 VERSION_CONFLICT——按钮干脆不显示，页面也不该让人点必然失败的按钮。
+ */
+const canDecide = computed(() => detail.value?.item.status === 'pending_review')
 
 async function load() {
   error.value = ''
@@ -71,6 +77,9 @@ onMounted(load)
       <h1 class="sm-h1">
         {{ detail.item.skill_name ?? '—' }}
         <el-tag size="small" class="sm-ml-4">{{ detail.item.version }}</el-tag>
+        <el-tag size="small" type="info" class="sm-ml-4" data-test="version-status">
+          {{ detail.item.status }}
+        </el-tag>
       </h1>
       <p class="sm-muted">
         提交人 {{ detail.item.submitted_by ?? '—' }}
@@ -129,7 +138,7 @@ onMounted(load)
         <pre class="sm-pre" data-test="skill-md">{{ detail.skill_md }}</pre>
       </el-card>
 
-      <div class="sm-search">
+      <div v-if="canDecide" class="sm-search">
         <el-button type="primary" data-test="approve" :disabled="busy" @click="decide(true)">
           通过
         </el-button>
@@ -137,6 +146,9 @@ onMounted(load)
           拒绝
         </el-button>
       </div>
+      <p v-else class="sm-muted" data-test="not-decidable">
+        该版本已不在待审核状态（当前：{{ detail.item.status }}），不需要再处理。
+      </p>
     </template>
   </section>
 </template>

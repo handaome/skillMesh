@@ -162,11 +162,13 @@ describe('会话续期', () => {
     session.accessToken = 'old'
     session.refreshToken = 'r'
     session.expiresAt = Date.now() - 1000
+    // 只数 /skills 的调用：续期路径还会补拉一次 /me，那是另一件事
     let skillCalls = 0
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.includes('/protocol/openid-connect/token')) {
         return jsonResponse({ access_token: 'new', refresh_token: 'r2', expires_in: 60 })
       }
+      if (!url.includes('/skills')) return jsonResponse({ user: null, organizations: [] })
       skillCalls += 1
       if (skillCalls === 1) return unauthorized()
       return jsonResponse({ items: [], next_cursor: null, has_more: false })

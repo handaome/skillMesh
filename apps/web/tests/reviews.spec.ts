@@ -18,6 +18,8 @@ const REVIEW = {
   skill_id: 's1', skill_slug: 'runbook', skill_name: 'Runbook',
   version: '1.0.0', channel: 'stable', submitted_by: 'Dev Two',
   submitted_at: '2026-10-20T00:00:00Z',
+  // 版本自己的状态：前端靠它判断这一版还能不能过审
+  status: 'pending_review',
   scan: { status: 'passed', summary: '未发现问题' },
   source: { provider: 'git', repository: 'https://git.example.com/x.git', ref: 'v1', commit: 'abc123' },
 }

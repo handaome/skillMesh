@@ -1,4 +1,4 @@
-import { ensureFresh, logout, session } from './auth/session'
+import { ensureFresh, loadMe, logout, session } from './auth/session'
 import router from './router'
 import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
 
@@ -36,6 +36,10 @@ async function request<T>(
   // （refresh token 本身失效时否则会无限循环）。
   if (response.status === 401 && token === undefined && bearer && !retried) {
     if (await ensureFresh(true)) {
+      // 静默续期只换令牌，从不重拉 /me：挂载时那一次拉失败的话组织列表
+      // 会一直空着，团队页对真正的组织成员说「你还没有加入任何组织」。
+      // 只在列表空着时补拉——正常情况下没必要多打一次请求。
+      if (!session.organizations.length) void loadMe().catch(() => {})
       return request<T>(path, method, body, token, true)
     }
     logout()

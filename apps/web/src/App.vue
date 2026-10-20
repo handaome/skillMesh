@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { currentOrg, selectOrganization } from './auth/currentOrg'
-import { ensureFresh, loadMe, logout, session } from './auth/session'
+import { ensureFresh, loadMe, logout, meError, session } from './auth/session'
 
 const router = useRouter()
 
@@ -12,9 +12,16 @@ const orgId = computed({
   set: (id: string) => selectOrganization(id),
 })
 
-onMounted(async () => {
-  if (!session.accessToken) return
-  if (!(await ensureFresh())) {
+/**
+ * 拉一次 /me。失败要说出来——静默失败时团队页会对真正的组织成员说
+ * 「你还没有加入任何组织」，那是谎话。
+ *
+ * force：重试时令牌可能已经过期（时钟不一致），不续期就拉，
+ * 拿到的还是 401，永远好不了。
+ */
+async function refreshMe(force = false) {
+  meError.value = ''
+  if (force && !(await ensureFresh(true))) {
     // 续不了就登出（ensureFresh 已经清了会话），把人送回登录页
     router.push('/login')
     return
@@ -22,8 +29,18 @@ onMounted(async () => {
   try {
     await loadMe()
   } catch {
-    // 拉不到就留着空用户；登出按钮按 accessToken 渲染，用户还能手动登出
+    // 失败原因已经记在 meError 里了，顶栏会显示
   }
+}
+
+onMounted(async () => {
+  if (!session.accessToken) return
+  if (!(await ensureFresh())) {
+    // 续不了就登出（ensureFresh 已经清了会话），把人送回登录页
+    router.push('/login')
+    return
+  }
+  await refreshMe()
 })
 
 function signOut() {
@@ -42,6 +59,14 @@ function signOut() {
         <router-link to="/reviews">审核</router-link>
       </nav>
       <div class="sm-topbar-right">
+        <el-button
+          v-if="meError"
+          text
+          type="danger"
+          data-test="me-error"
+          :title="meError"
+          @click="refreshMe(true)"
+        >加载用户信息失败，点此重试</el-button>
         <el-select
           v-if="session.organizations.length"
           v-model="orgId"
