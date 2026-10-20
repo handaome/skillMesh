@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import InvitePage from '../src/pages/InvitePage.vue'
+import { currentOrg } from '../src/auth/currentOrg'
 import { session } from '../src/auth/session'
 
 function jsonResponse(body: unknown) {
@@ -61,7 +62,12 @@ describe('InvitePage', () => {
       if (url.endsWith('/me')) {
         return jsonResponse({
           user: { id: 'u1', display_name: 'Dev', email: null, status: 'active' },
-          organizations: [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'member' }],
+          // 用户本来就在另一个组织里，所以列表第一个不是刚加入的那个——
+          // 少了 selectOrganization 就会落到 org9 上，断言才钉得住。
+          organizations: [
+            { id: 'org9', slug: 'other', name: 'Other', role: 'member' },
+            { id: 'org1', slug: 'acme', name: 'Acme', role: 'member' },
+          ],
         })
       }
       return jsonResponse(INVITATION)
@@ -76,5 +82,7 @@ describe('InvitePage', () => {
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
     expect(String(post?.[0])).toBe('/api/v1/invitations/abc/accept')
     expect(wrapper.find('[data-test="done"]').exists()).toBe(true)
+    // 接受后当前组织切到刚加入的那个（不刷 /me 就没有组织，不选就是列表第一个）
+    expect(currentOrg.value?.id).toBe('org1')
   })
 })

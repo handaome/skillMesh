@@ -32,15 +32,17 @@ async function accept() {
   error.value = ''
   try {
     const accepted = await acceptInvitation(String(route.params.token))
-    done.value = true
     // 刚加入的组织还不在 session.organizations 里，不刷新的话团队页会说
-    // 「你还没有加入任何组织」。刷新失败不推翻「已接受」这个事实。
+    // 「你还没有加入任何组织」。所以先刷新会话，再标记完成——
+    // 否则「去团队页」提前可点，用户会看到「你还没有加入任何组织」一闪而过。
+    // 刷新失败不推翻「已接受」这个事实。
     try {
       await loadMe()
       selectOrganization(accepted.organization_id)
     } catch {
       // 会话没刷新，去团队页再说
     }
+    done.value = true
   } catch (e) {
     error.value = errorText(e)
   } finally {

@@ -83,17 +83,9 @@ export interface CreatedInvitation {
   token: string
 }
 
-// 公开邀请摘要：不含 token、不含被邀请人身份，给还没登录的人看。
-export interface InvitationSummary {
-  id: string
-  organization_name: string
-  team_name: string | null
-  org_role: string
-  team_role: string
-  status: string
-  expires_at: string
-  created_at: string
-}
+// 公开邀请摘要：与服务端的 InvitationSummary 是同一个 DTO，
+// 列表端点与公开端点返回的都是它。别复制一份——将来加字段要改两处。
+export type InvitationSummary = Invitation
 
 // 接受邀请的结果：告诉前端落进了哪个组织、哪个团队。
 export interface AcceptedInvitation {
