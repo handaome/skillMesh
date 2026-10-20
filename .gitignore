@@ -19,3 +19,6 @@ apps/cli/skillmesh.exe
 
 # 项目级锁文件（每个项目一份，不进仓库）
 skillmesh.lock.yaml
+
+# SDD 工具的工作区（ledger、brief、review package）
+.superpowers/
