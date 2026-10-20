@@ -75,7 +75,7 @@ public class OrgService {
     @Transactional
     public TeamEntity createTeam(CurrentUser user, UUID organizationId, String slug, String name,
                                 String description) {
-        requireOrgRole(user, organizationId, Set.of("owner", "admin"));
+        requireOrgRole(user, organizationId, Roles.ORG_ADMIN_ROLES);
         if (teams.findByOrganizationIdAndSlug(organizationId, slug).isPresent()) {
             throw new ApiException(409, ErrorCodes.SLUG_TAKEN, "团队标识已被占用：" + slug);
         }
@@ -94,48 +94,71 @@ public class OrgService {
         return team;
     }
 
+    /**
+     * 加组织成员。
+     *
+     * 已是成员时保留 joined_at，角色只升不降——
+     * 「加成员」不该顺手削掉别人的权限，要降级走 PATCH /members/{userId} 那个显式端点。
+     */
     @Transactional
     public void addOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
         // 锁必须先拿：owner 计数是「读-判-写」，不串行化就会竞态。
         lockOrgForRoleChange(organizationId);
-        requireOrgRole(actor, organizationId, Set.of("owner", "admin"));
+        requireOrgRole(actor, organizationId, Roles.ORG_ADMIN_ROLES);
         requireRole(role, Roles.ORG_ROLES);
         requireOwnerToGrantOwner(actor, organizationId, role);
         MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
         MembershipEntities.OrgMembership membership = orgMembers.findById(key).orElse(null);
-        // 加成员也会改角色（老成员会被覆盖），同样可能剥夺 owner 身份。
+        // 加成员也可能碰 owner 身份，同样要过 owner 那道闸。
         requireOwnerChangeAllowed(actor, organizationId,
             membership == null ? null : membership.getRole(), role);
         if (membership == null) {
             membership = new MembershipEntities.OrgMembership();
             membership.setId(key);
             membership.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            membership.setRole(role);
+        } else if (!roleAtLeast(membership.getRole(), role)) {
+            // 只升不降：静默降级会让「加成员」顺手削掉别人的权限，
+            // 要降级走 PATCH /members/{userId} 那个显式端点。
+            membership.setRole(role);
         }
-        membership.setRole(role);
         orgMembers.save(membership);
         audit.record(actor, "organization.membership.grant", "organization", organizationId,
             "success", Map.of("user_id", memberId.toString(), "role", role));
     }
 
+    /**
+     * 加团队成员。
+     *
+     * 与 addOrgMember 同一口径：已是成员时保留 joined_at，角色只升不降——
+     * 「加成员」不该顺手削掉别人的权限（那会让人立刻失去审核放行权），
+     * 要降级走 PATCH /teams/{teamId}/members/{userId} 那个显式端点。
+     */
     @Transactional
     public void addTeamMember(CurrentUser actor, UUID teamId, UUID memberId, String role) {
         TeamEntity team = teams.findById(teamId)
             .orElseThrow(() -> ApiException.notFound("团队"));
         // 组织 owner/admin 或团队 admin 都能加成员
-        boolean orgAdmin = hasOrgRole(actor, team.getOrganizationId(), Set.of("owner", "admin"));
+        boolean orgAdmin = hasOrgRole(actor, team.getOrganizationId(), Roles.ORG_ADMIN_ROLES);
         boolean teamAdmin = teamMembers.findById(
                 new MembershipEntities.TeamKey(teamId, actor.id()))
             .map(MembershipEntities.TeamMembership::getRole)
-            .filter("admin"::equals)
+            .filter(Roles.TEAM_ADMIN_ROLES::contains)
             .isPresent();
         if (!orgAdmin && !teamAdmin) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织或团队管理员能加成员");
         }
         requireRole(role, Roles.TEAM_ROLES);
-        MembershipEntities.TeamMembership membership = new MembershipEntities.TeamMembership();
-        membership.setId(new MembershipEntities.TeamKey(teamId, memberId));
-        membership.setRole(role);
-        membership.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        MembershipEntities.TeamKey key = new MembershipEntities.TeamKey(teamId, memberId);
+        MembershipEntities.TeamMembership membership = teamMembers.findById(key).orElse(null);
+        if (membership == null) {
+            membership = new MembershipEntities.TeamMembership();
+            membership.setId(key);
+            membership.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            membership.setRole(role);
+        } else if (!roleAtLeast(membership.getRole(), role)) {
+            membership.setRole(role);
+        }
         teamMembers.save(membership);
         audit.record(actor, "team.membership.grant", "team", teamId, "success",
             Map.of("user_id", memberId.toString(), "role", role));
@@ -187,6 +210,20 @@ public class OrgService {
             .orElse("");
     }
 
+    /** 这个人在这个组织的实际角色；没有成员行就是空。 */
+    public String orgRoleOf(UUID organizationId, UUID userId) {
+        return orgMembers.findById(new MembershipEntities.OrgKey(organizationId, userId))
+            .map(MembershipEntities.OrgMembership::getRole)
+            .orElse(null);
+    }
+
+    /** 这个人在这个团队的实际角色；没有成员行就是空。 */
+    public String teamRoleOf(UUID teamId, UUID userId) {
+        return teamMembers.findById(new MembershipEntities.TeamKey(teamId, userId))
+            .map(MembershipEntities.TeamMembership::getRole)
+            .orElse(null);
+    }
+
     /** 角色是否达到要求（owner > admin > publisher > reviewer > member > viewer）。 */
     public static boolean roleAtLeast(String actual, String required) {
         // List.of 的 indexOf 不接受 null（会抛 NPE），没角色就当不达标。
@@ -216,18 +253,18 @@ public class OrgService {
 
     /** 组织管理员以上才能管成员与邀请。 */
     public void requireOrgAdmin(CurrentUser user, UUID organizationId) {
-        requireOrgRole(user, organizationId, Set.of("owner", "admin"));
+        requireOrgRole(user, organizationId, Roles.ORG_ADMIN_ROLES);
     }
 
     /** 团队管理员：组织 owner/admin 或团队 admin 都能管团队成员。 */
     public void requireTeamAdmin(CurrentUser user, UUID teamId) {
         TeamEntity team = teams.findById(teamId).orElseThrow(() -> ApiException.notFound("团队"));
-        if (hasOrgRole(user, team.getOrganizationId(), Set.of("owner", "admin"))) {
+        if (hasOrgRole(user, team.getOrganizationId(), Roles.ORG_ADMIN_ROLES)) {
             return;
         }
         boolean teamAdmin = teamMembers.findById(new MembershipEntities.TeamKey(teamId, user.id()))
             .map(MembershipEntities.TeamMembership::getRole)
-            .filter("admin"::equals)
+            .filter(Roles.TEAM_ADMIN_ROLES::contains)
             .isPresent();
         if (!teamAdmin) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织或团队管理员能管成员");
@@ -410,7 +447,8 @@ public class OrgService {
      * 包内可见：同包的改角色入口（updateOrgRole）要自己调这道守卫。
      */
     void requireOwnerToGrantOwner(CurrentUser actor, UUID organizationId, String role) {
-        if ("owner".equals(role) && !hasOrgRole(actor, organizationId, Set.of("owner"))) {
+        if (hasRole(Roles.ORG_OWNER_ROLES, role)
+            && !hasOrgRole(actor, organizationId, Roles.ORG_OWNER_ROLES)) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织 owner 能授予 owner 角色");
         }
     }
@@ -425,14 +463,15 @@ public class OrgService {
      */
     private void requireOwnerChangeAllowed(CurrentUser actor, UUID organizationId,
                                            String currentRole, String newRole) {
-        boolean touchesOwnership = "owner".equals(currentRole) || "owner".equals(newRole);
+        boolean touchesOwnership = hasRole(Roles.ORG_OWNER_ROLES, currentRole)
+            || hasRole(Roles.ORG_OWNER_ROLES, newRole);
         if (!touchesOwnership) {
             return;
         }
-        if (!hasOrgRole(actor, organizationId, Set.of("owner"))) {
+        if (!hasOrgRole(actor, organizationId, Roles.ORG_OWNER_ROLES)) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织 owner 能改变 owner 身份");
         }
-        if ("owner".equals(currentRole) && !"owner".equals(newRole)
+        if (hasRole(Roles.ORG_OWNER_ROLES, currentRole) && !hasRole(Roles.ORG_OWNER_ROLES, newRole)
             && ownerCount(organizationId) <= 1) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "不能降级组织里唯一的 owner");
@@ -442,8 +481,13 @@ public class OrgService {
     /** 组织里 owner 角色的成员数。 */
     private long ownerCount(UUID organizationId) {
         return orgMembers.findByIdOrganizationId(organizationId).stream()
-            .filter(membership -> "owner".equals(membership.getRole()))
+            .filter(membership -> hasRole(Roles.ORG_OWNER_ROLES, membership.getRole()))
             .count();
+    }
+
+    /** 档位判断——Set.of 的 contains(null) 会抛 NPE，而角色可能为空。 */
+    private static boolean hasRole(Set<String> roles, String role) {
+        return role != null && roles.contains(role);
     }
 
     /**

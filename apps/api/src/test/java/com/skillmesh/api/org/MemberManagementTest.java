@@ -15,6 +15,7 @@ import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.support.DatabaseCleaner;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -329,6 +330,26 @@ class MemberManagementTest {
                     "organization_id", orgId.toString()))))
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+    }
+
+    /**
+     * 「加成员」不该顺手削掉别人的权限，也不该重置加入时间：
+     * 已经是 reviewer 的人被再加一次，角色还得是 reviewer。
+     */
+    @Test
+    void 加成员不静默降级已有角色() {
+        UUID orgId = createOrganizationQuietly("acme");
+        UUID teamId = createTeamQuietly(orgId, "platform");
+        CurrentUser member = stranger();
+        orgs.upsertTeamMember(owner, teamId, member.id(), "reviewer");
+        OffsetDateTime joinedAt = orgs.teamMembers(teamId).get(0).joinedAt();
+
+        orgs.addTeamMember(owner, teamId, member.id(), "member");
+
+        assertThat(orgs.teamMembers(teamId))
+            .anyMatch(m -> member.id().equals(m.userId()) && "reviewer".equals(m.role()));
+        assertThat(orgs.teamMembers(teamId).get(0).joinedAt()).as("加入时间没被重置")
+            .isEqualTo(joinedAt);
     }
 
     @Test
