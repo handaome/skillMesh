@@ -103,7 +103,7 @@
 
 | 控制项 | 状态 | 落地位置 |
 | --- | --- | --- |
-| OIDC 认证、令牌可撤销过期刷新 | ✅ | Keycloak；access token 5 分钟 + refresh |
+| OIDC 认证、令牌可撤销过期刷新 | ✅ | Keycloak；access token 30 分钟（realm 的 accessTokenLifespan: 1800）+ refresh |
 | 角色分级（组织管理员/团队管理员/发布者/审核者/使用者） | ✅ | `OrgService.roleAtLeast`：owner>admin>publisher>reviewer>member>viewer |
 | 默认隐私 | ✅ | 同步只进 private；team/organization 需审核 |
 | 密钥防护 | ✅ | 客户端扫描（阻断发布）+ 服务端扫描（版本转 rejected） |

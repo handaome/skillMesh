@@ -3292,7 +3292,7 @@ git commit -m "feat(web): 市场页——搜索与详情合一，用 Element Plu
 **Interfaces:**
 
 - Consumes: Task 2/3 的端点：`GET /organizations/{id}/members`、`GET /organizations/{id}/teams`、`GET /organizations/{id}/invitations`、`POST /organizations/{id}/invitations`、`DELETE /organizations/{id}/invitations/{id}`
-- Produces: `api.ts` 新增 `listTeams`、`listOrgMembers`、`listTeamMembers`、`listInvitations`、`createInvitation`、`revokeInvitation`；`types.ts` 新增 `Team`、`Member`、`Invitation`
+- Produces: `api.ts` 新增 `listTeams`、`listOrgMembers`、`listTeamMembers`、`listInvitations`、`createInvitation`、`revokeInvitation`、`updateOrgRole`；`types.ts` 新增 `Team`、`Member`、`Invitation`
 
 - [ ] **Step 1: 加类型**
 
@@ -3373,6 +3373,10 @@ export function createInvitation(organizationId: string, body: {
 export function revokeInvitation(organizationId: string, invitationId: string): Promise<void> {
   return request<void>(`/organizations/${organizationId}/invitations/${invitationId}`, 'DELETE')
 }
+
+export function updateOrgRole(organizationId: string, userId: string, role: string): Promise<void> {
+  return request<void>(`/organizations/${organizationId}/members/${userId}`, 'PATCH', { role })
+}
 ```
 
 - [ ] **Step 3: 写 TeamPage**
@@ -3382,7 +3386,7 @@ export function revokeInvitation(organizationId: string, invitationId: string): 
 ```vue
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ApiError, createInvitation, listInvitations, listOrgMembers, listTeamMembers, listTeams } from '../api'
+import { ApiError, createInvitation, listInvitations, listOrgMembers, listTeamMembers, listTeams, updateOrgRole } from '../api'
 import { session } from '../auth/session'
 import type { Invitation, Member, Team } from '../types'
 
@@ -3395,6 +3399,7 @@ const notice = ref('')
 const inviteLink = ref('')
 const selectedTeam = ref('')
 const inviteRole = ref('member')
+const inviteOrgRole = ref('member')
 
 async function load() {
   if (!org.value) return
@@ -3421,7 +3426,7 @@ async function invite() {
   try {
     const created = await createInvitation(org.value.id, {
       team_id: selectedTeam.value || undefined,
-      org_role: 'member',
+      org_role: inviteOrgRole.value,
       team_role: inviteRole.value,
     })
     inviteLink.value = created.invite_url
@@ -3436,6 +3441,18 @@ async function revoke(id: string) {
   if (!org.value) return
   await revokeInvitation(org.value.id, id)
   await load()
+}
+
+/** 改组织角色。被邀请进来的人默认是 member，要往团队发布得有 publisher 以上。 */
+async function changeRole(member: Member, role: string) {
+  if (!org.value || role === member.role) return
+  error.value = ''
+  try {
+    await updateOrgRole(org.value.id, member.user_id, role)
+    await load()
+  } catch (e) {
+    error.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+  }
 }
 
 onMounted(load)
@@ -3472,9 +3489,21 @@ onMounted(load)
           <el-table-column label="邮箱" min-width="160">
             <template #default="scope">{{ scope.row.email ?? '—' }}</template>
           </el-table-column>
-          <el-table-column label="角色" width="120">
+          <el-table-column label="角色" width="170">
             <template #default="scope">
-              <el-tag size="small">{{ scope.row.role }}</el-tag>
+              <el-select
+                :model-value="scope.row.role"
+                size="small"
+                data-test="role-edit"
+                @change="(value: string) => changeRole(scope.row, value)"
+              >
+                <el-option label="owner" value="owner" />
+                <el-option label="admin" value="admin" />
+                <el-option label="publisher" value="publisher" />
+                <el-option label="reviewer" value="reviewer" />
+                <el-option label="member" value="member" />
+                <el-option label="viewer" value="viewer" />
+              </el-select>
             </template>
           </el-table-column>
           <el-table-column label="加入时间" width="120">
@@ -3489,11 +3518,17 @@ onMounted(load)
       <el-card shadow="never" class="sm-mb-16">
         <h2 class="sm-h2">邀请</h2>
         <div class="sm-search">
+          <el-select v-model="inviteOrgRole" data-test="org-role-select" class="sm-grow">
+            <el-option label="组织角色 member" value="member" />
+            <el-option label="组织角色 publisher" value="publisher" />
+            <el-option label="组织角色 reviewer" value="reviewer" />
+            <el-option label="组织角色 admin" value="admin" />
+          </el-select>
           <el-select v-model="inviteRole" data-test="role-select" class="sm-grow">
-            <el-option label="member" value="member" />
-            <el-option label="publisher" value="publisher" />
-            <el-option label="reviewer" value="reviewer" />
-            <el-option label="admin" value="admin" />
+            <el-option label="团队角色 member" value="member" />
+            <el-option label="团队角色 publisher" value="publisher" />
+            <el-option label="团队角色 reviewer" value="reviewer" />
+            <el-option label="团队角色 admin" value="admin" />
           </el-select>
           <el-button type="primary" data-test="invite" @click="invite">生成邀请链接</el-button>
         </div>
@@ -4127,6 +4162,9 @@ onMounted(load)
         提交人 {{ detail.item.submitted_by ?? '—' }}
         <template v-if="detail.item.source.repository">
           · {{ detail.item.source.repository }}
+        </template>
+        <template v-if="detail.item.source.ref">
+          · {{ detail.item.source.ref }}
         </template>
         <template v-if="detail.item.source.commit">
           · {{ detail.item.source.commit.slice(0, 12) }}
@@ -4824,15 +4862,20 @@ cd apps/web && pnpm install && pnpm dev
 | 2 | CLI 建组织与团队：`skillmesh` 目前没有建组织的命令——用 API 建，见下方 curl | 组织 acme、团队 platform 建好 |
 | 3 | 团队页生成邀请链接 | 拿到 `http://127.0.0.1:5174/invite/<token>` |
 | 4 | 无痕窗口打开邀请链接，用 dev-user2 / dev2 登录并接受 | 显示「已加入」 |
-| 5 | dev-user2 用 CLI 发布到团队：`skillmesh publish ./skills/java-debug --org acme --team platform` | 输出「已提交审核」 |
-| 6 | dev-user 打开 `/reviews` | 能看到待审版本，带扫描结论与来源 |
-| 7 | 打开详情 | 有 SKILL.md 正文与文件级差异 |
-| 8 | 点「通过」 | 提示已通过 |
-| 9 | dev-user2 `skillmesh search java-debug` | 能搜到 |
-| 10 | dev-user2 `skillmesh install java-debug` | 装到 Agent 目录 |
-| 11 | 负例：dev-user2 打开 `/reviews` | 看不到（他不是 reviewer） |
-| 12 | 负例：把一个过期邀请的链接打开 | 页面提示已过期，接受返回 409 `INVITATION_INVALID` |
-| 13 | 负例：组织 owner 尝试把自己降级 | 400 `VALIDATION_FAILED` |
+| 5 | 团队页把 dev-user2 的组织角色改成 publisher | 成员表角色列显示 publisher |
+| 6 | dev-user2 用 CLI 发布到团队：`skillmesh publish ./skills/java-debug --org acme --team platform` | 输出「已提交审核」 |
+| 7 | dev-user 打开 `/reviews` | 能看到待审版本，带扫描结论与来源 |
+| 8 | 打开详情 | 有 SKILL.md 正文与文件级差异 |
+| 9 | 点「通过」 | 提示已通过 |
+| 10 | dev-user2 `skillmesh search java-debug` | 能搜到；输出最后一列是 Skill 的完整 ID |
+| 11 | dev-user2 `skillmesh install <上一步的 ID>` | 装到 Agent 目录 |
+| 12 | 负例：dev-user2 打开 `/reviews` | 看不到（他不是 reviewer） |
+| 13 | 负例：把一个过期邀请的链接打开 | 页面提示已过期，接受返回 409 `INVITATION_INVALID` |
+| 14 | 负例：组织 owner 尝试把自己降级 | 400 `VALIDATION_FAILED` |
+
+第 5 步不能省：被邀请进来的人默认是组织 `member`，而 CLI 发布到团队校验的是**组织角色**要有 publisher 及以上（`/me` 只返回组织角色）。所以要么在邀请时就把组织角色选成 publisher，要么事后在成员表里改——两种都走团队页。
+
+`install` 收的是 Skill **ID** 不是 slug（`install.go` 的 `Use: "install <skill-id>"`），`search` 输出的最后一列就是它。
 
 第 2 步的建组织用 curl（CLI 还没有建组织命令，v2 不加）：
 
@@ -4887,7 +4930,7 @@ git commit -m "test: 第二个账号与 v2 闭环验收"
 
 浏览器打开控制台首页，点「登录」，跳到 Keycloak 完成认证后回到控制台。
 
-- 令牌存在浏览器 localStorage 里，5 分钟左右自动续期；过期了会自动跳登录页。
+- 令牌存在浏览器 localStorage 里，约 30 分钟自动续期（Keycloak realm 的 `accessTokenLifespan: 1800`）；过期了会自动跳登录页。
 - 登出在右上角。
 
 ## 2. 建组织与团队

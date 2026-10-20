@@ -298,7 +298,7 @@ PKCE **手写，不引 `oidc-client-ts`**：
 
 用 Web Crypto API 原生能力，约 80 行。理由：`oidc-client-ts` 的 silent-renew 走 hidden iframe，在本地 Keycloak + 5174 端口下容易出意外；手写版本没有隐式定时器，行为可预测。
 
-Token 存储：`localStorage` 存 access + refresh token。access token 5 分钟过期，调用前由 `ensureFresh()` 用 refresh token 静默续期；refresh 失败 → 清空会话跳登录页。**取舍**：localStorage 有 XSS 面，这是内部管理工具的常规取舍，spec 里记明。
+Token 存储：`localStorage` 存 access + refresh token。access token 约 30 分钟过期（Keycloak realm 的 `accessTokenLifespan: 1800`），调用前由 `ensureFresh()` 用 refresh token 静默续期；refresh 失败 → 清空会话跳登录页。**取舍**：localStorage 有 XSS 面，这是内部管理工具的常规取舍，spec 里记明。
 
 ### 7.3 状态
 
@@ -375,4 +375,6 @@ Keycloak realm 需要**第二个账号**。在 `infra/keycloak/realm-skillmesh.j
 | 邀请无邮件投递 | 没有 SMTP 依赖，管理员手动把链接发给对方。 |
 | 审核 diff 无缓存 | 每次查看重新解包。低频场景可接受。 |
 | 审计仍只在 Skill 维度 | 全表扫描已修（`GET /audit-events` 改成一条 join 查询，可见性条件与搜索共用 `VisibleSkills`），但**审计台页面**仍不做。 |
+| `install` 收 Skill ID 而非 slug | v1 的实现就是这样（`install <skill-id>`），设计文档 §7.4 的命令表写的是 slug。`skillmesh search` 输出的最后一列就是完整 ID，所以闭环走得通；让 install 同时吃 slug 是 v1 的可用性缺口，不在 v2 范围。 |
+| 发布到团队的权限看的是**组织角色** | CLI 的 `publish --org/--team` 拿到的身份来自 `GET /me`，那里只有组织角色，没有团队角色。所以被邀请进来的人默认是组织 `member`，要往团队发布得先把组织角色提到 publisher 以上（团队页的成员表可改）。 |
 | 多设备冲突可视化 | 仍只在 CLI 侧处理。 |
