@@ -434,6 +434,7 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		}
 		entry.SkillID = result.SkillID
 		entry.LastVersion = result.Version
+		saveBaseline(target, local, &entry)
 		return syncResult{Name: target.Name, Path: target.Path,
 			Outcome: uploaded, Detail: detail}, entry, nil
 	}
@@ -490,6 +491,23 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 			Detail: fmt.Sprintf("本地版本备份到 %s，云端上传 %s", backup, result.Version)}, entry, nil
 
 	default:
+		// 先按文件合一次（设计文档 §6.3）：两边改的不是同一处就合掉，
+		// 真的合不了才落到「冲突副本，等人来定」。
+		base, _ := syncstate.Load(cfg.ConfigDir)
+		prior, _ := base.Find(target.Name, target.Agent)
+		if ok, note, mergeErr := mergeConflict(ctx, client, target, prior, local, skill); mergeErr == nil && ok {
+			if result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+				RelPath: filepath.Base(target.Path)},
+				publishOptions{Visibility: syncVisibility}); err == nil {
+				entry.SkillID = result.SkillID
+				entry.LastVersion = result.Version
+				entry.BaseHash = localHash
+				return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
+					Detail: note + "，已上传 " + result.Version}, entry, nil
+			}
+		} else if mergeErr == nil && note != "" {
+			hint = note + "；用 --resolve keep-local/keep-cloud/keep-both 强行决定"
+		}
 		// 让服务端也知道这次冲突了：另一台设备可能正等着知道这件事。
 		_ = client.ReportAuditEvent(ctx, "sync.conflict_reported", target.SkillID, "denied",
 			map[string]string{"skill": target.Name, "local_hash": localHash[:12]})
@@ -537,6 +555,67 @@ func downloadInto(ctx context.Context, client *apiclient.Client, target syncTarg
 
 func lockfileEntry(target syncTarget) lockfile.LockedSkill {
 	return lockfile.LockedSkill{Name: target.Name, SourceID: target.SkillID}
+}
+
+// saveBaseline 记下这次同步出去的逐文件摘要和内容副本。
+// 下次两边都改时，三方合并要靠它当基准（设计文档 §6.3）。
+func saveBaseline(target syncTarget, local packager.Artifact, entry *syncstate.Entry) {
+	files, err := skillscan.DirHashes(target.Path)
+	if err != nil {
+		return
+	}
+	hashes := make(map[string]string, len(files))
+	for _, file := range files {
+		hashes[file.Path] = file.SHA256
+	}
+	entry.BaseFiles = hashes
+	entry.BaseHash = localHashOf(hashes)
+
+	snapshot := filepath.Join(cfg.ConfigDir, "sync-base",
+		filepath.Join(target.Agent, target.Name))
+	if err := os.RemoveAll(snapshot); err != nil {
+		return
+	}
+	// 副本只留一份，目录换掉就行；失败就不给基线，下次合并会老实说「合不了」
+	_ = copyTree(target.Path, snapshot)
+	if _, err := os.Stat(snapshot); err == nil {
+		entry.BaseSnapshot = snapshot
+	}
+}
+
+// copyTree 复制目录内容（跳过隐藏文件，与打包口径一致）。
+func copyTree(from, to string) error {
+	return filepath.Walk(from, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(from, path)
+		if relErr != nil {
+			return relErr
+		}
+		if info.IsDir() {
+			if strings.HasPrefix(info.Name(), ".") && path != from {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(to, rel), 0o755)
+		}
+		if strings.HasPrefix(info.Name(), ".") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		return os.WriteFile(filepath.Join(to, rel), data, info.Mode().Perm())
+	})
+}
+
+func localHashOf(files map[string]string) string {
+	list := make([]skillscan.FileDigest, 0, len(files))
+	for path, sum := range files {
+		list = append(list, skillscan.FileDigest{Path: path, SHA256: sum})
+	}
+	return skillscan.Digest(list)
 }
 
 func failedResult(target syncTarget, why string) syncResult {

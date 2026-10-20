@@ -24,11 +24,16 @@ type State struct {
 
 // Entry 是一个 Skill 的同步基线。
 type Entry struct {
-	Name        string `yaml:"name"`
-	Agent       string `yaml:"agent"`
-	SkillID     string `yaml:"skill_id,omitempty"`
-	BaseHash    string `yaml:"base_hash,omitempty"`
-	LastVersion string `yaml:"last_version,omitempty"`
+	Name     string `yaml:"name"`
+	Agent    string `yaml:"agent"`
+	SkillID  string `yaml:"skill_id,omitempty"`
+	BaseHash string `yaml:"base_hash,omitempty"`
+	// BaseFiles 是上次同步时每个文件的摘要，冲突时用来判断「谁改了哪些文件」
+	// （设计文档 §6.3：已变更且不同文件 → 按文件合并）。
+	BaseFiles map[string]string `yaml:"base_files,omitempty"`
+	// BaseSnapshot 是上次同步内容的本地副本，三方文本合并要读它。
+	BaseSnapshot string `yaml:"base_snapshot,omitempty"`
+	LastVersion  string `yaml:"last_version,omitempty"`
 	// FirstSeenAt 是第一次在授权目录里发现它的时间，与 SyncedAt 分开：
 	// 发现 ≠ 收编，用户可以先跳过（设计文档 §3.1 首次发现策略）。
 	FirstSeenAt string `yaml:"first_seen_at,omitempty"`
