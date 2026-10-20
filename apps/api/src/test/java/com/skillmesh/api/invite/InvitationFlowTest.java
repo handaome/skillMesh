@@ -2,6 +2,7 @@ package com.skillmesh.api.invite;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -12,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
 import java.util.Map;
 import java.util.UUID;
@@ -37,14 +39,17 @@ class InvitationFlowTest {
     @Autowired private DatabaseCleaner cleaner;
     @Autowired private ObjectMapper json;
     @Autowired private InvitationService invitations;
+    @Autowired private OrgService orgs;
     @Autowired private JdbcTemplate jdbc;
 
     private String auth;
+    private CurrentUser owner;
 
     @BeforeEach
     void 准备() throws Exception {
         cleaner.clean();
         auth = "Bearer " + tokens.accessToken();
+        owner = currentUser();
     }
 
     @Test
@@ -153,6 +158,61 @@ class InvitationFlowTest {
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
+    /** owner 不能通过邀请拿到——邀请只能给到 admin 及以下。 */
+    @Test
+    void 邀请不能授予owner() throws Exception {
+        UUID orgId = createOrganization("acme");
+        UUID teamId = createTeam(orgId, "platform");
+        CurrentUser admin = adminOf(orgId);
+
+        // HTTP 层：请求体校验就拒
+        mockMvc.perform(post("/api/v1/organizations/{id}/invitations", orgId)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "team_id", teamId.toString(), "org_role", "owner", "team_role", "member"))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        // 服务层：不经过请求体校验也要拒
+        ApiException ex = catchThrowableOfType(
+            () -> invitations.create(admin, orgId, teamId, "owner", "member", null),
+            ApiException.class);
+        assertThat(ex).as("服务层也要拒 owner 邀请").isNotNull();
+        assertThat(ex.status()).isEqualTo(400);
+        assertThat(ex.code()).isEqualTo("VALIDATION_FAILED");
+    }
+
+    /** admin 任命 owner 等于提权：owner 只能由现任 owner 亲手给。 */
+    @Test
+    void admin不能授予owner() throws Exception {
+        UUID orgId = createOrganization("acme");
+        CurrentUser admin = adminOf(orgId);
+        UUID target = stranger().id();
+
+        ApiException ex = catchThrowableOfType(
+            () -> orgs.upsertOrgMember(admin, orgId, target, "owner"), ApiException.class);
+        assertThat(ex).as("admin 不能通过 upsertOrgMember 任命 owner").isNotNull();
+        assertThat(ex.status()).isEqualTo(403);
+        assertThat(ex.code()).isEqualTo("FORBIDDEN");
+
+        // 既有的 addOrgMember 是同一个洞，一起堵上
+        ApiException direct = catchThrowableOfType(
+            () -> orgs.addOrgMember(admin, orgId, target, "owner"), ApiException.class);
+        assertThat(direct).as("admin 不能通过 addOrgMember 任命 owner").isNotNull();
+        assertThat(direct.status()).isEqualTo(403);
+        assertThat(direct.code()).isEqualTo("FORBIDDEN");
+    }
+
+    /** 正常路径没被堵死：owner 亲手授予 owner 是允许的。 */
+    @Test
+    void owner能授予owner() throws Exception {
+        UUID orgId = createOrganization("acme");
+        UUID target = stranger().id();
+
+        orgs.upsertOrgMember(owner, orgId, target, "owner");
+        assertThat(orgs.roleIn(orgId, null, target)).isEqualTo("owner");
+    }
+
     private String createInvitation(UUID orgId, UUID teamId) throws Exception {
         String body = mockMvc.perform(post("/api/v1/organizations/{id}/invitations", orgId)
                 .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
@@ -185,6 +245,23 @@ class InvitationFlowTest {
             .andExpect(status().isCreated())
             .andReturn().getResponse().getContentAsString();
         return UUID.fromString(json.readTree(body).path("id").asText());
+    }
+
+    /** 端到端里唯一的真令牌对应的用户——组织就是以它的身份建的，所以它是 owner。 */
+    private CurrentUser currentUser() throws Exception {
+        String body = mockMvc.perform(get("/api/v1/me").header("Authorization", auth))
+            .andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(json.readTree(body).path("user").path("id").asText());
+        String subject = jdbc.queryForObject(
+            "select oidc_subject from users where id = ?", String.class, id);
+        return new CurrentUser(id, subject, "Owner", null);
+    }
+
+    /** 造一个组织管理员——admin 能管成员，但不该能任命 owner。 */
+    private CurrentUser adminOf(UUID orgId) {
+        CurrentUser admin = stranger();
+        orgs.addOrgMember(owner, orgId, admin.id(), "admin");
+        return admin;
     }
 
     /** 造一个真实用户行——成员表对 users 有外键，光给个 UUID 插不进去。 */

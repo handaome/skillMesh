@@ -61,6 +61,9 @@ public class InvitationService {
     public Created create(CurrentUser actor, UUID organizationId, UUID teamId,
                           String orgRole, String teamRole, String subject) {
         orgs.requireOrgAdmin(actor, organizationId);
+        if ("owner".equals(orgRole)) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "owner 角色不能通过邀请授予");
+        }
         if (teamId != null) {
             TeamEntity team = teams.findById(teamId)
                 .orElseThrow(() -> ApiException.notFound("团队"));

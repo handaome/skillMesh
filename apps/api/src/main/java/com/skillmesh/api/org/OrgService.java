@@ -94,6 +94,7 @@ public class OrgService {
     public void addOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
         requireOrgRole(actor, organizationId, Set.of("owner", "admin"));
         requireRole(role, Set.of("owner", "admin", "publisher", "reviewer", "member", "viewer"));
+        requireOwnerToGrantOwner(actor, organizationId, role);
         MembershipEntities.OrgMembership membership = new MembershipEntities.OrgMembership();
         membership.setId(new MembershipEntities.OrgKey(organizationId, memberId));
         membership.setRole(role);
@@ -226,6 +227,7 @@ public class OrgService {
     @Transactional
     public void upsertOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
         requireRole(role, Set.of("owner", "admin", "publisher", "reviewer", "member", "viewer"));
+        requireOwnerToGrantOwner(actor, organizationId, role);
         MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
         MembershipEntities.OrgMembership membership = orgMembers.findById(key).orElseGet(() -> {
             MembershipEntities.OrgMembership created = new MembershipEntities.OrgMembership();
@@ -272,6 +274,16 @@ public class OrgService {
         if (role == null || !allowed.contains(role)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "角色只能是 " + String.join(" / ", allowed));
+        }
+    }
+
+    /**
+     * 授予 owner 只能由现任 owner 亲手做。
+     * admin 能任命 owner，就等于能把自己人提上去再踢出组织——那是提权。
+     */
+    private void requireOwnerToGrantOwner(CurrentUser actor, UUID organizationId, String role) {
+        if ("owner".equals(role) && !hasOrgRole(actor, organizationId, Set.of("owner"))) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织 owner 能授予 owner 角色");
         }
     }
 
