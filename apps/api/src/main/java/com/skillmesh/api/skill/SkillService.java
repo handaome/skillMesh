@@ -212,12 +212,13 @@ public class SkillService {
                 throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                     "owner_team_id 必须属于 organization_id");
             }
-            // 往团队发布是团队范围内的动作，判的是发起人在这个团队里的角色。
-            // roleIn 优先取团队角色，没有才退回组织角色——正好符合语义。
-            String role = orgs.roleIn(req.organization_id(), req.owner_team_id(), user.id());
+            // 判的是组织角色——与 CLI、手册一致。别用 roleIn：那个优先取团队角色，
+            // 而接受邀请会写一行 team_role=member，把组织角色永久遮住，
+            // 手册给的解法（提组织角色）在服务端就不生效了。
+            String role = orgs.roleIn(req.organization_id(), null, user.id());
             if (!OrgService.roleAtLeast(role, "publisher")) {
                 throw new ApiException(403, ErrorCodes.FORBIDDEN,
-                    "在该团队里需要 publisher 及以上角色才能发布");
+                    "在该组织里需要 publisher 及以上角色才能发布");
             }
         }
         if ("organization".equals(visibility)) {

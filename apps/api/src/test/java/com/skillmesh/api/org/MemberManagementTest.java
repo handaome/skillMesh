@@ -295,6 +295,27 @@ class MemberManagementTest {
     }
 
     @Test
+    void 组织角色是publisher时不受团队角色影响() throws Exception {
+        CurrentUser other = stranger();
+        UUID orgId = orgs.createOrganization(other, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(other, orgId, "platform", "Platform", null).getId();
+        orgs.addOrgMember(other, orgId, owner.id(), "publisher");   // 组织角色够
+        orgs.addTeamMember(other, teamId, owner.id(), "member");    // 团队角色不够
+
+        // 判的是组织角色（与 CLI、手册一致）→ 放行。
+        // 接受邀请会写一行 team_role=member 把组织角色遮住，
+        // 服务端若查团队角色，手册给的解法（提组织角色）就失效了。
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", "org-publisher", "name", "Org Publisher", "description", "",
+                    "visibility", "team",
+                    "organization_id", orgId.toString(),
+                    "owner_team_id", teamId.toString()))))
+            .andExpect(status().isCreated());
+    }
+
+    @Test
     void 非publisher不能建组织可见的Skill() throws Exception {
         CurrentUser other = stranger();
         UUID orgId = orgs.createOrganization(other, "acme", "Acme").getId();
