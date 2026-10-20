@@ -82,3 +82,25 @@ export interface CreatedInvitation {
   invite_url: string
   token: string
 }
+
+// 公开邀请摘要：不含 token、不含被邀请人身份，给还没登录的人看。
+export interface InvitationSummary {
+  id: string
+  organization_name: string
+  team_name: string | null
+  org_role: string
+  team_role: string
+  status: string
+  expires_at: string
+  created_at: string
+}
+
+// 接受邀请的结果：告诉前端落进了哪个组织、哪个团队。
+export interface AcceptedInvitation {
+  invitation_id: string
+  organization_id: string
+  team_id: string | null
+  org_role: string
+  team_role: string
+  message: string
+}

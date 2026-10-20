@@ -1,6 +1,6 @@
 import { ensureFresh, logout, session } from './auth/session'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation } from './types'
 
 const BASE = '/api/v1'
 
@@ -107,4 +107,15 @@ export function revokeInvitation(organizationId: string, invitationId: string): 
 
 export function updateOrgRole(organizationId: string, userId: string, role: string): Promise<void> {
   return request<void>(`/organizations/${organizationId}/members/${userId}`, 'PATCH', { role })
+}
+
+/** 公开：没登录的人也要看得懂这份邀请是什么。 */
+export function getInvitation(token: string): Promise<InvitationSummary> {
+  return request<InvitationSummary>(`/invitations/${encodeURIComponent(token)}`)
+}
+
+export function acceptInvitation(token: string): Promise<AcceptedInvitation> {
+  // method 在第二位：写成 body 位会发成 GET，接受了也不算数。
+  return request<AcceptedInvitation>(
+    `/invitations/${encodeURIComponent(token)}/accept`, 'POST')
 }
