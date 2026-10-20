@@ -41,7 +41,7 @@ A 登录 Web → A 建组织+团队 → A 生成邀请链接
 
 ### 4.1 新表 `org_invitations`
 
-V2 迁移（`db/migrations/V2__team_console.sql`，同时复制到 `apps/api/src/main/resources/db/migrations/`）：
+V3 迁移（`db/migrations/V3__team_console.sql`，同时复制到 `apps/api/src/main/resources/db/migrations/`）：
 
 ```sql
 CREATE TABLE org_invitations (
@@ -333,7 +333,7 @@ skillmesh publish ./skills/java-debug --team platform --org acme
 
 | 切片 | 内容 | 交付判据 |
 | --- | --- | --- |
-| 1. 服务端 | V2 迁移 + 邀请服务与端点 + 成员读改删 + 审核队列 + diff | Java 单测绿（邀请生命周期、成员权限、审核可见性、diff 口径） |
+| 1. 服务端 | V3 迁移 + 邀请服务与端点 + 成员读改删 + 审核队列 + diff | Java 单测绿（邀请生命周期、成员权限、审核可见性、diff 口径） |
 | 2. Web 基建 | vue-router + 会话 + 登录页 + 布局 + CSS 库 | 能用两个 Keycloak 账号在浏览器登录并互相看到对方 |
 | 3. Web 业务页 | 团队页 + 邀请页 + 审核队列页与详情页 | 浏览器里走完 §3 的前三步与审核步 |
 | 4. CLI | `publish --team/--org` | Go 单测：slug 解析、权限拒绝、请求体带 id |

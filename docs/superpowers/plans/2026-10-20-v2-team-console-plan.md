@@ -82,8 +82,8 @@ apps/web/src/
 
 **Files:**
 
-- Create: `db/migrations/V2__team_console.sql`
-- Create: `apps/api/src/main/resources/db/migrations/V2__team_console.sql`（与 `db/` 那份逐字相同）
+- Create: `db/migrations/V3__team_console.sql`
+- Create: `apps/api/src/main/resources/db/migrations/V3__team_console.sql`（与 `db/` 那份逐字相同）
 - Create: `apps/api/src/main/java/com/skillmesh/api/invite/InvitationEntity.java`
 - Create: `apps/api/src/main/java/com/skillmesh/api/invite/InvitationRepository.java`
 - Modify: `apps/api/src/test/java/com/skillmesh/api/FlywayMigrationTest.java`（表数 19 → 20）
@@ -100,7 +100,7 @@ apps/web/src/
 
 - [ ] **Step 1: 写迁移 SQL**
 
-`db/migrations/V2__team_console.sql`：
+`db/migrations/V3__team_console.sql`：
 
 ```sql
 -- v2：团队控制台——邀请成员进组织/团队。
@@ -126,10 +126,10 @@ CREATE TABLE org_invitations (
 CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status);
 ```
 
-复制到 `apps/api/src/main/resources/db/migrations/V2__team_console.sql`：
+复制到 `apps/api/src/main/resources/db/migrations/V3__team_console.sql`：
 
 ```bash
-cp db/migrations/V2__team_console.sql apps/api/src/main/resources/db/migrations/V2__team_console.sql
+cp db/migrations/V3__team_console.sql apps/api/src/main/resources/db/migrations/V3__team_console.sql
 ```
 
 - [ ] **Step 2: 改迁移测试的表数断言**
@@ -167,6 +167,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * org_invitations 表：把第二个人拉进组织/团队的凭据。
@@ -192,7 +194,9 @@ public class InvitationEntity {
     @Column(name = "team_role", nullable = false)
     private String teamRole;
 
-    @Column(name = "token_hash", nullable = false)
+    // 显式指定 CHAR 才过得了 schema 校验。
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "token_hash", length = 64, nullable = false)
     private String tokenHash;
 
     @Column(nullable = false)
