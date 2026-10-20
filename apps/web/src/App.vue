@@ -1,60 +1,50 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import DetailPage from './components/DetailPage.vue'
-import SearchPage from './components/SearchPage.vue'
+import { onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { ensureFresh, loadMe, logout, session } from './auth/session'
 
-// v1 不做登录界面：把 CLI 登录拿到的 access token 贴进来即可。
-const STORAGE_KEY = 'skillmesh_token'
+const router = useRouter()
 
-const token = ref(localStorage.getItem(STORAGE_KEY) ?? '')
-const openId = ref<string | null>(null)
+onMounted(async () => {
+  if (!session.accessToken) return
+  if (!(await ensureFresh())) {
+    // 续不了就登出（ensureFresh 已经清了会话），把人送回登录页
+    router.push('/login')
+    return
+  }
+  try {
+    await loadMe()
+  } catch {
+    // 拉不到就当没登录，路由守卫会处理
+  }
+})
 
-function saveToken() {
-  localStorage.setItem(STORAGE_KEY, token.value)
+function signOut() {
+  logout()
+  router.push('/login')
 }
 </script>
 
 <template>
-  <header>
-    <h1>SkillMesh</h1>
-    <input
-      v-model="token"
-      placeholder="粘贴 CLI 的 access token"
-      aria-label="access token"
-      @change="saveToken"
-    />
-  </header>
-  <DetailPage
-    v-if="openId"
-    :skill-id="openId"
-    :token="token"
-    @back="openId = null"
-  />
-  <SearchPage v-else :token="token" @open="openId = $event" />
+  <div class="sm-shell">
+    <header class="sm-topbar">
+      <router-link class="sm-brand" to="/">SkillMesh</router-link>
+      <nav class="sm-nav">
+        <router-link to="/">市场</router-link>
+        <router-link to="/team">团队</router-link>
+        <router-link to="/reviews">审核</router-link>
+      </nav>
+      <div class="sm-topbar-right">
+        <el-tag v-if="session.user" type="info" effect="plain" data-test="who">
+          {{ session.user.display_name }}
+        </el-tag>
+        <el-button v-if="session.user" text data-test="logout" @click="signOut">
+          登出
+        </el-button>
+      </div>
+    </header>
+    <main class="sm-main">
+      <router-view />
+    </main>
+  </div>
 </template>
-
-<style>
-body {
-  font-family: system-ui, sans-serif;
-  margin: 0;
-  padding: 1.5rem;
-  max-width: 60rem;
-}
-header {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-  margin-bottom: 1.5rem;
-}
-header h1 {
-  font-size: 1.25rem;
-  margin: 0;
-}
-header input {
-  flex: 1;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  font: inherit;
-}
-</style>
