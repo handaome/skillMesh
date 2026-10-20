@@ -54,7 +54,7 @@ describe('ReviewQueuePage', () => {
 
 describe('ReviewDetailPage', () => {
   it('展示正文、扫描结论与文件差异', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse({
       item: REVIEW,
       skill_md: '# Runbook\n\n内容',
       changelog: '',
@@ -65,7 +65,8 @@ describe('ReviewDetailPage', () => {
         truncated: false,
         files: [{ path: 'SKILL.md', kind: 'added', added: 0, removed: 0, truncated: false }],
       },
-    })))
+    }))
+    vi.stubGlobal('fetch', fetchMock)
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/reviews/:skillId/:version', component: ReviewDetailPage }],
@@ -78,5 +79,18 @@ describe('ReviewDetailPage', () => {
     expect(wrapper.find('[data-test="skill-md"]').text()).toContain('Runbook')
     expect(wrapper.find('[data-test="diff-row"]').text()).toContain('SKILL.md')
     expect(wrapper.text()).toContain('external_download')
+    // 命中项的键名守的是 path / detail：只断言 rule 的话，键名写错界面照样「有内容」，
+    // 但文件路径与命中说明全没了。rule 不带键名信息，所以这两个值必须单独断言。
+    expect(wrapper.text()).toContain('a.sh')
+    expect(wrapper.text()).toContain('外部下载')
+
+    // 点「通过」：method 在 method 位、comment 在 body 位——写错成 GET 服务端不会受理。
+    await wrapper.find('[data-test="approve"]').trigger('click')
+    await flushPromises()
+
+    const approve = fetchMock.mock.calls.find(([url]) => String(url).includes('/approve'))
+    expect(approve?.[0]).toBe('/api/v1/skills/s1/versions/1.0.0/approve')
+    expect(approve?.[1]?.method).toBe('POST')
+    expect(JSON.parse(String(approve?.[1]?.body))).toEqual({ comment: '' })
   })
 })
