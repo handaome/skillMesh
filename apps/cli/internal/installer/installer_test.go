@@ -162,7 +162,6 @@ func Test删除不存在的目录不报错(t *testing.T) {
 func Test解包拒绝路径穿越条目(t *testing.T) {
 	evil := makeZip(t, map[string]string{
 		"../escaped.txt": "pwned",
-		"/absolute.txt":  "pwned",
 	})
 	dir := t.TempDir()
 	if _, err := ExtractZip(evil, dir); err == nil ||
@@ -171,6 +170,19 @@ func Test解包拒绝路径穿越条目(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "..", "escaped.txt")); err == nil {
 		t.Fatal("文件被写到目录外")
+	}
+}
+
+// 绝对路径与路径穿越分开测：makeZip 用 map 构造，Go 的 map 迭代顺序随机，
+// 两种条目放一个包里时先撞上哪个检查不确定。
+func Test解包拒绝绝对路径条目(t *testing.T) {
+	evil := makeZip(t, map[string]string{
+		"/absolute.txt": "pwned",
+	})
+	dir := t.TempDir()
+	if _, err := ExtractZip(evil, dir); err == nil ||
+		!strings.Contains(err.Error(), "绝对路径") {
+		t.Fatalf("期望拒绝绝对路径，得到 %v", err)
 	}
 }
 
