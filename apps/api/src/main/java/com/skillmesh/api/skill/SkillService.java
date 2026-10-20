@@ -212,23 +212,39 @@ public class SkillService {
                 throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                     "owner_team_id 必须属于 organization_id");
             }
-            // 判的是组织角色——与 CLI、手册一致。别用 roleIn：那个优先取团队角色，
-            // 而接受邀请会写一行 team_role=member，把组织角色永久遮住，
-            // 手册给的解法（提组织角色）在服务端就不生效了。
-            String role = orgs.roleIn(req.organization_id(), null, user.id());
-            if (!OrgService.roleAtLeast(role, "publisher")) {
-                throw new ApiException(403, ErrorCodes.FORBIDDEN,
-                    "在该组织里需要 publisher 及以上角色才能发布");
-            }
         }
-        if ("organization".equals(visibility)) {
-            // 发到组织是组织范围内的动作，判的是组织角色。
-            String role = orgs.roleIn(req.organization_id(), null, user.id());
-            if (!OrgService.roleAtLeast(role, "publisher")) {
-                throw new ApiException(403, ErrorCodes.FORBIDDEN,
-                    "在该组织里需要 publisher 及以上角色才能发布");
-            }
+        // 团队与组织可见都要 publisher 及以上——发到组织是组织范围内的动作。
+        requireOrgPublisher(user, req.organization_id());
+    }
+
+    /**
+     * 发布权：组织角色 publisher 及以上。
+     *
+     * 判的是组织角色——与 CLI、手册一致。teamId 传 null 是刻意的：
+     * roleIn 优先取团队角色，而接受邀请会写一行 team_role=member，
+     * 把组织角色永久遮住，手册给的解法（提组织角色）在服务端就不生效了。
+     */
+    private void requireOrgPublisher(CurrentUser user, UUID organizationId) {
+        String role = orgs.roleIn(organizationId, null, user.id());
+        if (!OrgService.roleAtLeast(role, "publisher")) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN,
+                "在该组织里需要 publisher 及以上角色才能发布");
         }
+    }
+
+    /**
+     * 给已有的 Skill 发新版本要有的发布权。
+     *
+     * 建 Skill 时按可见性判过一次发布权，但发新版本是另一次发布动作——
+     * 只判可见性的话，团队的普通成员也能往团队的待审队列里塞一版内容。
+     * private/public 不受影响：个人 Skill 属主自己发新版本是既有行为。
+     */
+    public void requirePublishRight(CurrentUser user, SkillEntity skill) {
+        if (!"team".equals(skill.getVisibility())
+            && !"organization".equals(skill.getVisibility())) {
+            return;
+        }
+        requireOrgPublisher(user, skill.getOrganizationId());
     }
 
     private static String normalize(String q) {

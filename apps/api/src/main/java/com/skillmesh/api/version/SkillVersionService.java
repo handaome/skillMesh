@@ -61,7 +61,10 @@ public class SkillVersionService {
     @Transactional
     public CreateVersionResponse create(CurrentUser user, UUID skillId,
                                         CreateVersionRequest req) {
-        requireVisibleSkill(user, skillId);
+        SkillEntity skill = requireVisibleSkill(user, skillId);
+        // 建版本是发布动作：团队/组织可见的 Skill 要有发布权（组织角色 publisher 及以上）。
+        // 只判可见性的话，团队的普通成员也能往待审队列里塞一版内容。
+        skillService.requirePublishRight(user, skill);
         if (versions.existsBySkillIdAndVersion(skillId, req.version())) {
             throw ApiException.versionConflict("版本已存在且不可覆盖: " + req.version());
         }

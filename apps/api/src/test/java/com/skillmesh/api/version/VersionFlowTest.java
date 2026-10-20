@@ -1,12 +1,17 @@
 package com.skillmesh.api.version;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.version.dto.CreateVersionRequest;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -20,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import com.skillmesh.api.auth.TestTokens;
@@ -36,6 +42,9 @@ class VersionFlowTest {
     @Autowired private TestTokens tokens;
     @Autowired private DatabaseCleaner cleaner;
     @Autowired private ObjectMapper json;
+    @Autowired private OrgService orgs;
+    @Autowired private JdbcTemplate jdbc;
+    @Autowired private SkillVersionService versions;
 
     private String auth;
 
@@ -191,6 +200,49 @@ class VersionFlowTest {
             .andExpect(jsonPath("$.items[0].scan.status").value("passed"));
     }
 
+    /**
+     * 团队 Skill 发新版本要发布权：只判可见性的话，团队的普通成员
+     * 也能往待审队列里塞一版内容。
+     */
+    @Test
+    void 团队普通成员建版本被拒() throws Exception {
+        UUID orgId = createOrg("acme");
+        UUID teamId = createTeam(orgId, "platform");
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        CurrentUser member = userWithRoles(orgId, teamId, "member", "member");
+
+        ApiException err = catchThrowableOfType(
+            () -> versions.create(member, skillId, versionRequest("1.0.0")),
+            ApiException.class);
+        assertThat(err).as("团队普通成员没有发布权").isNotNull();
+        assertThat(err.status()).isEqualTo(403);
+        assertThat(err.code()).isEqualTo("FORBIDDEN");
+        assertThat(err).hasMessageContaining("publisher");
+    }
+
+    /**
+     * 组织角色 publisher 就能发——判的是组织角色，团队角色不够也不挡。
+     * 这正是「接受邀请之后」的状态：组织角色 publisher，团队角色 member。
+     */
+    @Test
+    void 组织角色publisher能建团队版本() throws Exception {
+        UUID orgId = createOrg("acme");
+        UUID teamId = createTeam(orgId, "platform");
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        CurrentUser publisher = userWithRoles(orgId, teamId, "publisher", "member");
+
+        assertThat(versions.create(publisher, skillId, versionRequest("1.0.0")).versionId())
+            .as("组织角色够就能建版本").isNotNull();
+    }
+
+    /** 个人 Skill 属主自己发新版本不受影响——v1 的既有行为别误伤。 */
+    @Test
+    void 个人Skill属主建新版本不受影响() throws Exception {
+        UUID skillId = createSkill("personal");
+        assertThat(versions.create(owner(), skillId, versionRequest("1.0.0")).versionId())
+            .as("个人 Skill 属主发新版本").isNotNull();
+    }
+
     /** 发布一个版本并完成上传，返回版本列表里该版本那一项的 JSON。 */
     private String publishVersion(UUID skillId, String version, byte[] zip) throws Exception {
         String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)
@@ -224,6 +276,59 @@ class VersionFlowTest {
             .andExpect(status().isCreated())
             .andReturn().getResponse().getContentAsString();
         return UUID.fromString(json.readTree(resp).path("id").asText());
+    }
+
+    /** 令牌用户（测试里唯一的真实用户），组织里是 owner。 */
+    private CurrentUser owner() throws Exception {
+        String body = mockMvc.perform(get("/api/v1/me").header("Authorization", auth))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(json.readTree(body).path("user").path("id").asText());
+        return new CurrentUser(id, "owner", "Owner", "owner@example.com");
+    }
+
+    private UUID createOrg(String slug) throws Exception {
+        return orgs.createOrganization(owner(), slug, slug).getId();
+    }
+
+    private UUID createTeam(UUID orgId, String slug) throws Exception {
+        return orgs.createTeam(owner(), orgId, slug, slug, null).getId();
+    }
+
+    private UUID createTeamSkill(UUID orgId, UUID teamId, String slug) throws Exception {
+        String body = mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", slug, "name", slug, "description", "",
+                    "visibility", "team",
+                    "organization_id", orgId.toString(),
+                    "owner_team_id", teamId.toString()))))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        return UUID.fromString(json.readTree(body).path("id").asText());
+    }
+
+    /**
+     * 造一个真实用户行，并给它组织身份与团队身份——接受邀请之后就是这样：
+     * 两个身份各有一行，角色分别存在。
+     */
+    private CurrentUser userWithRoles(UUID orgId, UUID teamId, String orgRole, String teamRole) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("insert into users (id, oidc_issuer, oidc_subject, display_name, status) "
+            + "values (?, 'https://kc', ?, 'Member', 'active')", id, "mem-" + id);
+        jdbc.update("insert into organization_memberships "
+            + "(organization_id, user_id, role, joined_at) values (?, ?, ?, now())",
+            orgId, id, orgRole);
+        jdbc.update("insert into team_memberships (team_id, user_id, role, joined_at) "
+            + "values (?, ?, ?, now())", teamId, id, teamRole);
+        return new CurrentUser(id, "mem-" + id, "Member", null);
+    }
+
+    private CreateVersionRequest versionRequest(String version) throws Exception {
+        byte[] zip = zipOf("SKILL.md", "# " + version + "\n");
+        String digest = sha256(zip);
+        return new CreateVersionRequest(version, "stable", null, null, "",
+            zip.length, 1, digest,
+            List.of(new CreateVersionRequest.ManifestEntry("SKILL.md", digest, zip.length, false)));
     }
 
     private void putToStorage(String url, byte[] data) throws Exception {
