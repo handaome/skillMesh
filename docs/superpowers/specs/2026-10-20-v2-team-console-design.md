@@ -190,8 +190,8 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
 {
   "skill_md": "---\nname: Java Debug\n---\n...",
   "changelog": "...",
-  "findings": [{"rule": "external_download", "severity": "warning",
-                "file": "scripts/fetch.sh", "line": 12, "message": "..."}],
+  "findings": [{"rule": "external_download",
+                "path": "scripts/fetch.sh", "line": 12, "detail": "..."}],
   "diff": {
     "base_version": "0.9.0",
     "truncated": false,
