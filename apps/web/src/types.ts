@@ -120,6 +120,8 @@ export interface PendingReview {
   submitted_at: string | null
   scan: ReviewScan
   source: ReviewSource
+  /** 版本自己的状态：draft / scanning / pending_review / published / rejected。 */
+  status: string
 }
 
 export interface FileChange {

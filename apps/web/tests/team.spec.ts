@@ -123,6 +123,41 @@ describe('TeamPage', () => {
     expect(wrapper.find('[data-test="role-edit"]').text()).toBe('member')
   })
 
+  it('选中团队时改的是团队角色，打到团队路径', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') return noContent()
+      // 两层角色不同：组织里是 publisher，团队里只是 member
+      if (url.includes('/teams/t1/members')) {
+        return jsonResponse([{ ...MEMBER, role: 'member' }])
+      }
+      if (url.includes('/members')) return jsonResponse([{ ...MEMBER, role: 'publisher' }])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="team-select"]')
+    teamSelect.vm.$emit('update:modelValue', 't1')
+    teamSelect.vm.$emit('change', 't1')
+    await flushPromises()
+
+    // 团队视图显示的是团队角色，不是组织角色
+    expect(wrapper.find('[data-test="role-edit"]').text()).toBe('member')
+
+    const roleEdit = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="role-edit"]')
+    roleEdit.vm.$emit('change', 'reviewer')
+    await flushPromises()
+
+    // 改的是团队角色，打的必须是团队路径（打组织路径就改不到审核放行权那一层）
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
+    expect(patch?.[0]).toBe('/api/v1/organizations/org1/teams/t1/members/u1')
+    expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ role: 'reviewer' })
+  })
+
   it('换团队后重读该团队的成员', async () => {
     session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {

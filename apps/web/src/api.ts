@@ -138,3 +138,14 @@ export function rejectVersion(skillId: string, version: string, comment = ''): P
   return request<unknown>(
     `/skills/${skillId}/versions/${encodeURIComponent(version)}/reject`, 'POST', { comment })
 }
+
+/**
+ * 改团队角色。
+ *
+ * 与 updateOrgRole 是两件事：团队角色管审核放行权，组织角色管发布权。
+ * 团队里没有 owner 这一档，服务端会 400。
+ */
+export function updateTeamRole(organizationId: string, teamId: string, userId: string, role: string): Promise<void> {
+  return request<void>(
+    `/organizations/${organizationId}/teams/${teamId}/members/${userId}`, 'PATCH', { role })
+}

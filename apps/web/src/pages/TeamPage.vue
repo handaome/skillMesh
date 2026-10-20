@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   ApiError,
   createInvitation,
@@ -9,6 +9,7 @@ import {
   listTeams,
   revokeInvitation,
   updateOrgRole,
+  updateTeamRole,
 } from '../api'
 import { currentOrg } from '../auth/currentOrg'
 import type { Invitation, Member, Team } from '../types'
@@ -29,14 +30,22 @@ const selectedTeam = ref('')
 const inviteRole = ref('member')
 const inviteOrgRole = ref('member')
 
+/** 组织角色有 owner 一档，团队没有——服务端 400 挡着，别放进下拉。 */
+const ORG_ROLE_OPTIONS = ['owner', 'admin', 'publisher', 'reviewer', 'member', 'viewer']
+const TEAM_ROLE_OPTIONS = ['admin', 'publisher', 'reviewer', 'member', 'viewer']
+
+/** 角色下拉的选项：选了团队就是团队角色，没选就是组织角色。 */
+const roleOptions = computed(() => (selectedTeam.value ? TEAM_ROLE_OPTIONS : ORG_ROLE_OPTIONS))
+
 function errorText(e: unknown): string {
   return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
 }
 
 /**
  * 列表里的成员。没选团队就是组织成员；选了团队就是该团队的人。
- * 角色列改的始终是组织角色（服务端只提供改组织角色这一个入口），
- * 所以团队视图里也显示组织角色，免得改完看着没生效。
+ *
+ * 角色列显示的就是列表给的那个角色：团队视图给的是团队角色（管审核放行权），
+ * 叠上组织角色会让人改错地方——团队角色才是这里能改的那一层。
  */
 async function loadMembers() {
   if (!org.value) return
@@ -44,12 +53,7 @@ async function loadMembers() {
     members.value = await listOrgMembers(org.value.id)
     return
   }
-  const [teamMembers, orgMembers] = await Promise.all([
-    listTeamMembers(org.value.id, selectedTeam.value),
-    listOrgMembers(org.value.id),
-  ])
-  const roles = new Map(orgMembers.map((m) => [m.user_id, m.role]))
-  members.value = teamMembers.map((m) => ({ ...m, role: roles.get(m.user_id) ?? m.role }))
+  members.value = await listTeamMembers(org.value.id, selectedTeam.value)
 }
 
 /** 重读成员表。切团队、改角色之后都走这里。 */
@@ -112,12 +116,19 @@ async function revoke(id: string) {
   }
 }
 
-/** 改组织角色。被邀请进来的人默认是 member，要往团队发布得有 publisher 以上。 */
+/**
+ * 改角色。选了团队改团队角色（管审核放行权），没选团队改组织角色（管发布权）——
+ * 两层是分开的，改错层就白改。
+ */
 async function changeRole(member: Member, role: string) {
   if (!org.value || role === member.role) return
   memberError.value = ''
   try {
-    await updateOrgRole(org.value.id, member.user_id, role)
+    if (selectedTeam.value) {
+      await updateTeamRole(org.value.id, selectedTeam.value, member.user_id, role)
+    } else {
+      await updateOrgRole(org.value.id, member.user_id, role)
+    }
   } catch (e) {
     memberError.value = errorText(e)
     return
@@ -185,7 +196,7 @@ onMounted(load)
           <el-table-column label="邮箱" min-width="160">
             <template #default="scope">{{ scope.row.email ?? '—' }}</template>
           </el-table-column>
-          <el-table-column label="角色" width="170">
+          <el-table-column :label="selectedTeam ? '团队角色' : '组织角色'" width="170">
             <template #default="scope">
               <el-select
                 :model-value="scope.row.role"
@@ -193,12 +204,7 @@ onMounted(load)
                 data-test="role-edit"
                 @change="(value: string) => changeRole(scope.row, value)"
               >
-                <el-option label="owner" value="owner" />
-                <el-option label="admin" value="admin" />
-                <el-option label="publisher" value="publisher" />
-                <el-option label="reviewer" value="reviewer" />
-                <el-option label="member" value="member" />
-                <el-option label="viewer" value="viewer" />
+                <el-option v-for="role in roleOptions" :key="role" :label="role" :value="role" />
               </el-select>
             </template>
           </el-table-column>
