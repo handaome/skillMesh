@@ -16,7 +16,7 @@
 
 - **API 基址**：`http://localhost:8080/api/v1`，所有路由挂在此前缀下。JSON 字段 `snake_case`；错误用 problem+json，客户端只按 `code` 分支。
 - **一个文件一个类**：Java 每文件一个类，DTO 用 record；Go 一个文件一个职责；Vue 一个组件一个文件。
-- **测试库**：`skillmesh_test` schema，与应用库不共享。测试用 `DatabaseCleaner` 清库。
+- **测试库**：独立**数据库** `skillmesh_test`（不是 schema），与应用的 `skill_mesh` 库完全隔离；表在它的 `public` schema 里。测试 SQL 用裸表名（`truncate table artifacts, users cascade`）或 `current_schema()`，**不要写 `skillmesh_test.xxx`**——那是把库名当 schema 用了。
 - **可见性只有一份**：`com.skillmesh.api.skill.VisibleSkills.WHERE` 是「我能不能看见这个 Skill」的唯一定义，**搜索与审计共用**，不要在别处另写一份。审核队列问的是另一件事——「我能不能**审**这个版本」，那是角色等级，走 `OrgService.roleAtLeast`，两者别混。
 - **角色等级只有一份**：`OrgService.roleAtLeast(actual, required)`，等级序 `owner > admin > publisher > reviewer > member > viewer`。判断「reviewer 及以上」一律走它，不要在 SQL 里硬编码角色列表。
 - **不推送**：`git add` / `git commit` 直接做，`git push` 必须用户明确授权。
@@ -316,7 +316,7 @@ git commit -m "feat(api): 邀请表与实体（v2 团队控制台）"
   - `InvitationService.requireOrgMember(CurrentUser user, UUID organizationId)`
   - `OrgService.requireOrgAdmin(CurrentUser user, UUID organizationId)`
   - `OrgService.requireTeamAdmin(CurrentUser user, UUID teamId)`
-  - `OrgService.upsertOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role)`
+  - `OrgService.upsertOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role)` — **授予 `owner` 角色时，操作者本人必须是该组织的 owner**。admin 能任命 owner 就等于能把自己的人提上去再把人踢走；owner 只能由 owner 任命。
   - `OrgService.upsertTeamMember(CurrentUser actor, UUID teamId, UUID memberId, String role)`
   - 新错误码 `ErrorCodes.INVITATION_INVALID` = `"INVITATION_INVALID"`
 
@@ -557,7 +557,7 @@ class InvitationFlowTest {
 
         // 库里存的是哈希，不是明文
         String stored = jdbc.queryForObject(
-            "select token_hash from skillmesh_test.org_invitations limit 1", String.class);
+            "select token_hash from org_invitations limit 1", String.class);
         assertThat(stored).isNotEqualTo(token);
         assertThat(stored).hasSize(64);
     }
@@ -1060,7 +1060,7 @@ git commit -m "feat(api): 邀请端点——创建、公开查看、接受、撤
 - Produces:
   - `OrgService.orgMembers(UUID organizationId) → List<OrgService.Member>`
   - `OrgService.teamMembers(UUID teamId) → List<OrgService.Member>`
-  - `OrgService.updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role)`
+  - `OrgService.updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role)` — 授予 `owner` 时要求操作者本人是该组织的 owner（`requireOwnerToGrantOwner`，Task 2 加的守卫，**需从 private 改成包内可见**才能被同包的 `OrgService` 调用）。
   - `OrgService.updateTeamRole(CurrentUser actor, UUID teamId, UUID memberId, String role)`
   - `OrgService.removeTeamMember(CurrentUser actor, UUID teamId, UUID memberId)`
   - `OrgService.Member` 是 record：`(UUID userId, String displayName, String email, String role, OffsetDateTime joinedAt)`
@@ -1128,6 +1128,9 @@ public record MemberResponse(
     @Transactional
     public void updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
         requireOrgAdmin(actor, organizationId);
+        // 授予 owner 同样要现任 owner 在场——这个方法不走 upsertOrgMember，
+        // 所以必须自己调一次守卫，不能指望上游覆盖。
+        requireOwnerToGrantOwner(actor, organizationId, role);
         if (actor.id().equals(memberId)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "不能改自己的组织角色");
         }
@@ -3427,7 +3430,8 @@ async function invite() {
     const created = await createInvitation(org.value.id, {
       team_id: selectedTeam.value || undefined,
       org_role: inviteOrgRole.value,
-      team_role: inviteRole.value,
+      // 服务端要求：给了团队角色就必须给团队，否则 400。没选团队时别发。
+      team_role: selectedTeam.value ? inviteRole.value : undefined,
     })
     inviteLink.value = created.invite_url
     notice.value = '邀请已生成，把链接发给对方。'
@@ -3524,7 +3528,7 @@ onMounted(load)
             <el-option label="组织角色 reviewer" value="reviewer" />
             <el-option label="组织角色 admin" value="admin" />
           </el-select>
-          <el-select v-model="inviteRole" data-test="role-select" class="sm-grow">
+          <el-select v-model="inviteRole" data-test="role-select" class="sm-grow" :disabled="!selectedTeam">
             <el-option label="团队角色 member" value="member" />
             <el-option label="团队角色 publisher" value="publisher" />
             <el-option label="团队角色 reviewer" value="reviewer" />
