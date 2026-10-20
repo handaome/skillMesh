@@ -1060,7 +1060,7 @@ git commit -m "feat(api): 邀请端点——创建、公开查看、接受、撤
 - Produces:
   - `OrgService.orgMembers(UUID organizationId) → List<OrgService.Member>`
   - `OrgService.teamMembers(UUID teamId) → List<OrgService.Member>`
-  - `OrgService.updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role)` — 授予 `owner` 时要求操作者本人是该组织的 owner（`requireOwnerToGrantOwner`，Task 2 加的守卫，**需从 private 改成包内可见**才能被同包的 `OrgService` 调用）。
+  - `OrgService.updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role)` — 授予 `owner` 时要求操作者本人是该组织的 owner（`requireOwnerToGrantOwner`，Task 2 加的守卫，**需从 private 改成包内可见**才能被同包的 `OrgService` 调用）。**并且不得把组织里最后一个 owner 降级**（`requireNotLastOwner`）——降了组织就永久失去 owner。
   - `OrgService.updateTeamRole(CurrentUser actor, UUID teamId, UUID memberId, String role)`
   - `OrgService.removeTeamMember(CurrentUser actor, UUID teamId, UUID memberId)`
   - `OrgService.Member` 是 record：`(UUID userId, String displayName, String email, String role, OffsetDateTime joinedAt)`
@@ -1106,6 +1106,45 @@ public record MemberResponse(
 - [ ] **Step 3: 给 OrgService 加成员管理方法**
 
 `apps/api/src/main/java/com/skillmesh/api/org/OrgService.java` 的构造器加一个 `UserRepository users` 参数（`com.skillmesh.api.auth.UserRepository`），并加下面这些方法：
+
+**另外要修既有的 `addOrgMember`**——它无条件 `setRole(role)`，所以能把组织里**最后一个 owner** 降成 member。一旦降了，`requireOwnerToGrantOwner` 就再也满足不了，组织永久失去 owner。
+
+守卫的语义是两条，缺一不可：
+
+- **动 owner 身份只能由 owner 动手**（升或降）。admin 能把 owner 降成 member，等于做了只有 owner 该做的事。
+- **组织里最后一个 owner 不能被降级**。
+
+```java
+    /**
+     * 改变 owner 身份（授予或剥夺）只能由 owner 动手；
+     * 且组织里最后一个 owner 不能被降级——降了之后
+     * requireOwnerToGrantOwner 再也满足不了，组织永久失去 owner。
+     */
+    private void requireOwnerChangeAllowed(CurrentUser actor, UUID organizationId,
+                                           String currentRole, String newRole) {
+        boolean touchesOwnership = "owner".equals(currentRole) || "owner".equals(newRole);
+        if (!touchesOwnership) {
+            return;
+        }
+        if (!hasOrgRole(actor, organizationId, Set.of("owner"))) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有组织 owner 能改变 owner 身份");
+        }
+        if ("owner".equals(currentRole) && !"owner".equals(newRole)
+            && ownerCount(organizationId) <= 1) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "不能降级组织里唯一的 owner");
+        }
+    }
+
+    /** 组织里 owner 角色的成员数。 */
+    private long ownerCount(UUID organizationId) {
+        return orgMembers.findByIdOrganizationId(organizationId).stream()
+            .filter(membership -> "owner".equals(membership.getRole()))
+            .count();
+    }
+```
+
+在 `addOrgMember` 与 `updateOrgRole` 落位前都调它（两者都改角色，都可能剥夺 owner 身份）。`updateOrgRole` 还要显式调 `requireOwnerToGrantOwner`——它不走 `upsertOrgMember`，那个守卫不会自动生效。
 
 ```java
     /** 组织成员列表，带上人的显示名。 */
@@ -1381,6 +1420,9 @@ Expected：编译失败——`orgMembers` / `teamMembers` / `Member` 还不存�
                                                   @PathVariable UUID teamId,
                                                   @PathVariable UUID userId,
                                                   @Valid @RequestBody RoleRequest req) {
+        // 写路径也要校验团队属于该组织——GET 校验了、写入不校验，
+        // 同一资源路径会给出不一致的答案。
+        orgs.requireTeamInOrg(organizationId, teamId);
         orgs.updateTeamRole(currentUserService.current(jwt), teamId, userId, req.role());
         return ResponseEntity.noContent().build();
     }
@@ -1390,6 +1432,7 @@ Expected：编译失败——`orgMembers` / `teamMembers` / `Member` 还不存�
                                                   @PathVariable UUID organizationId,
                                                   @PathVariable UUID teamId,
                                                   @PathVariable UUID userId) {
+        orgs.requireTeamInOrg(organizationId, teamId);
         orgs.removeTeamMember(currentUserService.current(jwt), teamId, userId);
         return ResponseEntity.noContent().build();
     }
@@ -1398,15 +1441,50 @@ Expected：编译失败——`orgMembers` / `teamMembers` / `Member` 还不存�
         return new MemberResponse(member.userId(), member.displayName(), member.email(),
             member.role(), member.joinedAt());
     }
+```
 
-    public record RoleRequest(@NotBlank String role) {}
+`RoleRequest` 独立成文件 `apps/api/src/main/java/com/skillmesh/api/org/dto/RoleRequest.java`——项目约定是一个文件一个类型声明（`MemberResponse` 也在这个包里）：
+
+```java
+package com.skillmesh.api.org.dto;
+
+import jakarta.validation.constraints.NotBlank;
+
+public record RoleRequest(@NotBlank String role) {}
 ```
 
 同时在 import 里补 `org.springframework.web.bind.annotation.PatchMapping`、
 `org.springframework.web.bind.annotation.DeleteMapping`、
-`com.skillmesh.api.org.dto.MemberResponse`。
+`com.skillmesh.api.org.dto.MemberResponse`、
+`com.skillmesh.api.org.dto.RoleRequest`。
 
-- [ ] **Step 7: 跑测试确认通过**
+- [ ] **Step 7: 服务端强制团队发布权限**
+
+`skillmesh publish --org/--team` 的 publisher 检查在 CLI 侧，但 CLI 只是建议——直接打 API 的 member 仍能建出 team 可见的 Skill。**服务端必须自己判**，否则这个权限形同虚设。
+
+`apps/api/src/main/java/com/skillmesh/api/skill/SkillService.java` 的 `requireVisibilitySupported` 里，对 `visibility` 为 `team` 的情况，补一条：发起人在该团队里的角色要 ≥ publisher。
+
+```java
+        if ("team".equals(visibility)) {
+            if (req.owner_team_id() == null) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                    "team 可见必须指定 owner_team_id");
+            }
+            // 往团队发布是团队范围内的动作，判的是发起人在这个团队里的角色。
+            // roleIn 优先取团队角色，没有才退回组织角色——正好符合语义。
+            String role = orgs.roleIn(req.organization_id(), req.owner_team_id(), user.id());
+            if (!OrgService.roleAtLeast(role, "publisher")) {
+                throw new ApiException(403, ErrorCodes.FORBIDDEN,
+                    "在该团队里需要 publisher 及以上角色才能发布");
+            }
+        }
+```
+
+`organization` 可见性同样要求发起人是该组织里 publisher 及以上的角色——「发到组织」是组织范围内的动作，判的是组织角色。
+
+在 `MemberManagementTest` 里补一个用例：非 publisher 的组织成员建 team 可见的 Skill → 403 `FORBIDDEN`。
+
+- [ ] **Step 8: 跑测试确认通过**
 
 ```bash
 cd apps/api && ./mvnw -q -Dtest=MemberManagementTest test
@@ -1414,10 +1492,10 @@ cd apps/api && ./mvnw -q -Dtest=MemberManagementTest test
 
 Expected：PASS。
 
-- [ ] **Step 8: 提交**
+- [ ] **Step 9: 提交**
 
 ```bash
-git add apps/api/src/main/java/com/skillmesh/api/org apps/api/src/test/java/com/skillmesh/api/org/MemberManagementTest.java
+git add apps/api/src/main/java/com/skillmesh/api/org apps/api/src/main/java/com/skillmesh/api/skill apps/api/src/test/java/com/skillmesh/api/org/MemberManagementTest.java
 git commit -m "feat(api): 成员管理端点——列、改角色、移除"
 ```
 
