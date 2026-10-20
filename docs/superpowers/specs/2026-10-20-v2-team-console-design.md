@@ -256,9 +256,11 @@ CSRF 仍是 `disable`（纯 Bearer token 认证，无 Cookie 会话）。
 
 LCS 长度 C → `added = 新版行数 - C`，`removed = 旧版行数 - C`。
 
-### 6.4 解包安全
+### 6.4 读制品的方式
 
-解包到 `Files.createTempDirectory`，用完删除。entry 名必须校验：非绝对路径、不含 `..`、不含盘符，解包后再次校验目标路径仍在临时目录内（zip slip 防护）。单次解包的文件数与总大小上限沿用服务端扫描器的既有阈值。
+**流式读 entry，不落盘**：用 `ZipInputStream` 遍历 zip，只把需要的那几个 entry 的字节读进内存。因为不写文件系统，zip slip（entry 名带 `../` 写出目录外）在这条路径上不成立——不落盘就没有目录可逃逸。
+
+单次读取的 entry 大小上限 2MB，超过就只报文件级。
 
 ### 6.5 不做缓存
 
@@ -304,7 +306,11 @@ Token 存储：`localStorage` 存 access + refresh token。access token 5 分钟
 
 ### 7.4 样式
 
-按 `frontend-css` skill 的约定自建 CSS 库：`src/styles/` 下原子类 + 复合类混合，不引 Tailwind/UnoCSS。v2 需要的基础件：布局容器、页头、表格、表单、按钮、徽标（角色/状态）、空态、告警条。
+用 **Element Plus**（Vue 3 组件库），不引 Tailwind/UnoCSS。
+
+- 表格、表单、按钮、徽标、空态、告警条一律用 `el-*` 组件，不自己撸。
+- 自有 CSS 只留布局与少量工具类（顶栏、内容区、间距），放在 `apps/web/src/styles/app.css` 一个文件里；不建多文件 CSS 库。
+- 需要覆盖组件库样式时，用 Element Plus 的 CSS 变量改主题，不写 `!important` 硬改。
 
 ## 8. CLI 改动
 
