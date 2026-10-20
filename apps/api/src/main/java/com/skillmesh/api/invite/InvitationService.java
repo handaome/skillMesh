@@ -62,10 +62,17 @@ public class InvitationService {
     public Created create(CurrentUser actor, UUID organizationId, UUID teamId,
                           String orgRole, String teamRole, String subject) {
         orgs.requireOrgAdmin(actor, organizationId);
-        String role = orDefault(orgRole, "member");
+        String role = orDefault(orgRole, Roles.DEFAULT_ROLE);
         if (!Roles.INVITABLE_ORG_ROLES.contains(role)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "owner 角色不能通过邀请授予，可授予的是 " + String.join(" / ", Roles.INVITABLE_ORG_RANK));
+        }
+        // 团队角色在服务层也要校验：DTO 的 @Pattern 只管 HTTP 这一道，
+        // 别的调用方（内部调用、脚本）走不到那儿，脏值会撞 DDL 的 CHECK 变成 500。
+        String teamRoleValue = orDefault(teamRole, Roles.DEFAULT_ROLE);
+        if (!Roles.TEAM_ROLES.contains(teamRoleValue)) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "团队角色只能是 " + String.join(" / ", Roles.TEAM_RANK));
         }
         if (teamId == null && teamRole != null && !teamRole.isBlank()) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "给了团队角色就必须给团队");
@@ -85,7 +92,7 @@ public class InvitationService {
         entity.setOrganizationId(organizationId);
         entity.setTeamId(teamId);
         entity.setOrgRole(role);
-        entity.setTeamRole(orDefault(teamRole, "member"));
+        entity.setTeamRole(teamRoleValue);
         entity.setTokenHash(sha256Hex(token));
         entity.setStatus("pending");
         entity.setInvitedBy(actor.id());
@@ -103,12 +110,16 @@ public class InvitationService {
     /** 接受邀请。同一个人重复接受是幂等的；别人再来是 409。 */
     @Transactional
     public Accepted accept(CurrentUser user, String rawToken) {
-        InvitationEntity entity = require(rawToken);
+        // 锁住邀请行：接受是「读状态 → 写成员行 → 翻状态」三步，
+        // 不串行化的话两个并发请求会同时读到 pending、同时写成员关系——
+        // 一份单次令牌把两个人拉进组织。抢不到的一方在这里排队，
+        // 等前面那个提交完再读到新状态，按下面的契约给 409 或幂等 200。
+        InvitationEntity entity = requireForUpdate(rawToken);
         if ("accepted".equals(entity.getStatus())) {
             // 真正的幂等只有「同一个人」成立：别人拿着链接再来，
             // 他根本没进组，却会拿到一句「已加入」。
             if (user.id().equals(entity.getAcceptedBy())) {
-                return toAccepted(entity);
+                return toAccepted(entity, user.id());
             }
             throw new ApiException(409, ErrorCodes.INVITATION_INVALID, "邀请已被接受");
         }
@@ -133,7 +144,7 @@ public class InvitationService {
         invitations.save(entity);
         audit.record(user, "invitation.accept", "invitation", entity.getId(), "success",
             Map.of("organization_id", entity.getOrganizationId().toString()));
-        return toAccepted(entity);
+        return toAccepted(entity, user.id());
     }
 
     /**
@@ -202,9 +213,25 @@ public class InvitationService {
             .orElseThrow(() -> ApiException.notFound("邀请"));
     }
 
-    private static Accepted toAccepted(InvitationEntity entity) {
+    /** 锁住邀请行再读——接受邀请必须走这条。 */
+    private InvitationEntity requireForUpdate(String rawToken) {
+        return invitations.findByTokenHashForUpdate(sha256Hex(rawToken))
+            .orElseThrow(() -> ApiException.notFound("邀请"));
+    }
+
+    /**
+     * 响应里的角色取落库后的实际角色，不是邀请上写的那一档。
+     *
+     * 邀请说 member，接受者本来就是 publisher——响应说 member，客户端就会显示错角色
+     * （设计文档 §5.1：已是组织成员 → 200 直接返回当前角色）。
+     */
+    private Accepted toAccepted(InvitationEntity entity, UUID userId) {
+        String orgRole = orgs.orgRoleOf(entity.getOrganizationId(), userId);
+        String teamRole = entity.getTeamId() == null ? null
+            : orgs.teamRoleOf(entity.getTeamId(), userId);
         return new Accepted(entity.getId(), entity.getOrganizationId(), entity.getTeamId(),
-            entity.getOrgRole(), entity.getTeamRole());
+            orgRole == null ? entity.getOrgRole() : orgRole,
+            teamRole == null ? entity.getTeamRole() : teamRole);
     }
 
     private String newToken() {

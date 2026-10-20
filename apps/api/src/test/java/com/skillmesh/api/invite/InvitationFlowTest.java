@@ -15,9 +15,18 @@ import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +51,7 @@ class InvitationFlowTest {
     @Autowired private InvitationService invitations;
     @Autowired private OrgService orgs;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private DataSource dataSource;
 
     private String auth;
     private CurrentUser owner;
@@ -291,6 +301,137 @@ class InvitationFlowTest {
 
         orgs.upsertOrgMember(owner, orgId, target, "owner");
         assertThat(orgs.roleIn(orgId, null, target)).isEqualTo("owner");
+    }
+
+    /**
+     * 两个人同时接受同一份邀请：只能有一个成功，另一个拿 409。
+     *
+     * 不加锁的话两个事务会同时读到 pending、同时写成员关系——
+     * 一份单次令牌把两个人拉进组织。
+     */
+    @Test
+    void 两人并发接受同一份邀请只有一人成功() throws Exception {
+        CurrentUser admin = stranger();
+        UUID orgId = orgs.createOrganization(admin, "acme", "acme").getId();
+        String token = invitations.create(admin, orgId, null, "member", null, null).token();
+        CurrentUser alice = stranger();
+        CurrentUser bob = stranger();
+
+        List<Object> results = acceptConcurrently(token, alice, bob);
+
+        assertThat(results).filteredOn(r -> r instanceof InvitationService.Accepted)
+            .as("恰好一个人接受成功").hasSize(1);
+        ApiException conflict = results.stream()
+            .filter(r -> r instanceof ApiException)
+            .map(r -> (ApiException) r)
+            .findFirst().orElseThrow();
+        assertThat(conflict.status()).as("输的那个拿 409，不是 500").isEqualTo(409);
+        assertThat(conflict.code()).isEqualTo("INVITATION_INVALID");
+        // 组织里只多了一个成员（管理员 + 那个接受成功的人）
+        assertThat(orgs.orgMembers(orgId)).hasSize(2);
+    }
+
+    /** 同一个人开两个标签页同时提交：两次都幂等成功，不能出 500。 */
+    @Test
+    void 同一用户并发接受两次都幂等成功() throws Exception {
+        CurrentUser admin = stranger();
+        UUID orgId = orgs.createOrganization(admin, "acme", "acme").getId();
+        String token = invitations.create(admin, orgId, null, "member", null, null).token();
+        CurrentUser alice = stranger();
+
+        List<Object> results = acceptConcurrently(token, alice, alice);
+
+        assertThat(results).filteredOn(r -> r instanceof InvitationService.Accepted)
+            .as("两次都是幂等成功").hasSize(2);
+        assertThat(orgs.orgMembers(orgId)).hasSize(2);
+    }
+
+    /**
+     * 响应里的角色是落库后的实际角色：本来就是 publisher 的人接受一份 member 邀请，
+     * 不能被说成 member（设计文档 §5.1）。
+     */
+    @Test
+    void 接受邀请返回落库后的实际角色() throws Exception {
+        CurrentUser admin = stranger();
+        UUID orgId = orgs.createOrganization(admin, "acme", "acme").getId();
+        CurrentUser bob = stranger();
+        orgs.upsertOrgMember(admin, orgId, bob.id(), "publisher");
+        String token = invitations.create(admin, orgId, null, "member", null, null).token();
+
+        InvitationService.Accepted accepted = invitations.accept(bob, token);
+
+        assertThat(accepted.orgRole()).isEqualTo("publisher");
+        assertThat(orgs.roleIn(orgId, null, bob.id())).isEqualTo("publisher");
+    }
+
+    /** 团队角色在服务层也要校验：脏值不能撞 DDL 的 CHECK 变成 500。 */
+    @Test
+    void 服务层也校验团队角色() {
+        CurrentUser admin = stranger();
+        UUID orgId = orgs.createOrganization(admin, "acme", "acme").getId();
+        UUID teamId = orgs.createTeam(admin, orgId, "platform", "platform", null).getId();
+
+        ApiException ex = catchThrowableOfType(
+            () -> invitations.create(admin, orgId, teamId, "member", "owner", null),
+            ApiException.class);
+        assertThat(ex).as("团队角色非法要 400，不是 500").isNotNull();
+        assertThat(ex.status()).isEqualTo(400);
+        assertThat(ex.code()).isEqualTo("VALIDATION_FAILED");
+    }
+
+    /**
+     * 两个线程同时接受同一份邀请，返回各自的结果（成功对象或异常）。
+     *
+     * 先用 SELECT ... FOR UPDATE 把邀请行锁住：两个线程的「读状态」都发生在
+     * 任何一方提交之前——不锁这一行的话，谁先提交另一个就可能直接读到 accepted，
+     * 用例会变成「运气好也通过」。
+     */
+    private List<Object> acceptConcurrently(String token, CurrentUser first, CurrentUser second)
+            throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            pool.submit(() -> {
+                try (Connection conn = dataSource.getConnection()) {
+                    conn.setAutoCommit(false);
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "select id from org_invitations for update")) {
+                        ps.executeQuery().close();
+                    }
+                    locked.countDown();
+                    release.await(30, TimeUnit.SECONDS);
+                    conn.commit();
+                }
+                return null;
+            });
+            assertThat(locked.await(30, TimeUnit.SECONDS)).as("锁已拿到").isTrue();
+
+            CountDownLatch go = new CountDownLatch(1);
+            Future<Object> a = pool.submit(() -> acceptQuietly(go, first, token));
+            Future<Object> b = pool.submit(() -> acceptQuietly(go, second, token));
+            go.countDown();
+            // 给两个线程时间把「读状态」做完（随后它们会卡在锁上）
+            Thread.sleep(1500);
+            release.countDown();
+
+            return List.of(a.get(60, TimeUnit.SECONDS), b.get(60, TimeUnit.SECONDS));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** 接受一次，成功返回结果对象，失败返回异常对象。 */
+    private Object acceptQuietly(CountDownLatch go, CurrentUser user, String token) {
+        try {
+            go.await();
+            return invitations.accept(user, token);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return e;
+        } catch (RuntimeException e) {
+            return e;
+        }
     }
 
     private String createInvitation(UUID orgId, UUID teamId) throws Exception {
