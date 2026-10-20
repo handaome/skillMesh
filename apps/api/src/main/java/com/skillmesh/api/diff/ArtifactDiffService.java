@@ -16,6 +16,7 @@ import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -41,15 +42,21 @@ public class ArtifactDiffService {
         this.versions = versions;
     }
 
-    /** 待审版本 vs 该 Skill 最近的已发布版本。 */
-    @Transactional(readOnly = true)
+    /**
+     * 待审版本 vs 该 Skill 最近的已发布版本。
+     *
+     * {@code NOT_SUPPORTED}：算差异要下载两个 zip，事务期间占着数据库连接
+     * 会把连接池拖垮。仓库查询各自是独立短事务，下载时线程上没有事务。
+     *
+     * 事务外只碰基本字段（{@code manifestJson} 是 jsonb 基本类型、
+     * {@code storageKey} 是普通列），没有懒加载，不会有
+     * {@code LazyInitializationException}。
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public ArtifactDiffResult diffAgainstLatestPublished(UUID skillId, SkillVersionEntity next) {
-        Optional<SkillVersionEntity> base = versions.findBySkillIdOrderByCreatedAtDesc(skillId).stream()
-            .filter(version -> "published".equals(version.getStatus()))
-            .filter(version -> !version.getId().equals(next.getId()))
-            .findFirst();
-        ArtifactEntity nextArtifact = artifactOf(next);
-        if (nextArtifact == null) {
+        Optional<SkillVersionEntity> base = loadBase(skillId, next);
+        String nextKey = storageKeyOf(next.getArtifactId());
+        if (nextKey == null) {
             return ArtifactDiffResult.empty();
         }
         if (base.isEmpty()) {
@@ -57,37 +64,56 @@ public class ArtifactDiffService {
             return new ArtifactDiffResult("", false, files);
         }
         SkillVersionEntity baseVersion = base.get();
-        ArtifactEntity baseArtifact = artifactOf(baseVersion);
-        if (baseArtifact == null) {
+        String baseKey = storageKeyOf(baseVersion.getArtifactId());
+        if (baseKey == null) {
             return new ArtifactDiffResult(baseVersion.getVersion(), false, List.of());
         }
         List<FileChange> files = withLineCounts(
             ManifestDiff.compare(baseVersion.getManifestJson(), next.getManifestJson()),
-            baseArtifact, nextArtifact);
+            baseKey, nextKey);
         return new ArtifactDiffResult(baseVersion.getVersion(), truncated(files), files);
     }
 
-    /** 读制品里的 SKILL.md 正文——审核者要看的第一眼就是它。 */
-    @Transactional(readOnly = true)
+    /**
+     * 读制品里的 SKILL.md 正文——审核者要看的第一眼就是它。
+     *
+     * 同样 {@code NOT_SUPPORTED}：下载 zip 不该占着数据库连接。
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public String readSkillMarkdown(ArtifactEntity artifact) {
         if (artifact == null) {
             return "";
         }
-        byte[] data = readEntry(artifact, "SKILL.md");
+        byte[] data = readEntry(artifact.getStorageKey(), "SKILL.md");
         return data == null ? "" : new String(data, StandardCharsets.UTF_8);
     }
 
+    /**
+     * 挑基线：该 Skill 最近的已发布版本（不含待审的那个自己）。
+     *
+     * 清单为空的已发布版本要跳过——拿它当基线，整份 diff 会退化成「全部 added」，
+     * 调用方分不清「没有基线」和「基线清单是空的」。跟 SyncUploadService.cloudRevision 同一个口径。
+     */
+    private Optional<SkillVersionEntity> loadBase(UUID skillId, SkillVersionEntity next) {
+        return versions.findBySkillIdOrderByCreatedAtDesc(skillId).stream()
+            .filter(version -> "published".equals(version.getStatus()))
+            .filter(version -> !version.getId().equals(next.getId()))
+            .filter(version -> version.getManifestJson() != null
+                && !version.getManifestJson().isEmpty())
+            .findFirst();
+    }
+
     /** 给被改动的文件补上行数。 */
-    private List<FileChange> withLineCounts(List<FileChange> files, ArtifactEntity base,
-                                            ArtifactEntity next) {
+    private List<FileChange> withLineCounts(List<FileChange> files, String baseKey,
+                                            String nextKey) {
         List<FileChange> result = new ArrayList<>(files.size());
         for (FileChange change : files) {
             if (!"modified".equals(change.kind())) {
                 result.add(change);
                 continue;
             }
-            byte[] oldData = readEntry(base, change.path());
-            byte[] newData = readEntry(next, change.path());
+            byte[] oldData = readEntry(baseKey, change.path());
+            byte[] newData = readEntry(nextKey, change.path());
             if (oldData == null || newData == null
                 || LineDiff.isBinary(oldData) || LineDiff.isBinary(newData)) {
                 result.add(FileChange.modified(change.path(), 0, 0, true));
@@ -96,7 +122,7 @@ public class ArtifactDiffService {
             // 按字节比：ISO-8859-1 是字节到字符的一一映射，行比较与 CLI 的
             // bytes.Equal 完全一致；用 UTF-8 解码会把非法字节都折成 U+FFFD，
             // 两份不同的文件可能算出「没有差异」。
-            int[] counts = LineDiff.count(decode(oldData), decode(newData));
+            int[] counts = LineDiff.count(LineDiff.decode(oldData), LineDiff.decode(newData));
             if (counts == null) {
                 // LCS 表太大算不动——只报文件级，跟 CLI 一样。
                 result.add(FileChange.modified(change.path(), 0, 0, true));
@@ -115,8 +141,8 @@ public class ArtifactDiffService {
      * ponytail: 每个改动文件各读一次 zip，改动多了就是 N 次对象存储读取；
      * 一次读整个 zip 换成 map 更省，但内存峰值按改动文件总长涨。
      */
-    private byte[] readEntry(ArtifactEntity artifact, String path) {
-        try (InputStream stream = storage.get(artifact.getStorageKey());
+    private byte[] readEntry(String storageKey, String path) {
+        try (InputStream stream = storage.get(storageKey);
              ZipInputStream zip = new ZipInputStream(stream)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
@@ -141,20 +167,16 @@ public class ArtifactDiffService {
         return null;
     }
 
-    /** 字节按一一映射解成字符，保留每一行的字节原样。 */
-    private String decode(byte[] data) {
-        return new String(data, StandardCharsets.ISO_8859_1);
-    }
-
     /** 有一个文件只报文件级，整个 diff 就算不完整。 */
     private boolean truncated(List<FileChange> files) {
         return files.stream().anyMatch(FileChange::truncated);
     }
 
-    private ArtifactEntity artifactOf(SkillVersionEntity version) {
-        if (version.getArtifactId() == null) {
+    /** 制品的存储键。制品不存在返回 null。 */
+    private String storageKeyOf(UUID artifactId) {
+        if (artifactId == null) {
             return null;
         }
-        return artifacts.findById(version.getArtifactId()).orElse(null);
+        return artifacts.findById(artifactId).map(ArtifactEntity::getStorageKey).orElse(null);
     }
 }

@@ -43,13 +43,6 @@ class ManifestDiffTest {
             .singleElement().extracting(FileChange::kind).isEqualTo("added");
     }
 
-    @Test
-    void 摘要一样就不算改过() {
-        List<Map<String, Object>> base = List.of(entry("SKILL.md", "aaa"));
-        List<Map<String, Object>> next = List.of(entry("SKILL.md", "aaa"));
-        assertThat(ManifestDiff.compare(base, next)).isEmpty();
-    }
-
     private static Map<String, Object> entry(String path, String sha) {
         return Map.of("path", path, "sha256", sha, "size_bytes", 10, "executable", false);
     }

@@ -15,6 +15,13 @@ public final class ManifestDiff {
 
     private ManifestDiff() {}
 
+    /**
+     * 清单级比对：只分出新增/修改/删除，不算行数。
+     *
+     * modified 的行数是**占位**（0, 0, truncated=true）——这里没有制品，
+     * 算不出行数。调用方要真行数的话必须自己补：
+     * {@link ArtifactDiffService} 会解包重算一遍。
+     */
     public static List<FileChange> compare(List<Map<String, Object>> base,
                                             List<Map<String, Object>> next) {
         Map<String, String> baseIndex = index(base);

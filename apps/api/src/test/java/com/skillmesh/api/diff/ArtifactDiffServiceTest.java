@@ -1,12 +1,14 @@
 package com.skillmesh.api.diff;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.ArtifactRepository;
+import com.skillmesh.api.artifact.ArtifactStorage;
 import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.support.DatabaseCleaner;
 import com.skillmesh.api.support.TestArtifacts;
@@ -21,14 +23,21 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 版本间的文件级差异：基线选取、manifest 比对、行数统计。
@@ -47,6 +56,12 @@ class ArtifactDiffServiceTest {
     @Autowired private ArtifactDiffService diffs;
     @Autowired private SkillVersionRepository versions;
     @Autowired private ArtifactRepository artifacts;
+    @Autowired private PlatformTransactionManager txManager;
+    @Autowired private DataSource dataSource;
+
+    /** 制品读取的探针——用来看下载那一刻有没有事务。 */
+    @MockitoSpyBean
+    private ArtifactStorage storage;
 
     private String auth;
 
@@ -155,6 +170,92 @@ class ArtifactDiffServiceTest {
         assertThat(result.files()).isEmpty();
     }
 
+    /**
+     * 基线候选里清单为空的已发布版本要跳过。
+     *
+     * 拿它当基线的话整份 diff 会退化成「全部 added」，而调用方分不清
+     * 「没有基线」和「基线清单是空的」。
+     */
+    @Test
+    void 基线跳过清单为空的已发布版本() throws Exception {
+        UUID skillId = createSkill("empty-base");
+        publish(skillId, "1.0.0", Map.of("SKILL.md", "# Runbook\n"));
+        // 中间这个版本发布了但清单是空的——不能拿它当基线。
+        publish(skillId, "1.1.0", Map.of("SKILL.md", "# Other\n"), List.of());
+        publish(skillId, "1.2.0", Map.of("SKILL.md", "# Runbook v2\n"));
+
+        ArtifactDiffResult result = diffs.diffAgainstLatestPublished(
+            skillId, version(skillId, "1.2.0"));
+
+        assertThat(result.baseVersion()).isEqualTo("1.0.0");
+        assertThat(result.files()).singleElement()
+            .extracting(FileChange::kind).isEqualTo("modified");
+    }
+
+    /**
+     * 增删之和恰好 200 行不算超限，201 行才算。
+     *
+     * 超限时仍然照给真实数字——CLI 是 {@code return added, removed, added+removed > maxDiffLines}。
+     */
+    @Test
+    void 两百行整与两百零一行的分界() throws Exception {
+        UUID exact = createSkill("lines-200");
+        publish(exact, "1.0.0", Map.of("SKILL.md", lines(100, "old")));
+        publish(exact, "1.1.0", Map.of("SKILL.md", lines(100, "new")));
+
+        FileChange atLimit = diffs.diffAgainstLatestPublished(exact, version(exact, "1.1.0"))
+            .files().get(0);
+        assertThat(atLimit.added()).isEqualTo(100);
+        assertThat(atLimit.removed()).isEqualTo(100);
+        assertThat(atLimit.truncated()).isFalse();
+
+        UUID over = createSkill("lines-201");
+        publish(over, "1.0.0", Map.of("SKILL.md", lines(101, "old")));
+        publish(over, "1.1.0", Map.of("SKILL.md", lines(100, "new")));
+
+        FileChange overLimit = diffs.diffAgainstLatestPublished(over, version(over, "1.1.0"))
+            .files().get(0);
+        assertThat(overLimit.added()).isEqualTo(100);
+        assertThat(overLimit.removed()).isEqualTo(101);
+        assertThat(overLimit.truncated()).isTrue();
+    }
+
+    /**
+     * 下载 zip 时不能占着数据库连接。
+     *
+     * 审核队列的 {@code detail} 是 {@code @Transactional}，差异计算要下载两个 zip——
+     * 事务期间占着连接，并发看审核页会把连接池占满。
+     */
+    @Test
+    void 下载制品时不持有数据库连接() throws Exception {
+        UUID skillId = createSkill("tx");
+        publish(skillId, "1.0.0", Map.of("SKILL.md", "# A\n"));
+        publish(skillId, "1.1.0", Map.of("SKILL.md", "# B\n"));
+
+        List<Boolean> txDuringRead = new ArrayList<>();
+        List<Object> connectionDuringRead = new ArrayList<>();
+        AtomicBoolean recording = new AtomicBoolean();
+        doAnswer(invocation -> {
+            if (recording.get()) {
+                txDuringRead.add(TransactionSynchronizationManager.isActualTransactionActive());
+                connectionDuringRead.add(
+                    TransactionSynchronizationManager.getResource(dataSource));
+            }
+            return invocation.callRealMethod();
+        }).when(storage).get(Mockito.anyString());
+
+        recording.set(true);
+        // 在事务里调用——审核队列就是这种情形
+        new TransactionTemplate(txManager).execute(status ->
+            diffs.diffAgainstLatestPublished(skillId, version(skillId, "1.1.0")));
+        recording.set(false);
+
+        assertThat(txDuringRead).isNotEmpty();
+        assertThat(txDuringRead).containsOnly(false);
+        // 连接也没绑在这个线程上——不是「事务挂起了但连接还攥着」
+        assertThat(connectionDuringRead).containsOnlyNulls();
+    }
+
     /** 建一个 Skill（个人可见，版本发出去即 published）。 */
     private UUID createSkill(String slug) throws Exception {
         String resp = mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
@@ -168,13 +269,19 @@ class ArtifactDiffServiceTest {
 
     /** 建版本 → 直传 → 收尾，走真实的上传链路。 */
     private void publish(UUID skillId, String version, Map<String, String> files) throws Exception {
-        byte[] zip = TestArtifacts.zipOf(files);
         List<Map<String, Object>> manifest = new ArrayList<>();
         for (Map.Entry<String, String> file : files.entrySet()) {
             byte[] content = file.getValue().getBytes(StandardCharsets.UTF_8);
             manifest.add(Map.<String, Object>of("path", file.getKey(),
                 "sha256", TestArtifacts.sha256(content), "size_bytes", (long) content.length));
         }
+        publish(skillId, version, files, manifest);
+    }
+
+    /** 同上，但清单由调用方给——用来造「清单为空」的版本。 */
+    private void publish(UUID skillId, String version, Map<String, String> files,
+                        List<Map<String, Object>> manifest) throws Exception {
+        byte[] zip = TestArtifacts.zipOf(files);
         String body = json.writeValueAsString(Map.of(
             "version", version, "channel", "stable", "size_bytes", zip.length,
             "sha256", TestArtifacts.sha256(zip), "file_count", files.size(),
@@ -217,5 +324,21 @@ class ArtifactDiffServiceTest {
 
     private ArtifactEntity artifactOf(UUID skillId, String version) {
         return artifacts.findById(version(skillId, version).getArtifactId()).orElse(null);
+    }
+
+    /**
+     * n 行正文，每行内容互不相同。
+     *
+     * 行间用 n-1 个换行符——末尾不带换行，否则切出来是 n+1 行。
+     */
+    private static String lines(int count, String tag) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            if (i > 0) {
+                sb.append('\n');
+            }
+            sb.append(tag).append('-').append(i);
+        }
+        return sb.toString();
     }
 }

@@ -1,5 +1,7 @@
 package com.skillmesh.api.diff;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * 行级增删统计，口径对齐 CLI 的 lineDiff（apps/cli/internal/cmd/diff.go）。
  *
@@ -29,6 +31,17 @@ public final class LineDiff {
         }
         int common = lcsLength(oldLines, newLines);
         return new int[] {newLines.length - common, oldLines.length - common};
+    }
+
+    /**
+     * 字节解成可比对的文本。
+     *
+     * CLI 的 LCS 比的是**原始字节**（bytes.Equal），所以这里用 ISO-8859-1——
+     * 字节到字符的一一映射。用 UTF-8 解码会把不同的非法字节序列都折成同一个
+     * U+FFFD，两份不同的文件会算出「零差异」。
+     */
+    static String decode(byte[] data) {
+        return new String(data, StandardCharsets.ISO_8859_1);
     }
 
     /** 二进制判定：前 8192 字节含 NUL 就是二进制，不做行统计。 */
