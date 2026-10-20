@@ -96,31 +96,41 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
 {"team_id": "<uuid>", "org_role": "member", "team_role": "member", "subject": null}
 ```
 
+角色分两层：组织角色有 `owner` 一档，团队角色没有（`admin` / `publisher` / `reviewer` / `member` / `viewer`）。`org_role` 只能填 `admin` 及以下——`owner` **不能通过邀请拿到**，只能由现任 owner 直接任命（`Roles.INVITABLE_ORG_ROLE_PATTERN`）。
+
 创建响应（**明文 token 只在这里出现**）：
 
 ```json
 {
   "id": "<uuid>",
-  "organization": {"id": "<uuid>", "slug": "acme", "name": "Acme"},
-  "team": {"id": "<uuid>", "slug": "platform", "name": "Platform"},
+  "organization_slug": "acme",
+  "organization_name": "Acme",
+  "team_slug": "platform",
+  "team_name": "Platform",
   "org_role": "member",
   "team_role": "member",
   "expires_at": "2026-10-27T10:00:00Z",
-  "invite_url": "http://127.0.0.1:5174/invite/<raw-token>"
+  "invite_url": "http://127.0.0.1:5174/invite/<raw-token>",
+  "token": "<raw-token>"
 }
 ```
+
+字段是**扁平的**（`organization_slug` / `organization_name` / `team_slug` / `team_name`），不是嵌套对象——前端只展示名字与 slug，不需要组织/团队的 id。`team_slug` / `team_name` 在组织级邀请（没指定团队）时为 `null`。
 
 `invite_url` 的 base 由服务端配置 `skillmesh.web.base-url` 拼；本地默认 `http://127.0.0.1:5174`。Web 端同时展示原始 token 文本，便于复制。
 
 `GET /invitations/{token}`（公开）只回**非敏感**摘要，用于未登录时展示：
 
 ```json
-{"organization_name": "Acme", "team_name": "Platform", "org_role": "member",
- "team_role": "member", "expires_at": "2026-10-27T10:00:00Z", "status": "pending"}
+{"id": "<uuid>", "organization_name": "Acme", "team_name": "Platform",
+ "org_role": "member", "team_role": "member",
+ "expires_at": "2026-10-27T10:00:00Z", "created_at": "2026-10-20T10:00:00Z",
+ "status": "pending"}
 ```
 
-- 令牌不存在 / 已撤销 / 已过期 → 404 `NOT_FOUND`（不区分原因，避免探测）。
-- `status` 为 `expired` 时仍返回 200 但 `status` 字段为 `expired`，页面提示已过期。
+- 令牌不存在 / 已撤销 → 404 `NOT_FOUND`（不区分原因，避免探测）。
+- 令牌存在但**已过期** → 仍返回 200，`status` 字段为 `expired`，页面提示已过期。
+  过期是按 `expires_at < now()` 算的，不改库里的 `status`（`InvitationService.effectiveStatus`）。
 
 `POST /invitations/{token}/accept`：
 
@@ -149,10 +159,13 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
  "role": "member", "joined_at": "2026-10-20T10:00:00Z"}
 ```
 
+`role` 是**哪一层的角色取决于查询的是哪张表**：查组织成员是组织角色，查团队成员是团队角色。两层的词表不同——组织有 `owner` 一档，团队没有（`Roles.ORG_RANK` / `Roles.TEAM_RANK`）。
+
 保护规则：
 
 - 改/删自己的组织角色 → 400（避免把自己降权后无法管理）。
 - 唯一 `owner` 不允许被降级或移除 → 400。
+- 授予或撤销 `owner` 身份只能由现任 owner 动手。
 - 移出团队不撤销其组织成员身份（两套身份独立）。
 
 ### 5.3 审核队列
@@ -170,6 +183,7 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
   "version": "1.0.0", "channel": "stable",
   "submitted_by": "Dev Two",
   "submitted_at": "2026-10-20T10:00:00Z",
+  "status": "pending_review",
   "scan": {"status": "passed", "summary": "3 findings, 0 blocking"},
   "source": {"provider": "git", "repository": "https://github.com/owner/skills.git",
              "ref": "v1.2.0", "commit": "abc1234"}
@@ -178,11 +192,17 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
 
 `submitted_by` 是提交人的**显示名**（不是对象）——审核页要的是「谁提交的」这个名字。
 
+`status` 是**版本自己的状态**（`draft` / `scanning` / `pending_review` / `published` / `rejected`），不是队列的筛选条件。详情端点要靠它判断「这一版还能不能过审」——用 URL 直接打开一个已发布版本的详情页时，服务端只校验「我能审」，不校验是否还在待审，没有状态字段前端就会给出一个必然 409 的「通过」按钮。
+
 **可见范围**：只返回「我在其所属范围里是 reviewer 及以上」的待审版本。
 
-- 技能的 `owner_team_id` 非空 → 看我在该团队的角色。
-- 否则 `organization_id` 非空 → 看我在该组织的角色。
-- 两者都空（个人 Skill）→ 不进审核流（个人与公开可见的版本扫描通过即发布，见 `ReviewService.needsReview`）。
+取角色是**团队优先、没有才回落组织**（`coalesce(团队角色, 组织角色)`，与 `OrgService.roleIn` 同一套语义）：
+
+- 技能的 `owner_team_id` 非空且我在该团队有成员行 → 用我在**该团队**的角色。
+- 我在该团队**没有**成员行 → 回落到我在该组织的角色。
+- `organization_id` 为空（个人 Skill）→ 不进审核流（个人与公开可见的版本扫描通过即发布，见 `ReviewService.needsReview`）。
+
+「团队优先」不是二选一：建团队时不写 `team_memberships` 行，所以组织 owner 在该团队没有团队角色，会回落到组织角色——按互斥二选一理解会以为 owner 看不到队列。
 
 排序按 `(submitted_at DESC, id DESC)`。
 
@@ -336,7 +356,7 @@ skillmesh publish ./skills/java-debug --team platform --org acme
 - 随发布请求带上 `organization_id` / `owner_team_id` / `visibility=team`（`--team` 缺省时按 `--org` 推 `organization` 可见性）。服务端 `SkillService.create` 已校验：`team` 可见必须同时给 `organization_id` 与 `owner_team_id`。
 - 发布者在该组织/团队里需 `publisher` 及以上，否则拒绝。
 
-`publish` 之外的命令**零改动**。安装侧（`install`）已支持按 slug 装团队可见的 Skill，无需改。
+`publish` 之外的命令**零改动**。安装侧（`install`）收的是 **Skill ID 而不是 slug**（`install <skill-id>`），团队可见的 Skill 同样按 ID 装——`skillmesh search` 输出的最后一列就是完整 ID，闭环走得通。让 `install` 也吃 slug 是 v1 的可用性缺口，不在 v2 范围（见 §11）。
 
 ## 9. 实施切片
 
@@ -386,6 +406,7 @@ Keycloak realm 需要**第二个账号**。在 `infra/keycloak/realm-skillmesh.j
 | 审核队列无游标分页 | v2 只有 `limit`（上限 200），超过 200 条待审取不到。团队规模下队列不长，先这样；要翻页时按 §5.3 的说明加游标。 |
 | 审核队列不排除「自己提交的版本」 | 提交人自己会在队列里看到自己发的版本，但点「通过」会被服务端 403（不能审自己发的版本）。前端拿不到提交人的 id（`submitted_by` 只是显示名），没法预先禁用按钮。 |
 | 审计仍只在 Skill 维度 | 全表扫描已修（`GET /audit-events` 改成一条 join 查询，可见性条件与搜索共用 `VisibleSkills`），但**审计台页面**仍不做。 |
+| 治理类审计事件查不出来 | 本分支新增的 `invitation.*` / `organization.*` / `team.*` / `*.membership.*` 事件写进了 `audit_events`，但两个查询端点（`GET /api/v1/skills/{id}/audit` 与 `GET /api/v1/audit-events`）都按 `target_type='skill'` 过滤，**一条也查不出来**。要查治理流水得给端点加按 `target_type` 分流的分支——本轮不做。另外 `audit_events.request_id` 从来没被写过，恒为 null。 |
 | `install` 收 Skill ID 而非 slug | v1 的实现就是这样（`install <skill-id>`），设计文档 §7.4 的命令表写的是 slug。`skillmesh search` 输出的最后一列就是完整 ID，所以闭环走得通；让 install 同时吃 slug 是 v1 的可用性缺口，不在 v2 范围。 |
-| 发布到团队的权限看的是**组织角色** | CLI 的 `publish --org/--team` 拿到的身份来自 `GET /me`，那里只有组织角色，没有团队角色。服务端也按组织角色判（§10.1），两边同口径——否则 CLI 放行、服务端 403，而按手册提了组织角色也没用（接受邀请会写一行 `team_role=member`，查团队角色会被它遮住）。所以被邀请进来的人默认是组织 `member`，要往团队发布得先把组织角色提到 publisher 以上（团队页的成员表可改）。 |
+| 发布权看**组织角色**、审核放行权看**团队角色** | 两层角色各管一件事（§5.2、§5.3）。发布与提交审核判组织角色——接受邀请会写一行 `team_role=member`，用团队角色判会把组织角色永久遮住。审核放行与队列可见性判团队角色（没有团队成员行才回落到组织角色）——审核是团队范围内的事。所以被邀请进来的人默认组织 `member`、团队 `member`：要发布得把**组织角色**提到 publisher，要审别人的东西得把**团队角色**提到 reviewer。控制台两边都能改（选中团队改团队角色，不选团队改组织角色）。 |
 | 多设备冲突可视化 | 仍只在 CLI 侧处理。 |

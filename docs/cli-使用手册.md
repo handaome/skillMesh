@@ -23,6 +23,7 @@
 
 # 发布本地 Skill
 ./skillmesh.exe publish ./skills/java-debug
+./skillmesh.exe publish ./skills/java-debug --org acme --team platform  # 发到团队，要审核
 ./skillmesh.exe rollback java-debug --to 1.0.0
 ./skillmesh.exe restore                    # 换设备：装回个人私有空间
 
@@ -166,15 +167,20 @@ export SKILLMESH_TOKEN=<access-token>
 
 # 真的发
 ./skillmesh.exe publish ./skills/java-debug
+
+# 发到组织 / 团队（这类版本会停在待审核）
+./skillmesh.exe publish ./skills/java-debug --org acme --team platform
 ```
 
 流程：
 
 ```text
 校验本地目录 → 扫密钥 → 打成 zip（SKILL.md 在包根）→ 算整包 SHA-256 与逐文件 manifest
-  → 按 slug 查云端，没有就建（建完直接就是 published）
+  → 按 slug 查云端，没有就建
   → 建版本 → 拿 presigned URL 直传对象存储
-  → 服务端重算 SHA-256、比对、转正为不可变制品、置 published
+  → 服务端重算 SHA-256、比对、转正为不可变制品
+  → 服务端再扫一遍：命中阻断 → rejected
+  → 个人/公开可见：置 published；团队/组织可见：置 pending_review，等人审
 ```
 
 | 参数 | 作用 |
@@ -182,7 +188,9 @@ export SKILLMESH_TOKEN=<access-token>
 | `<path>` | 本地 Skill 目录。**在 Skill 目录里敲 `publish .` 就行**，slug 取目录名 |
 | `--all` | 发布目录树里的**全部** Skill |
 | `--version` | 版本号。不填就在云端已有版本上**累加 patch 位**（1.0.0 → 1.0.1） |
-| `--visibility` | `private`（默认）或 `public`。v1 不支持 team/organization（需要组织概念） |
+| `--visibility` | 可见性：`private`（默认）/ `public` / `team` / `organization`。`team` 与 `organization` 要配合 `--org`/`--team` |
+| `--org` | 发布到的组织，**slug**（不是 id）。给了它，可见性就是 `organization` |
+| `--team` | 发布到的团队，**slug**（不是 id）。**必须同时给 `--org`**，给了它，可见性就是 `team` |
 | `--channel` | 发布通道：`stable`（默认）/ `beta` / `dev` |
 | `--slug` | 覆盖 slug。默认取**目录名**（要符合 `^[a-z0-9][a-z0-9-]{1,63}$`，不满足时用这个覆盖） |
 | `--name` | 覆盖展示名。默认取 `SKILL.md` frontmatter 的 `name` |
@@ -190,10 +198,18 @@ export SKILLMESH_TOKEN=<access-token>
 | `--dry-run` | 只走完流程不真的发布 |
 | `--skip-secret-scan` | 跳过密钥扫描。**只在确认命中是占位符时用** |
 
-**v1 是「创建即发布」**——没有 `draft → scanning → pending_review → published` 的审批流（那是 v2 的团队治理）。这是 spec 里明确标注的有意偏离。
+可见性与归属怎么定：
+
+- 不给 `--org`/`--team`：可见性就是 `--visibility` 给的值，默认 `private`。
+- 只给 `--org`：可见性 `organization`。
+- 给 `--org` + `--team`：可见性 `team`。
+- 又显式给了 `--visibility` 又给了归属：两者必须一致，不一致会被挡下（`--visibility team` 少了 `--team`、或与归属冲突都有明确报错）。
 
 几个注意点：
 
+- **往组织/团队发要组织角色 publisher 及以上**。CLI 拿 `GET /me` 里的组织角色判，服务端也按组织角色判，两边同口径。角色不够时报「你在组织 "acme" 的角色是 member，发布到组织/团队需要 publisher 及以上」。
+- **团队与组织可见的版本不会直接发布**——停在 `pending_review` 等审核，CLI 会打印「已提交审核」而不是「已发布」。个人与公开的版本扫描通过即发布。
+- **`--org`/`--team` 只在新建 Skill 时生效**。Skill 已存在时归属与可见性都改不了：给了归属报「Skill "java-debug" 已存在，--org/--team 只在新建时生效」，想改可见性报「Skill "java-debug" 已存在，可见性改不了（现在是 private）」。
 - **密钥会挡住上传**。扫到 AWS Key、GitHub Token、OpenAI Key、Slack Token、Google API Key 或私钥正文时直接拒绝发布，并指出文件:行号和命中规则。文档里的占位符（`your-key-here`、`<your-token>`）不误伤；真被误伤时确认一遍再用 `--skip-secret-scan`。
 - **版本号自动累加依赖已有版本是语义化版本**。云端已有 `2024-01-01` 这种非语义化版本时，会报错让你用 `--version` 显式指定，不会瞎猜。
 - **隐藏文件不进包**。`.skillmesh-install`（本机状态标记）、`.git` 之类不会发到云端。
