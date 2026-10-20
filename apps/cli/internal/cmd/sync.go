@@ -123,11 +123,28 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 	targets = filterByBackoff(targets, queue, options)
 
 	var results []syncResult
+	// 同一份内容可能同时出现在多个位置：多个 Agent 目录、符号链接目录、
+	// 甚至是某个 Skill 内部的嵌套子 Skill。按内容摘要去重，只同步一次。
+	uploaded := map[string]string{}
 	for _, target := range targets {
+		digest, digestErr := skillscan.DirDigest(target.Path)
+		if digestErr == nil {
+			if first, seen := uploaded[digest]; seen {
+				results = append(results, syncResult{Name: target.Name, Path: target.Path,
+					Outcome: skipped,
+					Detail:  "与 " + first + " 内容一致，已同步过，跳过"})
+				continue
+			}
+			uploaded[digest] = target.Name
+		}
 		result, entry, err := syncOne(ctx, client, target, options)
 		if err != nil {
 			results = append(results, failedResult(target, err.Error()))
 			continue
+		}
+		if result.Outcome == failed || result.Outcome == conflicted {
+			// 没同步成的不算数，别把后面同内容的也一起挡掉
+			delete(uploaded, digest)
 		}
 		if result.Outcome == failed && !options.DryRun {
 			// 只有网络类失败才值得重试；校验不通过重试一百次也一样。
@@ -315,7 +332,7 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 	if found && decision != syncstate.UpToDate {
 		// 云端也判一次：别的设备可能在两次请求之间动过内容（详细设计 §3.6）。
 		var err error
-		changeset, err = confirmWithCloud(ctx, client, target, local, localHash, decision)
+		changeset, err = confirmWithCloud(ctx, client, target, local, localHash, decision, options.DryRun)
 		if err != nil {
 			return syncResult{Name: target.Name, Path: target.Path, Outcome: conflicted,
 				Detail: err.Error()}, syncstate.Entry{}, nil
@@ -332,8 +349,13 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 // confirmWithCloud 把这次的基线和本地摘要报给服务端，由它回答还成不成立。
 // 服务端说冲突就以它为准——它看得到别的设备，服务端之间才比得准。
 func confirmWithCloud(ctx context.Context, client *apiclient.Client, target syncTarget,
-	local packager.Artifact, localHash string, decision syncstate.Decision) (string, error) {
+	local packager.Artifact, localHash string, decision syncstate.Decision,
+	dryRun bool) (string, error) {
 
+	if dryRun {
+		// --dry-run 的承诺是「什么都不改」：不注册设备、不提交变更集。
+		return "", nil
+	}
 	device, err := ensureDevice(ctx, client)
 	if err != nil {
 		return "", err
@@ -420,7 +442,7 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		}
 		if options.DryRun {
 			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
-				Detail: "将上传新版本"}, entry, nil
+				Detail: "将上传新版本（演练，未真的上传）"}, entry, nil
 		}
 		result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
 			RelPath: filepath.Base(target.Path)},
@@ -509,8 +531,10 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 			hint = note + "；用 --resolve keep-local/keep-cloud/keep-both 强行决定"
 		}
 		// 让服务端也知道这次冲突了：另一台设备可能正等着知道这件事。
-		_ = client.ReportAuditEvent(ctx, "sync.conflict_reported", target.SkillID, "denied",
-			map[string]string{"skill": target.Name, "local_hash": localHash[:12]})
+		if !options.DryRun {
+			_ = client.ReportAuditEvent(ctx, "sync.conflict_reported", target.SkillID, "denied",
+				map[string]string{"skill": target.Name, "local_hash": localHash[:12]})
+		}
 		return syncResult{Name: target.Name, Path: target.Path,
 			Outcome: conflicted, Detail: hint}, syncstate.Entry{}, nil
 	}
