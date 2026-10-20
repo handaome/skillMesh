@@ -123,6 +123,8 @@ public class ReviewQueueService {
         return OrgService.roleAtLeast(role, "reviewer");
     }
 
+    // ponytail: 逐条查 skills/scans/sources/users（N+1），一页 50 条就是 200 次查询。
+    // 待审队列量级不大，先这样；量大时改成按 id 批量查再拼。
     private PendingReviewItem toItem(SkillVersionEntity version) {
         SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
         return new PendingReviewItem(
