@@ -1462,7 +1462,9 @@ public record RoleRequest(@NotBlank String role) {}
 
 `skillmesh publish --org/--team` 的 publisher 检查在 CLI 侧，但 CLI 只是建议——直接打 API 的 member 仍能建出 team 可见的 Skill。**服务端必须自己判**，否则这个权限形同虚设。
 
-`apps/api/src/main/java/com/skillmesh/api/skill/SkillService.java` 的 `requireVisibilitySupported` 里，对 `visibility` 为 `team` 的情况，补一条：发起人在该团队里的角色要 ≥ publisher。
+**判的是组织角色**（设计文档 §11 已知边界表：发布到团队的权限看的是组织角色）。CLI 的 `GET /me` 只有组织角色，CLI 那边也只查得到组织角色——两边必须同口径，否则 CLI 放行、服务端 403，用户按手册的指引提权也没用。
+
+`apps/api/src/main/java/com/skillmesh/api/skill/SkillService.java` 的 `requireVisibilitySupported` 里，对 `visibility` 为 `team` 的情况，补一条：发起人在该组织里的角色要 ≥ publisher。
 
 ```java
         if ("team".equals(visibility)) {
@@ -1470,19 +1472,30 @@ public record RoleRequest(@NotBlank String role) {}
                 throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                     "team 可见必须指定 owner_team_id");
             }
-            // 往团队发布是团队范围内的动作，判的是发起人在这个团队里的角色。
-            // roleIn 优先取团队角色，没有才退回组织角色——正好符合语义。
-            String role = orgs.roleIn(req.organization_id(), req.owner_team_id(), user.id());
+            // 团队得挂在同一个组织下，否则「组织角色」与「团队角色」是两回事，
+            // 下面的 publisher 判断就无从谈起。
+            if (!orgs.teamInOrg(req.organization_id(), req.owner_team_id())) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                    "owner_team_id 必须属于 organization_id");
+            }
+            // 判的是组织角色——与 CLI、手册一致。别用 roleIn：那个优先取团队角色，
+            // 而接受邀请会写一行 team_role=member，把组织角色永久遮住，
+            // 手册给的解法（提组织角色）在服务端就不生效了。
+            String role = orgs.roleIn(req.organization_id(), null, user.id());
             if (!OrgService.roleAtLeast(role, "publisher")) {
                 throw new ApiException(403, ErrorCodes.FORBIDDEN,
-                    "在该团队里需要 publisher 及以上角色才能发布");
+                    "在该组织里需要 publisher 及以上角色才能发布");
             }
         }
 ```
 
-`organization` 可见性同样要求发起人是该组织里 publisher 及以上的角色——「发到组织」是组织范围内的动作，判的是组织角色。
+`organization` 可见性同样要求发起人是该组织里 publisher 及以上的角色——判的也是组织角色。
 
-在 `MemberManagementTest` 里补一个用例：非 publisher 的组织成员建 team 可见的 Skill → 403 `FORBIDDEN`。
+在 `MemberManagementTest` 里补两个用例：
+- 非 publisher 的组织成员建 team 可见的 Skill → 403 `FORBIDDEN`。
+- **组织角色是 publisher、但团队角色是 member 的人，仍能建 team 可见的 Skill** ——
+  这是本条的口径钉子：邀请接受会写 `team_role=member`，若服务端查团队角色，
+  手册教的「提组织角色」就失效了。
 
 - [ ] **Step 8: 跑测试确认通过**
 

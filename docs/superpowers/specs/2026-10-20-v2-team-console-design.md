@@ -380,5 +380,5 @@ Keycloak realm 需要**第二个账号**。在 `infra/keycloak/realm-skillmesh.j
 | 审核 diff 无缓存 | 每次查看重新解包。低频场景可接受。 |
 | 审计仍只在 Skill 维度 | 全表扫描已修（`GET /audit-events` 改成一条 join 查询，可见性条件与搜索共用 `VisibleSkills`），但**审计台页面**仍不做。 |
 | `install` 收 Skill ID 而非 slug | v1 的实现就是这样（`install <skill-id>`），设计文档 §7.4 的命令表写的是 slug。`skillmesh search` 输出的最后一列就是完整 ID，所以闭环走得通；让 install 同时吃 slug 是 v1 的可用性缺口，不在 v2 范围。 |
-| 发布到团队的权限看的是**组织角色** | CLI 的 `publish --org/--team` 拿到的身份来自 `GET /me`，那里只有组织角色，没有团队角色。所以被邀请进来的人默认是组织 `member`，要往团队发布得先把组织角色提到 publisher 以上（团队页的成员表可改）。 |
+| 发布到团队的权限看的是**组织角色** | CLI 的 `publish --org/--team` 拿到的身份来自 `GET /me`，那里只有组织角色，没有团队角色。服务端也按组织角色判（§10.1），两边同口径——否则 CLI 放行、服务端 403，而按手册提了组织角色也没用（接受邀请会写一行 `team_role=member`，查团队角色会被它遮住）。所以被邀请进来的人默认是组织 `member`，要往团队发布得先把组织角色提到 publisher 以上（团队页的成员表可改）。 |
 | 多设备冲突可视化 | 仍只在 CLI 侧处理。 |
