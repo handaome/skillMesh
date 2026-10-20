@@ -78,6 +78,28 @@ class InvitationFlowTest {
         assertThat(stored).hasSize(64);
     }
 
+    /** 不带请求体 = 组织级邀请：controller 的默认值不能撞上「给了团队角色就得给团队」。 */
+    @Test
+    void 不带请求体也能建组织级邀请() throws Exception {
+        UUID orgId = createOrganization("acme");
+
+        mockMvc.perform(post("/api/v1/organizations/{id}/invitations", orgId)
+                .header("Authorization", auth))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.token").exists())
+            .andExpect(jsonPath("$.organization_slug").value("acme"))
+            .andExpect(jsonPath("$.org_role").value("member"));
+
+        // 落库的是组织级邀请：没有团队
+        assertThat(jdbc.queryForObject(
+            "select count(*) from org_invitations where organization_id = ? and team_id is null",
+            Integer.class, orgId)).isEqualTo(1);
+        // team_role 是 NOT NULL，存的是兜底值
+        assertThat(jdbc.queryForObject(
+            "select team_role from org_invitations where organization_id = ?",
+            String.class, orgId)).isEqualTo("member");
+    }
+
     @Test
     void 公开端点不用登录就能看邀请摘要() throws Exception {
         UUID orgId = createOrganization("acme");

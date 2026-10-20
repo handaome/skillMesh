@@ -42,8 +42,12 @@ public class InvitationController {
             @PathVariable UUID organizationId,
             @Valid @RequestBody(required = false) CreateInvitationRequest req) {
         CurrentUser user = currentUserService.current(jwt);
+        // 没给请求体 = 组织级邀请：team_role 留 null（服务层按「没给团队」判断，
+        // 存库那步再兜成 member——DDL 里 team_role 是 NOT NULL）。
+        // 这里不能填 "member"：给了团队角色就必须给团队，否则 controller 的默认值
+        // 会撞上自己刚加的规则。
         CreateInvitationRequest body = req == null
-            ? new CreateInvitationRequest(null, "member", "member", null) : req;
+            ? new CreateInvitationRequest(null, "member", null, null) : req;
         InvitationService.Created created = invitations.create(user, organizationId,
             body.team_id(), body.org_role(), body.team_role(), body.subject());
         InvitationEntity entity = created.invitation();
