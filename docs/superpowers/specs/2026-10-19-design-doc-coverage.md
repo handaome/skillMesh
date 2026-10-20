@@ -69,6 +69,8 @@
 
 ## §7 Git 来源管理
 
+§7.4 命令表 12 条逐条用 `--help` 验证过参数可解析（`login <地址>` 的位置参数这一轮才补上）。
+
 | 要点 | 状态 | 落地位置 |
 | --- | --- | --- |
 | §7.1 来源模型九个字段 | ✅ | 锁文件（本地）：repository/provider/path/ref_type/ref/resolved_commit/installed_hash/license、update_policy；发布时随创建请求上报，服务端写入 `skill_sources` |

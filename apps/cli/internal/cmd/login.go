@@ -24,16 +24,23 @@ const loopbackPort = 53682
 func newLoginCmd() *cobra.Command {
 	var issuer string
 	cmd := &cobra.Command{
-		Use:   "login",
+		Use:   "login [服务端地址]",
 		Short: "通过浏览器授权码 + PKCE 登录",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Long: "登录 SkillMesh。地址可以写成位置参数（设计文档 §7.4 的用法）、" +
+			"--issuer，或环境变量 SM_KEYCLOAK_ISSUER。",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// 位置参数优先，其次 --issuer，最后环境变量
 			issuerURL := issuer
+			if len(args) == 1 {
+				issuerURL = args[0]
+			}
 			if issuerURL == "" {
 				issuerURL = os.Getenv("SM_KEYCLOAK_ISSUER")
 			}
 			if issuerURL == "" {
-				return fmt.Errorf("缺少 issuer：用 --issuer 指定或设置 SM_KEYCLOAK_ISSUER")
+				return fmt.Errorf("缺少地址：skillmesh login <服务端地址>，" +
+					"或用 --issuer / SM_KEYCLOAK_ISSUER")
 			}
 			tokens, err := runPkceFlow(cmd.Context(), issuerURL, cfg.ClientID)
 			if err != nil {
