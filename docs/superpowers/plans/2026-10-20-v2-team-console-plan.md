@@ -1014,30 +1014,6 @@ public class InvitationController {
 }
 ```
 
-**注意**：`list` 方法里那段组织可见性判断写得绕且不成立。**改成**：在 `InvitationService` 上加一个方法
-
-```java
-    public void requireOrgMember(CurrentUser user, UUID organizationId) {
-        if (!orgs.isOrgMember(organizationId, user.id())) {
-            throw ApiException.notFound("组织");
-        }
-    }
-```
-
-然后 controller 的 `list` 改成：
-
-```java
-    @GetMapping("/organizations/{organizationId}/invitations")
-    public List<InvitationSummary> list(@AuthenticationPrincipal Jwt jwt,
-                                        @PathVariable UUID organizationId) {
-        CurrentUser user = currentUserService.current(jwt);
-        invitations.requireOrgMember(user, organizationId);
-        return invitations.list(organizationId).stream().map(entity -> {
-            ...
-        }).toList();
-    }
-```
-
 - [ ] **Step 10: 跑测试确认通过**
 
 ```bash
@@ -2062,7 +2038,7 @@ public final class ManifestDiff {
 }
 ```
 
-**注意**：`modified` 的行数这里先给 0 + `truncated=true` 占位——真正的行数由 `ArtifactDiffService` 解包后回填（Task 5 的 Step 5）。
+**注意**：`modified` 的行数这里先给 0 + `truncated=true`——真正的行数由 Task 5 Step 6 的 `ArtifactDiffService.withLineCounts` 重新生成这份列表时补上。
 
 - [ ] **Step 3: 写 LineDiff**
 
@@ -2630,28 +2606,63 @@ export async function completeLogin(code: string, verifier: string, redirectUri:
 }
 ```
 
-- [ ] **Step 4: 改 api.ts 让 token 可选**
+- [ ] **Step 4: 改 api.ts 让 token 可选并支持其他方法**
 
 `apps/web/src/api.ts` 的 `request` 改成：
 
 ```ts
 import { session } from './auth/session'
 
-async function request<T>(path: string, token?: string): Promise<T> {
+async function request<T>(
+  path: string,
+  method = 'GET',
+  body?: unknown,
+  token?: string,
+): Promise<T> {
   const bearer = token ?? session.accessToken
   const response = await fetch(BASE + path, {
-    headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+    method,
+    headers: {
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
   })
-  ...
+  if (!response.ok) {
+    let code = `HTTP_${response.status}`
+    let message = response.statusText
+    try {
+      const parsed = await response.json()
+      code = parsed.code ?? code
+      message = parsed.detail ?? message
+    } catch {
+      // 非 JSON 错误体，沿用状态码
+    }
+    throw new ApiError(code, response.status, message)
+  }
+  if (response.status === 204) return undefined as T
+  return (await response.json()) as T
 }
 ```
+
+参数顺序定成 `(path, method, body, token)`——method 在前，因为后面的接口函数几乎都要用非 GET，token 永远走会话里的那个。
 
 其余函数（`searchSkills` / `getSkill` / `getVersions`）的 token 参数改成可选：
 
 ```ts
 export function searchSkills(q: string, token?: string): Promise<SkillPage> {
-  ...
-  return request<SkillPage>(`/skills${suffix}`, token)
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  const suffix = params.toString() ? `?${params}` : ''
+  return request<SkillPage>(`/skills${suffix}`, 'GET', undefined, token)
+}
+
+export function getSkill(id: string, token?: string): Promise<Skill> {
+  return request<Skill>(`/skills/${id}`, 'GET', undefined, token)
+}
+
+export function getVersions(id: string, token?: string): Promise<VersionPage> {
+  return request<VersionPage>(`/skills/${id}/versions`, 'GET', undefined, token)
 }
 ```
 
@@ -3357,36 +3368,6 @@ export function createInvitation(organizationId: string, body: {
 
 export function revokeInvitation(organizationId: string, invitationId: string): Promise<void> {
   return request<void>(`/organizations/${organizationId}/invitations/${invitationId}`, 'DELETE')
-}
-```
-
-**注意**：`request` 目前只支持 GET。要支持方法与请求体，把它改成：
-
-```ts
-async function request<T>(path: string, token?: string, method = 'GET', body?: unknown): Promise<T> {
-  const bearer = token ?? session.accessToken
-  const response = await fetch(BASE + path, {
-    method,
-    headers: {
-      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  if (!response.ok) {
-    let code = `HTTP_${response.status}`
-    let message = response.statusText
-    try {
-      const parsed = await response.json()
-      code = parsed.code ?? code
-      message = parsed.detail ?? message
-    } catch {
-      // 非 JSON 错误体，沿用状态码
-    }
-    throw new ApiError(code, response.status, message)
-  }
-  if (response.status === 204) return undefined as T
-  return (await response.json()) as T
 }
 ```
 
