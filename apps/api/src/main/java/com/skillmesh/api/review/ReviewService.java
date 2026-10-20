@@ -53,7 +53,10 @@ public class ReviewService {
     public Map<String, Object> submit(CurrentUser user, UUID skillId, String version,
                                      String comment) {
         SkillEntity skill = requireSkill(user, skillId);
-        requireRole(user, skill, "publisher");
+        // 提交审核是「发布」的一部分，门槛与 publish 一致：判组织角色。
+        // 判团队角色的话，接受邀请写下的 team_role=member 会把组织角色永久遮住——
+        // 手册教的「把组织角色提到 publisher」在服务端就不生效。
+        requireRole(user, skill, "publisher", null);
         SkillVersionEntity entity = requireVersion(skillId, version);
         if ("published".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已发布，无需再提交审核");
@@ -83,7 +86,8 @@ public class ReviewService {
                                       boolean approved, String comment) {
         SkillEntity skill = requireSkill(user, skillId);
         // 自己发的东西自己审不合适：要求 reviewer 及以上，且不能是同一个发布人
-        requireRole(user, skill, "reviewer");
+        // 审核放行权是团队范围内的事，判团队角色（没有团队成员行才回落到组织角色）。
+        requireRole(user, skill, "reviewer", skill.getOwnerTeamId());
         SkillVersionEntity entity = requireVersion(skillId, version);
         if (!"pending_review".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
@@ -142,12 +146,18 @@ public class ReviewService {
             .orElseThrow(() -> ApiException.notFound("版本"));
     }
 
-    /** 审核人权限：组织或团队里 reviewer 及以上。 */
-    private void requireRole(CurrentUser user, SkillEntity skill, String required) {
+    /**
+     * 角色门槛。
+     *
+     * scopeTeamId 传团队 id 就按团队范围判（审核放行权，团队内的事），
+     * 传 null 只判组织角色（发布门槛，与 SkillService.requireVisibilitySupported 一致）。
+     * 两者别混：接受邀请会写一行 team_role=member，团队角色优先的组织角色会被它遮住。
+     */
+    private void requireRole(CurrentUser user, SkillEntity skill, String required, UUID scopeTeamId) {
         if (skill.getOrganizationId() == null) {
             return;
         }
-        String role = orgs.roleIn(skill.getOrganizationId(), skill.getOwnerTeamId(), user.id());
+        String role = orgs.roleIn(skill.getOrganizationId(), scopeTeamId, user.id());
         if (!OrgService.roleAtLeast(role, required)) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN,
                 "需要 " + required + " 及以上角色，当前：" + (role.isEmpty() ? "无" : role));

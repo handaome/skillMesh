@@ -115,6 +115,26 @@ class ReviewFlowTest {
             .as("个人 Skill 扫描通过就发布").isEqualTo("published");
     }
 
+    @Test
+    void 组织角色是publisher就能提交审核() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        publish(skillId, "1.0.0");
+        // 先被打回，提交审核才有意义（被驳回的版本要能重新进队列）
+        reviews.reject(owner, skillId, "1.0.0", "打回重改");
+        assertThat(versionStatus(skillId, "1.0.0")).isEqualTo("rejected");
+
+        // 接受邀请后就是这个状态：组织角色 publisher，团队角色只是 member。
+        // 提交审核的门槛跟 publish 一样只看组织角色，团队角色不该把它挡住。
+        CurrentUser publisher = userWithRoles(orgId, teamId, "publisher", "member");
+        reviews.submit(publisher, skillId, "1.0.0", "改好了");
+
+        assertThat(versionStatus(skillId, "1.0.0"))
+            .as("组织角色够就能把驳回的版本重新送审").isEqualTo("pending_review");
+    }
+
     private String versionStatus(UUID skillId, String version) throws Exception {
         String body = mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
                 .header("Authorization", auth))
@@ -151,6 +171,17 @@ class ReviewFlowTest {
                 orgId, id, role);
         }
         return new CurrentUser(id, "rev-" + id, "Reviewer", null);
+    }
+
+    /**
+     * 一个人同时有组织身份与团队身份——接受邀请之后就是这样：
+     * 组织角色被团队角色那行盖住之前，两者是分开的。
+     */
+    private CurrentUser userWithRoles(UUID orgId, UUID teamId, String orgRole, String teamRole) {
+        CurrentUser user = userWithRole(orgId, null, orgRole);
+        jdbc.update("insert into team_memberships (team_id, user_id, role, joined_at) "
+            + "values (?, ?, ?, now())", teamId, user.id(), teamRole);
+        return user;
     }
 
     private List<TeamEntity> teams(UUID orgId) {

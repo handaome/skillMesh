@@ -136,7 +136,8 @@ public class ReviewQueueService {
             displayName(version.getCreatedBy()),
             version.getCreatedAt() == null ? null : version.getCreatedAt().toString(),
             scanSummary(version),
-            sourceSummary(version));
+            sourceSummary(version),
+            version.getStatus());
     }
 
     private ReviewScanSummary scanSummary(SkillVersionEntity version) {
