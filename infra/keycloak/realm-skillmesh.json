@@ -69,6 +69,22 @@
         }
       ],
       "realmRoles": ["skillmesh-user"]
+    },
+    {
+      "username": "dev-user2",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "dev2@skillmesh.local",
+      "firstName": "Dev",
+      "lastName": "User Two",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev2",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["skillmesh-user"]
     }
   ]
 }
