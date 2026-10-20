@@ -1,0 +1,168 @@
+import { describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import ElementPlus from 'element-plus'
+import TeamPage from '../src/pages/TeamPage.vue'
+import { session } from '../src/auth/session'
+
+function jsonResponse(body: unknown) {
+  return { ok: true, status: 200, statusText: 'OK', json: async () => body }
+}
+
+function noContent() {
+  return { ok: true, status: 204, statusText: 'No Content', json: async () => null }
+}
+
+function makeRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/team', component: TeamPage }],
+  })
+}
+
+async function mountTeam() {
+  const router = makeRouter()
+  await router.push('/team')
+  await router.isReady()
+  const wrapper = mount(TeamPage, { global: { plugins: [router, ElementPlus] } })
+  await flushPromises()
+  return wrapper
+}
+
+const MEMBER = {
+  user_id: 'u1', display_name: 'Dev Two', email: 'd2@example.com',
+  role: 'member', joined_at: '2026-10-20T00:00:00Z',
+}
+
+const TEAM = {
+  id: 't1', organization_id: 'org1', slug: 'platform', name: 'Platform', status: 'active',
+}
+
+const INVITATION = {
+  id: 'i1', organization_name: 'Acme', team_name: 'Platform',
+  org_role: 'member', team_role: 'member', status: 'pending',
+  expires_at: '2026-10-27T00:00:00Z', created_at: '2026-10-20T00:00:00Z',
+}
+
+describe('TeamPage', () => {
+  it('没有组织时提示先建组织', async () => {
+    session.organizations = []
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([])))
+    const wrapper = await mountTeam()
+    expect(wrapper.text()).toContain('还没有加入任何组织')
+  })
+
+  it('列出成员与邀请', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM])
+    }))
+    const wrapper = await mountTeam()
+
+    expect(wrapper.find('[data-test="member-row"]').text()).toContain('Dev Two')
+    expect(wrapper.find('[data-test="invitation-row"]').text()).toContain('Platform')
+  })
+
+  it('改组织角色会 PATCH 并重读成员列表', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    let role = MEMBER.role
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        role = JSON.parse(String(init.body)).role
+        return noContent()
+      }
+      if (url.includes('/members')) return jsonResponse([{ ...MEMBER, role }])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    const roleEdit = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="role-edit"]')
+    roleEdit.vm.$emit('change', 'publisher')
+    await flushPromises()
+
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
+    expect(patch?.[0]).toBe('/api/v1/organizations/org1/members/u1')
+    expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ role: 'publisher' })
+    // PATCH 之后重读列表，界面上的角色才是服务端确认过的值
+    expect(wrapper.find('[data-test="role-edit"]').text()).toBe('publisher')
+  })
+
+  it('改角色失败时显示服务端错误码', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        return {
+          ok: false, status: 403, statusText: 'Error',
+          json: async () => ({ code: 'FORBIDDEN', detail: '组织权限不足' }),
+        }
+      }
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM])
+    }))
+    const wrapper = await mountTeam()
+
+    const roleEdit = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="role-edit"]')
+    roleEdit.vm.$emit('change', 'publisher')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="error"]').text()).toContain('FORBIDDEN')
+    // 改失败就还是服务端的角色，界面不能先显示一个假的
+    expect(wrapper.find('[data-test="role-edit"]').text()).toBe('member')
+  })
+
+  it('换团队后重读该团队的成员', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/teams/t1/members')) {
+        return jsonResponse([{ ...MEMBER, user_id: 'u2', display_name: 'Team Dev' }])
+      }
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="team-select"]')
+    teamSelect.vm.$emit('update:modelValue', 't1')
+    teamSelect.vm.$emit('change', 't1')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/teams/t1/members'))).toBe(true)
+    expect(wrapper.find('[data-test="member-row"]').text()).toContain('Team Dev')
+  })
+
+  it('没选团队时邀请不带 team_role', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({
+          id: 'i2', organization_slug: 'acme', organization_name: 'Acme',
+          team_slug: null, team_name: null, org_role: 'member', team_role: 'member',
+          expires_at: '2026-10-27T00:00:00Z', invite_url: 'http://127.0.0.1:5174/invite/tok', token: 'tok',
+        })
+      }
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      return jsonResponse([TEAM])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    await wrapper.find('[data-test="invite"]').trigger('click')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    // 给了团队角色就必须给团队，否则服务端 400
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ org_role: 'member' })
+    expect(wrapper.find('[data-test="invite-link"]').text()).toContain('/invite/tok')
+  })
+})

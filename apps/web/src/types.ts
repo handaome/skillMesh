@@ -42,3 +42,43 @@ export interface VersionPage {
   next_cursor: string | null
   has_more: boolean
 }
+
+export interface Team {
+  id: string
+  organization_id: string
+  slug: string
+  name: string
+  status: string
+}
+
+export interface Member {
+  user_id: string
+  display_name: string
+  email: string | null
+  role: string
+  joined_at: string
+}
+
+export interface Invitation {
+  id: string
+  organization_name: string
+  team_name: string | null
+  org_role: string
+  team_role: string
+  status: string
+  expires_at: string
+  created_at: string
+}
+
+export interface CreatedInvitation {
+  id: string
+  organization_slug: string
+  organization_name: string
+  team_slug: string | null
+  team_name: string | null
+  org_role: string
+  team_role: string
+  expires_at: string
+  invite_url: string
+  token: string
+}

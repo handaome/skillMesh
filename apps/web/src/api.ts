@@ -1,5 +1,5 @@
 import { session } from './auth/session'
-import type { Skill, SkillPage, SkillVersion, VersionPage } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation } from './types'
 
 const BASE = '/api/v1'
 
@@ -58,4 +58,37 @@ export function getSkill(id: string, token?: string): Promise<Skill> {
 
 export function getVersions(id: string, token?: string): Promise<VersionPage> {
   return request<VersionPage>(`/skills/${id}/versions`, 'GET', undefined, token)
+}
+
+export function listTeams(organizationId: string): Promise<Team[]> {
+  return request<Team[]>(`/organizations/${organizationId}/teams`)
+}
+
+export function listOrgMembers(organizationId: string): Promise<Member[]> {
+  return request<Member[]>(`/organizations/${organizationId}/members`)
+}
+
+export function listTeamMembers(organizationId: string, teamId: string): Promise<Member[]> {
+  return request<Member[]>(`/organizations/${organizationId}/teams/${teamId}/members`)
+}
+
+export function listInvitations(organizationId: string): Promise<Invitation[]> {
+  return request<Invitation[]>(`/organizations/${organizationId}/invitations`)
+}
+
+export function createInvitation(organizationId: string, body: {
+  team_id?: string
+  org_role?: string
+  team_role?: string
+}): Promise<CreatedInvitation> {
+  return request<CreatedInvitation>(
+    `/organizations/${organizationId}/invitations`, 'POST', body)
+}
+
+export function revokeInvitation(organizationId: string, invitationId: string): Promise<void> {
+  return request<void>(`/organizations/${organizationId}/invitations/${invitationId}`, 'DELETE')
+}
+
+export function updateOrgRole(organizationId: string, userId: string, role: string): Promise<void> {
+  return request<void>(`/organizations/${organizationId}/members/${userId}`, 'PATCH', { role })
 }
