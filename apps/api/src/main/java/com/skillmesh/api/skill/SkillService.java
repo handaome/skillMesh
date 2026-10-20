@@ -3,7 +3,6 @@ package com.skillmesh.api.skill;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.OrgService;
-import jakarta.validation.Valid;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillSourceInput;
@@ -139,12 +138,10 @@ public class SkillService {
             cursorTime = OffsetDateTime.parse(parts[0]);
             cursorId = UUID.fromString(parts[1]);
         }
-        // 团队/组织可见的 Skill：把「我加入的团队与组织」交给 SQL 过滤，
+        // 团队/组织可见的 Skill：可见性条件交给 SQL 过滤，
         // 别把不该看到的查出来再在内存里筛——那等于没权限控制。
         List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibility, tag,
-            mine, uuidArray(orgs.myOrganizationIds(user.id())),
-            uuidArray(orgs.myTeamIds(user.id())),
-            cursorTime, cursorId, PageRequest.of(0, size + 1));
+            mine, cursorTime, cursorId, PageRequest.of(0, size + 1));
         boolean hasMore = rows.size() > size;
         List<SkillEntity> page = hasMore ? rows.subList(0, size) : rows;
         List<SkillResponse> items = new ArrayList<>(page.size());
@@ -205,15 +202,6 @@ public class SkillService {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "team 可见必须指定 owner_team_id");
         }
-    }
-
-    /** PostgreSQL 的 uuid[] 字面量。一个都没加入就传空数组，= any 匹配不到任何行。 */
-    private static String uuidArray(List<UUID> ids) {
-        if (ids.isEmpty()) {
-            return "{}";
-        }
-        return "{" + ids.stream().map(UUID::toString)
-            .reduce((left, right) -> left + "," + right).orElse("") + "}";
     }
 
     private static String normalize(String q) {

@@ -55,4 +55,15 @@ public class AuditService {
         return repository.findByTargetTypeAndTargetIdOrderByOccurredAtDesc(
             "skill", skillId.toString(), PageRequest.of(0, limit));
     }
+
+    /**
+     * 我可见的 Skill 的流水。
+     *
+     * 可见性在 SQL 里判（与搜索共用同一份条件），不在内存里筛。
+     */
+    @Transactional(readOnly = true)
+    public List<AuditEventEntity> recentVisible(CurrentUser user, String action, int limit) {
+        String filter = action == null || action.isBlank() ? null : action;
+        return repository.findVisibleForUser(user.id(), filter, Math.clamp(limit, 1, 200));
+    }
 }

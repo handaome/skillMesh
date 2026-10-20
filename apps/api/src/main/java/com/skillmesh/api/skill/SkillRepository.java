@@ -27,11 +27,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
      */
     @Query(value = """
         select s.* from skills s
-        where (s.visibility = 'public' or s.owner_user_id = :owner
-               or (s.visibility = 'organization'
-                   and s.organization_id = any(cast(:orgIds as uuid[])))
-               or (s.visibility = 'team'
-                   and s.owner_team_id = any(cast(:teamIds as uuid[]))))
+        where """ + VisibleSkills.WHERE + """
           and (cast(:q as text) is null or lower(s.name) like :q
                or lower(s.slug) like :q or lower(s.description) like :q)
           and (cast(:visibility as text) is null or s.visibility = :visibility)
@@ -47,8 +43,6 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
                              @Param("visibility") String visibility,
                              @Param("tag") String tag,
                              @Param("mine") boolean mine,
-                             @Param("orgIds") String orgIds,
-                             @Param("teamIds") String teamIds,
                              @Param("cursorTime") OffsetDateTime cursorTime,
                              @Param("cursorId") UUID cursorId,
                              Pageable pageable);
