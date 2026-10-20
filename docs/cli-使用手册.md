@@ -179,7 +179,7 @@ export SKILLMESH_TOKEN=<access-token>
   → 按 slug 查云端，没有就建
   → 建版本 → 拿 presigned URL 直传对象存储
   → 服务端重算 SHA-256、比对、转正为不可变制品
-  → 服务端再扫一遍：命中阻断 → rejected
+  → 服务端扫描：命中阻断项 → rejected
   → 个人/公开可见：置 published；团队/组织可见：置 pending_review，等人审
 ```
 
