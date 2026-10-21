@@ -5,6 +5,8 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.scan.ScanEntity;
+import com.skillmesh.api.scan.ScanRepository;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
@@ -31,14 +33,17 @@ public class ReviewService {
     private final OrgService orgs;
     private final AuditService audit;
     private final ReviewRepository reviews;
+    private final ScanRepository scans;
 
     public ReviewService(SkillRepository skills, SkillVersionRepository versions,
-                         OrgService orgs, AuditService audit, ReviewRepository reviews) {
+                         OrgService orgs, AuditService audit, ReviewRepository reviews,
+                         ScanRepository scans) {
         this.skills = skills;
         this.versions = versions;
         this.orgs = orgs;
         this.audit = audit;
         this.reviews = reviews;
+        this.scans = scans;
     }
 
     /** 团队或组织可见的 Skill，发版要走审核。 */
@@ -61,6 +66,8 @@ public class ReviewService {
         if ("published".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已发布，无需再提交审核");
         }
+        // 送审前必须已经上传过制品、也被服务端扫过——否则这道扫描闸形同虚设。
+        requireScannable(entity, false);
         entity.setStatus("pending_review");
         versions.save(entity);
         record(user, skillId, "version.submit", entity, comment);
@@ -89,6 +96,9 @@ public class ReviewService {
         // 审核放行权是团队范围内的事，判团队角色（没有团队成员行才回落到组织角色）。
         requireRole(user, skill, "reviewer", skill.getOwnerTeamId());
         SkillVersionEntity entity = requireVersion(skillId, version);
+        // 与送审同一道前置：没上传制品、没被服务端扫过的版本不能过审。
+        // 扫描结论是阻断的更不能放行——那就是服务端拦下来的东西。
+        requireScannable(entity, !approved);
         if (!"pending_review".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "只有待审核的版本能过审，当前状态：" + entity.getStatus());
@@ -113,13 +123,54 @@ public class ReviewService {
             "status", entity.getStatus());
     }
 
+    /**
+     * 送审/过审的前置条件：版本得有制品、得被服务端扫过。
+     *
+     * 没有这两样就等于绕开了服务端扫描那道闸——「扫描拦截 → 驳回 → 重新送审
+     * → 过审」这条路会把带密制品放出去。状态不对就是 409，不是 400。
+     *
+     * @param allowBlocked 扫描结论是阻断时是否放行。送审与过审都不放行；
+     *                     驳回放行（把被拦下的版本正式打回去是应该的）。
+     */
+    private void requireScannable(SkillVersionEntity version, boolean allowBlocked) {
+        if (version.getArtifactId() == null) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "该版本还没有上传制品，不能送审或过审");
+        }
+        ScanEntity scan = scans.findFirstBySkillVersionIdOrderByStartedAtDesc(version.getId())
+            .orElseThrow(() -> new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "该版本还没有被服务端扫描过，不能送审或过审"));
+        if (!allowBlocked && isBlocked(scan.getStatus())) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "该版本的扫描结论是 " + scan.getStatus() + "（阻断），不能送审或过审");
+        }
+    }
+
+    /** 扫描结论是不是阻断（skill_scans.status 的 failed / error）。 */
+    private static boolean isBlocked(String scanStatus) {
+        return "failed".equals(scanStatus) || "error".equals(scanStatus);
+    }
+
     private void record(CurrentUser user, UUID skillId, String action,
                         SkillVersionEntity version, String comment) {
+        // 同一个版本同一个人只能留一条记录（表上有 UNIQUE(skill_version_id, reviewer_id)）。
+        // 先查再插：撞约束会抛 DataIntegrityViolationException 变成 500，
+        // 语义上应该是 409，而且异常是在事务里抛的，回滚不掉已经改过的状态。
+        if (reviews.existsBySkillVersionIdAndReviewerId(version.getId(), user.id())) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "你已经对这个版本做过审核了，不能重复操作");
+        }
         ReviewEntity row = new ReviewEntity();
         row.setId(UUID.randomUUID());
         row.setSkillVersionId(version.getId());
         row.setReviewerId(user.id());
-        row.setDecision("version.reject".equals(action) ? "rejected" : "approved");
+        // 送审不是审核结论：不能落成 approved（那等于把提交人记成审批人）。
+        // 表上的 CHECK 允许 changes_requested，用它表示「这个人参与了处理」。
+        row.setDecision(switch (action) {
+            case "version.submit" -> "changes_requested";
+            case "version.reject" -> "rejected";
+            default -> "approved";
+        });
         row.setComment(comment == null ? "" : comment);
         row.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         reviews.save(row);

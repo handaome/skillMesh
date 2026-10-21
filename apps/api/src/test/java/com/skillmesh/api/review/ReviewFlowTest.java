@@ -2,12 +2,14 @@ package com.skillmesh.api.review;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.org.OrgService;
@@ -135,6 +137,121 @@ class ReviewFlowTest {
             .as("组织角色够就能把驳回的版本重新送审").isEqualTo("pending_review");
     }
 
+    /**
+     * 扫描被拦下的版本不许重新送审。
+     *
+     * 服务端扫描命中阻断规则就把版本置成 rejected；再 submit 一次就能把它
+     * 放回队列，过审就等于把带密制品发出去——服务端扫描那道闸整个绕过去了。
+     */
+    @Test
+    void 扫描被拦截的版本不能送审() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        publish(skillId, "1.0.0", "AKIAIOSFODNN7EXAMPLE\n");
+        assertThat(versionStatus(skillId, "1.0.0")).isEqualTo("rejected");
+
+        ApiException error = catchThrowableOfType(
+            () -> reviews.submit(owner, skillId, "1.0.0", "改好了"), ApiException.class);
+
+        assertThat(error).isNotNull();
+        assertThat(error.status()).isEqualTo(409);
+        assertThat(error.getMessage()).contains("扫描");
+        assertThat(versionStatus(skillId, "1.0.0"))
+            .as("被拦下的版本不能回到待审队列").isEqualTo("rejected");
+    }
+
+    /** 没上传过制品的版本不许送审——送审了队列里也是空的。 */
+    @Test
+    void 没有制品的版本不能送审() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        createDraft(skillId, "1.0.0");
+
+        ApiException error = catchThrowableOfType(
+            () -> reviews.submit(owner, skillId, "1.0.0", "送审"), ApiException.class);
+
+        assertThat(error).isNotNull();
+        assertThat(error.status()).isEqualTo(409);
+        assertThat(error.getMessage()).contains("制品");
+    }
+
+    /**
+     * 队列里没有制品的版本不许过审。
+     *
+     * submit 已经被前置条件挡住了，这个状态只能手工造——但它正是 brief 里
+     * 说的那条路：过了审 skill.latest_version 就指向一个没有制品的版本。
+     */
+    @Test
+    void 没有制品的版本不能过审() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        createDraft(skillId, "1.0.0");
+        jdbc.update("update skill_versions set status = 'pending_review' "
+            + "where skill_id = ? and version = ?", skillId, "1.0.0");
+
+        CurrentUser reviewer = userWithRole(orgId, teamId, "reviewer");
+        ApiException error = catchThrowableOfType(
+            () -> reviews.approve(reviewer, skillId, "1.0.0", ""), ApiException.class);
+
+        assertThat(error).isNotNull();
+        assertThat(error.status()).isEqualTo(409);
+        assertThat(versionStatus(skillId, "1.0.0"))
+            .as("没制品的版本不能被放行").isEqualTo("pending_review");
+    }
+
+    /**
+     * 同一个人对同一版本送审两次要 409，不是 500。
+     *
+     * skill_reviews 上有 UNIQUE(skill_version_id, reviewer_id)：不先查就插，
+     * 第二次会撞约束变成 500「服务内部错误」。
+     */
+    @Test
+    void 同一个人对同一版本送审两次要409() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        publish(skillId, "1.0.0");
+        reviews.submit(owner, skillId, "1.0.0", "送审");
+
+        ApiException error = catchThrowableOfType(
+            () -> reviews.submit(owner, skillId, "1.0.0", "再送一次"), ApiException.class);
+
+        assertThat(error).isNotNull();
+        assertThat(error.status()).isEqualTo(409);
+    }
+
+    /**
+     * 同一个人对同一版本审两次要 409，不是 500。
+     *
+     * 驳回 → 重新送审 → 同一个人再过审：第二次过审会撞同一条唯一约束。
+     */
+    @Test
+    void 同一个人对同一版本审两次要409() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        publish(skillId, "1.0.0");
+        CurrentUser reviewer = userWithRole(orgId, teamId, "reviewer");
+        reviews.reject(reviewer, skillId, "1.0.0", "打回重改");
+        reviews.submit(owner, skillId, "1.0.0", "改好了");
+
+        ApiException error = catchThrowableOfType(
+            () -> reviews.approve(reviewer, skillId, "1.0.0", ""), ApiException.class);
+
+        assertThat(error).isNotNull();
+        assertThat(error.status()).isEqualTo(409);
+        assertThat(versionStatus(skillId, "1.0.0"))
+            .as("重复过审不该把版本放出去").isEqualTo("pending_review");
+    }
+
     private String versionStatus(UUID skillId, String version) throws Exception {
         String body = mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
                 .header("Authorization", auth))
@@ -212,7 +329,12 @@ class ReviewFlowTest {
     }
 
     private void publish(UUID skillId, String version) throws Exception {
-        byte[] zip = TestArtifacts.zipOf("SKILL.md", "# " + version + "\n");
+        publish(skillId, version, "# " + version + "\n");
+    }
+
+    /** 传指定内容的一版。内容里带凭据就会被服务端扫描拦下。 */
+    private void publish(UUID skillId, String version, String content) throws Exception {
+        byte[] zip = TestArtifacts.zipOf("SKILL.md", content);
         String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)
                 .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of(
@@ -232,5 +354,18 @@ class ReviewFlowTest {
                 node.path("upload").path("session_id").asText())
                 .header("Authorization", auth))
             .andExpect(status().isAccepted());
+    }
+
+    /** 只建版本不上传——版本停在 draft，没有制品。 */
+    private void createDraft(UUID skillId, String version) throws Exception {
+        byte[] zip = TestArtifacts.zipOf("SKILL.md", "# " + version + "\n");
+        mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "version", version, "channel", "stable", "size_bytes", zip.length,
+                    "sha256", TestArtifacts.sha256(zip), "file_count", 1,
+                    "manifest", List.of(Map.of("path", "SKILL.md",
+                        "sha256", TestArtifacts.sha256(zip), "size_bytes", zip.length))))))
+            .andExpect(status().isCreated());
     }
 }
