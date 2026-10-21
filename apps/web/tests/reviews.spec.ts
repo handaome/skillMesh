@@ -94,5 +94,14 @@ describe('ReviewDetailPage', () => {
     expect(approve?.[0]).toBe('/api/v1/skills/s1/versions/1.0.0/approve')
     expect(approve?.[1]?.method).toBe('POST')
     expect(JSON.parse(String(approve?.[1]?.body))).toEqual({ comment: '' })
+
+    // 点「拒绝」：两个动作写法一样，但各打各的端点——写串了服务端不会受理。
+    await wrapper.find('[data-test="reject"]').trigger('click')
+    await flushPromises()
+
+    const reject = fetchMock.mock.calls.find(([url]) => String(url).includes('/reject'))
+    expect(reject?.[0]).toBe('/api/v1/skills/s1/versions/1.0.0/reject')
+    expect(reject?.[1]?.method).toBe('POST')
+    expect(JSON.parse(String(reject?.[1]?.body))).toEqual({ comment: '' })
   })
 })
