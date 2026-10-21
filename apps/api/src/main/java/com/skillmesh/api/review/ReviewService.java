@@ -62,15 +62,21 @@ public class ReviewService {
         // 判团队角色的话，接受邀请写下的 team_role=member 会把组织角色永久遮住——
         // 手册教的「把组织角色提到 publisher」在服务端就不生效。
         requireRole(user, skill, "publisher", null);
-        SkillVersionEntity entity = requireVersion(skillId, version);
+        SkillVersionEntity entity = requireVersionForUpdate(skillId, version);
         if ("published".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已发布，无需再提交审核");
         }
         // 送审前必须已经上传过制品、也被服务端扫过——否则这道扫描闸形同虚设。
         requireScannable(entity, false);
-        entity.setStatus("pending_review");
-        versions.save(entity);
-        record(user, skillId, "version.submit", entity, comment);
+        // 送审是幂等的：已经在队列里就什么都不用做。
+        // 送审不是审核结论，不占 skill_reviews 的名额（那是审核动作的）：
+        // 占了名额，驳回之后提交人就再也送不回去，这一版就永久卡死了。
+        if (!"pending_review".equals(entity.getStatus())) {
+            entity.setStatus("pending_review");
+            versions.save(entity);
+        }
+        audit.record(user, "version.submit", "skill", skillId, "success",
+            Map.of("version", version, "comment", comment == null ? "" : comment));
         return Map.of("skill_id", skillId.toString(), "version", version,
             "status", "pending_review");
     }
@@ -95,7 +101,10 @@ public class ReviewService {
         // 自己发的东西自己审不合适：要求 reviewer 及以上，且不能是同一个发布人
         // 审核放行权是团队范围内的事，判团队角色（没有团队成员行才回落到组织角色）。
         requireRole(user, skill, "reviewer", skill.getOwnerTeamId());
-        SkillVersionEntity entity = requireVersion(skillId, version);
+        // 锁住版本行：审核决定要串行化。两个人同时点「通过」都读到 pending_review
+        // 就会各写一条 approved；「通过」与「拒绝」交错还会把 published_by 写回 null。
+        // 锁住之后后一个动作只能等前一个提交完，读到的已经是 published → 409。
+        SkillVersionEntity entity = requireVersionForUpdate(skillId, version);
         // 与送审同一道前置：没上传制品、没被服务端扫过的版本不能过审。
         // 扫描结论是阻断的更不能放行——那就是服务端拦下来的东西。
         requireScannable(entity, !approved);
@@ -118,7 +127,7 @@ public class ReviewService {
             entity.setStatus("rejected");
         }
         versions.save(entity);
-        record(user, skillId, approved ? "version.approve" : "version.reject", entity, comment);
+        recordReview(user, skillId, entity, comment, approved);
         return Map.of("skill_id", skillId.toString(), "version", version,
             "status", entity.getStatus());
     }
@@ -151,31 +160,32 @@ public class ReviewService {
         return "failed".equals(scanStatus) || "error".equals(scanStatus);
     }
 
-    private void record(CurrentUser user, UUID skillId, String action,
-                        SkillVersionEntity version, String comment) {
+    /**
+     * 记一条审核结论。
+     *
+     * 只有真正的审核动作（通过/拒绝）才占 skill_reviews 的名额——
+     * 送审不是审核结论：送审的人从没「审核」过这个版本，
+     * 占了名额就再也送不回去（驳回之后提交人被 409 卡死，这一版就废了）。
+     */
+    private void recordReview(CurrentUser user, UUID skillId, SkillVersionEntity version,
+                              String comment, boolean approved) {
         // 同一个版本同一个人只能留一条记录（表上有 UNIQUE(skill_version_id, reviewer_id)）。
-        // 先查再插：撞约束会抛 DataIntegrityViolationException 变成 500，
-        // 语义上应该是 409，而且异常是在事务里抛的，回滚不掉已经改过的状态。
+        // 先查再插：撞约束会抛 DataIntegrityViolationException 变成 500，语义上应该是 409。
+        // 并发下这一层挡不住——靠 decide 里锁住版本行来串行化。
         if (reviews.existsBySkillVersionIdAndReviewerId(version.getId(), user.id())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
-                "你已经对这个版本做过审核了，不能重复操作");
+                "你已经对这个版本做过审核了，不能重复审核");
         }
         ReviewEntity row = new ReviewEntity();
         row.setId(UUID.randomUUID());
         row.setSkillVersionId(version.getId());
         row.setReviewerId(user.id());
-        // 送审不是审核结论：不能落成 approved（那等于把提交人记成审批人）。
-        // 表上的 CHECK 允许 changes_requested，用它表示「这个人参与了处理」。
-        row.setDecision(switch (action) {
-            case "version.submit" -> "changes_requested";
-            case "version.reject" -> "rejected";
-            default -> "approved";
-        });
+        row.setDecision(approved ? "approved" : "rejected");
         row.setComment(comment == null ? "" : comment);
         row.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         reviews.save(row);
-        audit.record(user, action, "skill", skillId, "success",
-            Map.of("version", version.getVersion(),
+        audit.record(user, approved ? "version.approve" : "version.reject", "skill", skillId,
+            "success", Map.of("version", version.getVersion(),
                 "comment", comment == null ? "" : comment));
     }
 
@@ -192,8 +202,15 @@ public class ReviewService {
         return skill;
     }
 
-    private SkillVersionEntity requireVersion(UUID skillId, String version) {
-        return versions.findBySkillIdAndVersion(skillId, version)
+    /**
+     * 取版本并锁住这一行（SELECT ... FOR UPDATE）。
+     *
+     * 审核动作要在事务里串行化：同一版本的并发审核，后一个必须等前一个提交完
+     * 再读状态——否则两条 approved、或者 published_by 被写回 null。
+     * 只能在事务里用。
+     */
+    private SkillVersionEntity requireVersionForUpdate(UUID skillId, String version) {
+        return versions.findBySkillIdAndVersionForUpdate(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
     }
 

@@ -1,10 +1,12 @@
 package com.skillmesh.api.version;
 
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -50,4 +52,18 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
                                              @Param("status") String status,
                                              @Param("reviewerRoles") String reviewerRoles,
                                              Pageable pageable);
+
+    /**
+     * 取版本并锁住这一行（SELECT ... FOR UPDATE）。
+     *
+     * 审核决定要在事务里串行化：两个人同时点「通过」时，都读到 pending_review
+     * 就会各写一条 approved；「通过」与「拒绝」交错，还会把 published_by 写回 null。
+     * 锁住版本行后，后一个动作只能等前一个提交完，读到的已经是 published → 409。
+     *
+     * 只能在事务里用（锁到事务结束才释放）。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select v from SkillVersionEntity v where v.skillId = :skillId and v.version = :version")
+    Optional<SkillVersionEntity> findBySkillIdAndVersionForUpdate(@Param("skillId") UUID skillId,
+                                                                  @Param("version") String version);
 }

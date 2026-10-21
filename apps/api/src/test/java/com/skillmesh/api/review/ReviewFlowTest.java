@@ -206,13 +206,34 @@ class ReviewFlowTest {
     }
 
     /**
-     * 同一个人对同一版本送审两次要 409，不是 500。
+     * 同一个人对同一版本送审两次：两次都成功，版本仍在队列里。
      *
-     * skill_reviews 上有 UNIQUE(skill_version_id, reviewer_id)：不先查就插，
-     * 第二次会撞约束变成 500「服务内部错误」。
+     * 送审是幂等的：版本已经在队列里就什么都不用做。
+     * 送审也不是审核结论，不占 skill_reviews 的名额（那是审核动作的）。
      */
     @Test
-    void 同一个人对同一版本送审两次要409() throws Exception {
+    void 同一个人对同一版本送审两次是幂等的() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        publish(skillId, "1.0.0");
+        reviews.submit(owner, skillId, "1.0.0", "送审");
+        reviews.submit(owner, skillId, "1.0.0", "再送一次");
+
+        assertThat(versionStatus(skillId, "1.0.0"))
+            .as("重复送审后版本仍在待审队列里").isEqualTo("pending_review");
+    }
+
+    /**
+     * 驳回之后提交人必须还能再送审。
+     *
+     * 送审只是排队，不是审核结论——它不该占 skill_reviews 的名额。
+     * 占了名额，提交人被驳回之后就再也送不回去（409 VERSION_CONFLICT），
+     * 而同名版本又不能重新建，这一版就永久卡死了。
+     */
+    @Test
+    void 驳回之后还能重新送审() throws Exception {
         CurrentUser owner = owner();
         UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
         UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
@@ -220,11 +241,14 @@ class ReviewFlowTest {
         publish(skillId, "1.0.0");
         reviews.submit(owner, skillId, "1.0.0", "送审");
 
-        ApiException error = catchThrowableOfType(
-            () -> reviews.submit(owner, skillId, "1.0.0", "再送一次"), ApiException.class);
+        CurrentUser reviewer = userWithRole(orgId, teamId, "reviewer");
+        reviews.reject(reviewer, skillId, "1.0.0", "打回重改");
+        assertThat(versionStatus(skillId, "1.0.0")).isEqualTo("rejected");
 
-        assertThat(error).isNotNull();
-        assertThat(error.status()).isEqualTo(409);
+        reviews.submit(owner, skillId, "1.0.0", "改好了");
+
+        assertThat(versionStatus(skillId, "1.0.0"))
+            .as("驳回之后必须还能重新送审").isEqualTo("pending_review");
     }
 
     /**
