@@ -204,6 +204,25 @@ func TestCheckExistingSkill比对归属(t *testing.T) {
 		publishScope{OrganizationID: "org-1", OrganizationSlug: "acme"}, ""); err == nil {
 		t.Fatal("个人 Skill 加上组织应该报错")
 	}
+
+	// 同一个组织里团队对不上：两边都要说 slug，不是 UUID——
+	// 同一句话里「你要发到 组织 acme」用 slug、「它已登记在 组织 <UUID>」用 UUID，用户会懵。
+	otherTeam := checkExistingSkill(teamSkill, publishScope{
+		OrganizationID: "org-1", OrganizationSlug: "acme",
+		TeamID: "team-2", TeamSlug: "platform", Visibility: "team",
+		Teams: []apiclient.Team{
+			{ID: "team-1", Slug: "core"},
+			{ID: "team-2", Slug: "platform"},
+		},
+	}, "")
+	if otherTeam == nil {
+		t.Fatal("同一个组织不同团队应该报错")
+	}
+	for _, want := range []string{"组织 acme", "团队 core", "团队 platform"} {
+		if !strings.Contains(otherTeam.Error(), want) {
+			t.Fatalf("错误信息里该有 %q，实际 %v", want, otherTeam)
+		}
+	}
 }
 
 // sync 这类内部调用不给 Scope，可见性得回落到 options.Visibility。

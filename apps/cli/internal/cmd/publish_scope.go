@@ -20,6 +20,9 @@ type publishScope struct {
 	TeamID           string
 	TeamSlug         string
 	Visibility       string
+	// Teams 是解析范围内的团队列表：报错要说「它已登记在 团队 xxx」时，
+	// 得靠它把已登记的 team id 翻成 slug。
+	Teams []apiclient.Team
 }
 
 // findOrganization 按 slug 找组织。
@@ -102,7 +105,8 @@ func resolvePublishScope(org *apiclient.OrgMembership, teams []apiclient.Team,
 		return publishScope{}, fmt.Errorf(
 			"你在组织 %q 的角色是 %s，发布到组织/团队需要 publisher 及以上", org.Slug, org.Role)
 	}
-	scope := publishScope{OrganizationID: org.ID, OrganizationSlug: org.Slug, Visibility: "organization"}
+	scope := publishScope{OrganizationID: org.ID, OrganizationSlug: org.Slug,
+		Visibility: "organization", Teams: teams}
 	if teamSlug == "" {
 		return scope, nil
 	}
@@ -158,7 +162,7 @@ func loadPublishScope(ctx context.Context, client *apiclient.Client,
 // 只有归属对不上才拦。不带 scope 时一律放行——那是「沿用已登记的归属」。
 func checkExistingSkill(skill apiclient.Skill, scope publishScope, requested string) error {
 	if scope.OrganizationID != "" || scope.TeamID != "" {
-		actual := publishScope{OrganizationID: skill.OrganizationID, TeamID: skill.OwnerTeamID}
+		actual := ownerScope(skill, scope)
 		if actual.OrganizationID != scope.OrganizationID || actual.TeamID != scope.TeamID {
 			return fmt.Errorf(
 				"Skill %q 已存在，归属改不了：它已登记在 %s，你要发到 %s。去掉 --org/--team 会沿用它已登记的归属",
@@ -169,6 +173,21 @@ func checkExistingSkill(skill apiclient.Skill, scope publishScope, requested str
 		return fmt.Errorf("Skill %q 已存在，可见性改不了（现在是 %s）", skill.Slug, skill.Visibility)
 	}
 	return nil
+}
+
+// ownerScope 说这个 Skill 已登记的归属：slug 能对上就说 slug，对不上才退回 id。
+// 同一组织的 slug 就是 scope 里的那个；团队靠 scope 已解析的团队列表反查。
+func ownerScope(skill apiclient.Skill, scope publishScope) publishScope {
+	owner := publishScope{OrganizationID: skill.OrganizationID, TeamID: skill.OwnerTeamID}
+	if owner.OrganizationID == scope.OrganizationID {
+		owner.OrganizationSlug = scope.OrganizationSlug
+	}
+	for _, team := range scope.Teams {
+		if team.ID == skill.OwnerTeamID {
+			owner.TeamSlug = team.Slug
+		}
+	}
+	return owner
 }
 
 // describe 说清一段归属：组织与团队（或个人）。没有 slug 就退回 id。
