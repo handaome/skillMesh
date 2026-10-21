@@ -91,6 +91,34 @@ class FlywayMigrationTest {
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
+    /**
+     * 邀请表的 org_role 只收「邀请能授」的那几档。
+     *
+     * owner 只能由现任 owner 直接任命，给不了——数据库要承载这条不变量，
+     * 不能只靠应用层的那几道闸。
+     */
+    @Test
+    void 邀请的组织角色不接受owner() {
+        UUID orgId = insertOrganization();
+        insertInvitation(orgId, "member");
+
+        assertThatThrownBy(() -> insertInvitation(orgId, "owner"))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    private UUID insertOrganization() {
+        return jdbc.queryForObject(
+            "insert into organizations (slug, name) values (?, ?) returning id",
+            UUID.class, "org-" + UUID.randomUUID(), "Org");
+    }
+
+    private void insertInvitation(UUID orgId, String orgRole) {
+        jdbc.update("insert into org_invitations "
+            + "(organization_id, org_role, team_role, token_hash, status, expires_at) "
+            + "values (?, ?, 'member', ?, 'pending', now() + interval '1 day')",
+            orgId, orgRole, nextDigest());
+    }
+
     private UUID insertUser(String subject) {
         jdbc.update("insert into users (oidc_issuer, oidc_subject, display_name) "
             + "values ('https://kc', ?, ?)", subject, "User " + subject);
