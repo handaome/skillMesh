@@ -70,10 +70,42 @@ func newClient() (*apiclient.Client, error) {
 		return apiclient.New(cfg.Server, envToken, timeout), nil
 	}
 	tokens, err := auth.LoadTokens(tokenPath())
-	if err != nil || !tokens.Valid() {
-		return nil, fmt.Errorf("未登录或令牌已过期，请先执行 skillmesh login")
+	if err != nil {
+		return nil, fmt.Errorf("未登录，请先执行 skillmesh login")
+	}
+	if !tokens.Valid() {
+		tokens, err = refreshTokens(tokens)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return apiclient.New(cfg.Server, tokens.AccessToken, timeout), nil
+}
+
+// refreshTokens 令牌过期时用 refresh token 换新的。
+//
+// 常驻同步（watch/daemon）不能因为令牌过期就静默停摆：原来这里直接报「令牌已过期」，
+// 而 watch 每轮同步都走这里，于是同步会一直失败、只在日志里留一行。
+func refreshTokens(tokens auth.Tokens) (auth.Tokens, error) {
+	if tokens.RefreshToken == "" {
+		return tokens, fmt.Errorf("令牌已过期，请先执行 skillmesh login")
+	}
+	issuer, err := auth.IssuerFromToken(tokens.AccessToken)
+	if err != nil {
+		return tokens, fmt.Errorf("令牌已过期且取不到 issuer，请重新执行 skillmesh login: %w", err)
+	}
+	clientID := cfg.ClientID
+	if clientID == "" {
+		clientID = "skillmesh-cli"
+	}
+	fresh, err := auth.Refresh(context.Background(), clientID, issuer, tokens)
+	if err != nil {
+		return tokens, fmt.Errorf("令牌已过期且续期失败，请重新执行 skillmesh login: %w", err)
+	}
+	if err := fresh.Save(tokenPath()); err != nil {
+		return fresh, fmt.Errorf("续期成功但保存新令牌失败: %w", err)
+	}
+	return fresh, nil
 }
 
 func tokenPath() string {

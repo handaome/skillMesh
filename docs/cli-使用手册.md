@@ -320,9 +320,9 @@ skillmesh daemon logs --tail 50
 
 盯的是**用户级** Agent 目录（`~/.claude/skills` 这类），项目里的 `.claude/skills` 不在自动同步范围。
 
-**令牌过期后同步会静默停摆**：CLI 存了 refresh token 但没有用它续期，access token 一过期，watch/daemon 的同步就开始失败，
-而失败只写进日志——要 `skillmesh daemon logs --tail 50` 才看得见，重新 `skillmesh login` 才恢复。
-本机 realm 的令牌有效期已改成一年，所以这事一年才撞上一次。
+**令牌过期会自动续期**：access token 过期时，CLI 用登录时存下的 refresh token 换一个新的（续期后的令牌会写回凭据管理器）。
+所以常驻同步不会因为令牌过期而停摆。只有 refresh token 也失效了（被撤销、或登出过）才需要重新 `skillmesh login`——
+这时 watch/daemon 的日志里会写「令牌已过期且续期失败，请重新执行 skillmesh login」。
 
 ### 换设备装回自己的 Skill
 
