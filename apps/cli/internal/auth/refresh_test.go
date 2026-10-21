@@ -42,6 +42,12 @@ func TestIssuerFromToken(t *testing.T) {
 func TestRefresh(t *testing.T) {
 	var gotGrant, gotClient string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 路径要钉住：拼错成 .../tokens 的话真实 Keycloak 会回 404，
+		// 而这里对任何路径都回 200，测试就白绿了。
+		if r.URL.Path != "/protocol/openid-connect/token" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if err := r.ParseForm(); err == nil {
 			gotGrant = r.PostForm.Get("grant_type")
 			gotClient = r.PostForm.Get("client_id")
