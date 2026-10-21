@@ -333,6 +333,65 @@ class MemberManagementTest {
     }
 
     /**
+     * 团队可见的 Skill，团队必须属于同一个组织。
+     *
+     * 团队与组织是两套身份：owner_team_id 指向别的组织的团队时，
+     * 「组织角色」与「团队角色」对不上，发布权那套判断也就无从谈起。
+     */
+    @Test
+    void 团队不属于该组织时建不了团队可见的Skill() throws Exception {
+        UUID orgA = createOrganization("acme-a");
+        UUID teamA = createTeam(orgA, "platform");
+        UUID orgB = createOrganization("acme-b");
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", "cross-team", "name", "Cross", "description", "",
+                    "visibility", "team",
+                    "organization_id", orgB.toString(),
+                    "owner_team_id", teamA.toString()))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    /**
+     * private/public 可见的 Skill 不属于任何组织或团队。
+     *
+     * 带着 organization_id 建出来的私有 Skill 会落进该组织的审核队列
+     * （队列按 organization_id is not null 过滤），私有内容就混进审核页了。
+     */
+    @Test
+    void private可见的Skill不许带organization_id() throws Exception {
+        UUID orgId = createOrganization("acme");
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", "private-org", "name", "Private Org", "description", "",
+                    "visibility", "private",
+                    "organization_id", orgId.toString()))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    /** 同样不许带 owner_team_id。 */
+    @Test
+    void public可见的Skill不许带owner_team_id() throws Exception {
+        UUID orgId = createOrganization("acme");
+        UUID teamId = createTeam(orgId, "platform");
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", "public-team", "name", "Public Team", "description", "",
+                    "visibility", "public",
+                    "owner_team_id", teamId.toString()))))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    /**
      * 「加成员」不该顺手削掉别人的权限，也不该重置加入时间：
      * 已经是 reviewer 的人被再加一次，角色还得是 reviewer。
      */

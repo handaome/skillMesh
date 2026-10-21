@@ -11,6 +11,9 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.device.DeviceService;
+import com.skillmesh.api.review.ReviewService;
+import com.skillmesh.api.scan.ArtifactScanService;
+import com.skillmesh.api.scan.ScanResult;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.upload.UploadSessionEntity;
@@ -53,12 +56,15 @@ public class SyncUploadService {
     private final DeviceService devices;
     private final AuditService audit;
     private final SigningService signing;
+    private final ArtifactScanService scanService;
+    private final ReviewService review;
 
     public SyncUploadService(SyncChangesetRepository changesets,
                              UploadSessionRepository uploads, SkillRepository skills,
                              SkillVersionRepository versions, ArtifactService artifacts,
                              ArtifactStorage storage, DeviceService devices,
-                             AuditService audit, SigningService signing) {
+                             AuditService audit, SigningService signing,
+                             ArtifactScanService scanService, ReviewService review) {
         this.changesets = changesets;
         this.uploads = uploads;
         this.skills = skills;
@@ -68,6 +74,8 @@ public class SyncUploadService {
         this.devices = devices;
         this.audit = audit;
         this.signing = signing;
+        this.scanService = scanService;
+        this.review = review;
     }
 
     /** 为变更集里的每个相对路径开一个上传会话。 */
@@ -158,15 +166,26 @@ public class SyncUploadService {
         version.setChangelog("同步提交 " + changesetId);
         version.setManifestJson(manifestJson(files));
         version.setArtifactId(artifact.getId());
-        version.setStatus("published");
+        version.setStatus("draft");
         version.setCreatedBy(user.id());
         version.setCreatedAt(now);
-        version.setPublishedBy(user.id());
-        version.setPublishedAt(now);
+        // 先落库：扫描行有指向 skill_versions 的外键。
         versions.save(version);
-        skill.setLatestVersion(version.getVersion());
-        skill.setUpdatedAt(now);
-        skills.save(skill);
+
+        // 同步路径与整包上传走同一道服务端扫描——绕开哪条都不该绕开它。
+        ScanResult scan = scanService.scanAndRecord(version.getId(), zip);
+        // 团队与组织可见的版本要等人审，跟整包上传一个口径：
+        // 走 sync commit 不能把审核队列绕过去。
+        boolean needsReview = review.needsReview(skill.getId());
+        version.setStatus(scan.blocked() ? "rejected" : needsReview ? "pending_review" : "published");
+        if ("published".equals(version.getStatus())) {
+            version.setPublishedBy(user.id());
+            version.setPublishedAt(now);
+            skill.setLatestVersion(version.getVersion());
+            skill.setUpdatedAt(now);
+            skills.save(skill);
+        }
+        versions.save(version);
 
         changeset.setStatus("completed");
         changeset.setTargetRevision(ContentDigest.of(manifestJson(files)));
@@ -174,7 +193,8 @@ public class SyncUploadService {
         changesets.save(changeset);
 
         audit.record(user, "sync.commit", "skill", skill.getId(), "success",
-            Map.of("version", version.getVersion(), "files", String.valueOf(files.size())));
+            Map.of("version", version.getVersion(), "files", String.valueOf(files.size()),
+                "status", version.getStatus(), "scan_status", scan.status()));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("changeset_id", changesetId.toString());
         result.put("status", "completed");

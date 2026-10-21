@@ -192,6 +192,13 @@ public class SkillService {
                 "可见性只能是 private / public / team / organization");
         }
         if ("private".equals(visibility) || "public".equals(visibility)) {
+            // private/public 不属于任何组织或团队：带着 organization_id 建出来的
+            // Skill 会落进审核队列（队列按 organization_id is not null 过滤），
+            // 私有内容就混进组织的审核页里了。
+            if (req.organization_id() != null || req.owner_team_id() != null) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                    "private/public 可见的 Skill 不属于任何组织或团队，别带 organization_id 或 owner_team_id");
+            }
             return;
         }
         if (req.organization_id() == null) {

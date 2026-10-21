@@ -6,7 +6,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
+import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -39,6 +41,7 @@ class SyncUploadFlowTest {
     @Autowired private TestTokens tokens;
     @Autowired private DatabaseCleaner cleaner;
     @Autowired private ObjectMapper json;
+    @Autowired private OrgService orgs;
 
     private String auth;
 
@@ -124,6 +127,33 @@ class SyncUploadFlowTest {
             .andExpect(status().isBadRequest());
     }
 
+    /**
+     * 团队可见的 Skill 走同步提交也要进审核队列。
+     *
+     * 同步路径原来直接把版本置成 published，等于绕开了审核队列：
+     * 团队里没人知道这一版内容进了组织。
+     */
+    @Test
+    void 团队可见的Skill同步后要等人审() throws Exception {
+        CurrentUser owner = currentUser();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId);
+
+        String changesetId = createChangeset(skillId, deviceId(), "", contentHash("v1"));
+        uploadOne(changesetId, "SKILL.md", "SKILL.md".getBytes(StandardCharsets.UTF_8));
+        mockMvc.perform(post("/api/v1/sync/changesets/{id}/commit", changesetId)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expected_revision\":\"\"}"))
+            .andExpect(status().isOk());
+
+        String versions = mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(json.readTree(versions).path("items").get(0).path("status").asText())
+            .as("同步提交不能绕过审核队列").isEqualTo("pending_review");
+    }
+
     /** 开一个文件的上传会话、传上去、complete 走一遍。 */
     private void uploadOne(String changesetId, String path, byte[] content) throws Exception {
         String slots = openUploads(changesetId, List.of(fileSpec(path, content)));
@@ -191,6 +221,28 @@ class SyncUploadFlowTest {
             .andExpect(status().isCreated())
             .andReturn().getResponse().getContentAsString();
         return UUID.fromString(json.readTree(body).path("id").asText());
+    }
+
+    /** 团队可见的 Skill：要走审核队列的那种。 */
+    private UUID createTeamSkill(UUID orgId, UUID teamId) throws Exception {
+        String body = mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "slug", "synced-team", "name", "synced-team", "description", "",
+                    "visibility", "team",
+                    "organization_id", orgId.toString(),
+                    "owner_team_id", teamId.toString()))))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        return UUID.fromString(json.readTree(body).path("id").asText());
+    }
+
+    /** 测试令牌背后的那个人——建组织要他的身份。 */
+    private CurrentUser currentUser() throws Exception {
+        String body = mockMvc.perform(get("/api/v1/me").header("Authorization", auth))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(json.readTree(body).path("user").path("id").asText());
+        return new CurrentUser(id, "owner", "Owner", "owner@example.com");
     }
 
     private static String sha256Hex(byte[] content) {
