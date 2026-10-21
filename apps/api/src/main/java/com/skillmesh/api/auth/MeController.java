@@ -30,7 +30,8 @@ public class MeController {
                 membership.slug(), membership.name(), membership.role()))
             .toList();
         return new MeResponse(
-            new MeResponse.User(user.id(), user.displayName(), user.email(), "active"),
+            new MeResponse.User(user.id(), user.displayName(), user.email(), "active",
+                user.subject()),
             memberships);
     }
 }

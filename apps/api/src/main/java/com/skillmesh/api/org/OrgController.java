@@ -137,7 +137,7 @@ public class OrgController {
 
     private static MemberResponse toResponse(OrgService.Member member) {
         return new MemberResponse(member.userId(), member.displayName(), member.email(),
-            member.role(), member.joinedAt());
+            member.role(), member.joinedAt(), member.subject());
     }
 
     private static Map<String, Object> toResponse(OrganizationEntity org) {

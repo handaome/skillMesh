@@ -88,6 +88,22 @@ class MemberManagementTest {
             .andExpect(jsonPath("$[0].role").value("owner"));
     }
 
+    /**
+     * 成员列表带上 OIDC subject——邀请要绑到某个成员时填的就是它，
+     * 管理员在花名册上直接抄，不用再问人。
+     */
+    @Test
+    void 成员列表带上oidcSubject() throws Exception {
+        UUID orgId = createOrganization("acme");
+        String expected = jdbc.queryForObject(
+            "select oidc_subject from users where id = ?", String.class, owner.id());
+
+        mockMvc.perform(get("/api/v1/organizations/{id}/members", orgId)
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].subject").value(expected));
+    }
+
     @Test
     void 改角色与移除成员() throws Exception {
         UUID orgId = createOrganization("acme");

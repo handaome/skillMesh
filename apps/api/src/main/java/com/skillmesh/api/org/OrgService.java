@@ -412,12 +412,14 @@ public class OrgService {
     private Member toMember(UUID userId, String role, OffsetDateTime joinedAt) {
         String displayName = userId.toString();
         String email = null;
+        String subject = null;
         UserEntity user = users.findById(userId).orElse(null);
         if (user != null) {
             displayName = user.getDisplayName();
             email = user.getEmail();
+            subject = user.getOidcSubject();
         }
-        return new Member(userId, displayName, email, role, joinedAt);
+        return new Member(userId, displayName, email, role, joinedAt, subject);
     }
 
     private void requireOrgRole(CurrentUser user, UUID organizationId, Set<String> allowed) {
@@ -509,5 +511,5 @@ public class OrgService {
 
     /** 成员列表项。 */
     public record Member(UUID userId, String displayName, String email, String role,
-                         OffsetDateTime joinedAt) {}
+                         OffsetDateTime joinedAt, String subject) {}
 }

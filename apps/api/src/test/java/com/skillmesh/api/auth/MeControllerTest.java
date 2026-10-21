@@ -64,4 +64,22 @@ class MeControllerTest {
         assertThat(jdbc.queryForObject(
             "select count(*) from users", Integer.class)).isEqualTo(1);
     }
+
+    /**
+     * /me 回显自己的 OIDC subject。
+     *
+     * 邀请要绑到某个人时填的就是这个值——本人拿得到，才谈得上
+     * 「把这份邀请发给你」；不然管理员只能瞎猜，填了邮箱/用户名，
+     * 接收者点接受就是一句「这份邀请不是发给你的」。
+     */
+    @Test
+    void me回显自己的oidcSubject() throws Exception {
+        String body = mockMvc.perform(get("/api/v1/me")
+                .header("Authorization", "Bearer " + tokens.accessToken()))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+
+        assertThat(json.readTree(body).path("user").path("subject").asText())
+            .isEqualTo(jdbc.queryForObject("select oidc_subject from users", String.class));
+    }
 }
