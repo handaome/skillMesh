@@ -274,4 +274,58 @@ describe('TeamPage', () => {
     // 链接指向本机，原始 token 得单独给出来（设计文档 §5.1）
     expect(wrapper.find('[data-test="invite-token"]').text()).toBe('raw-tok')
   })
+  it('能建组织：填 slug 与名称后 POST /organizations，然后重拉 /me', async () => {
+    session.organizations = []
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({ id: 'org2', slug: 'acme', name: 'Acme', role: 'owner' })
+      }
+      if (url.includes('/me')) {
+        return jsonResponse({ user: { id: 'u0', display_name: 'Dev' }, organizations: [
+          { id: 'org2', slug: 'acme', name: 'Acme', role: 'owner' },
+        ] })
+      }
+      return jsonResponse([])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    await wrapper.find('input[data-test="org-slug"]').setValue('acme')
+    await wrapper.find('input[data-test="org-name"]').setValue('Acme')
+    await wrapper.find('[data-test="create-org"]').trigger('click')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(post?.[0]).toBe('/api/v1/organizations')
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ slug: 'acme', name: 'Acme' })
+    // 组织列表要跟着重拉：顶栏与团队页都从 session.organizations 算出来
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/me'))).toBe(true)
+  })
+
+  it('能建团队：填 slug 后 POST /organizations/{id}/teams', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return jsonResponse(TEAM)
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([])
+      return jsonResponse([])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    await wrapper.find('[data-test="create-team-toggle"]').trigger('click')
+    await wrapper.find('input[data-test="team-slug"]').setValue('platform')
+    await wrapper.find('input[data-test="team-name"]').setValue('Platform')
+    await wrapper.find('[data-test="create-team"]').trigger('click')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(post?.[0]).toBe('/api/v1/organizations/org1/teams')
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ slug: 'platform', name: 'Platform' })
+    // 建完要出现在团队下拉里
+    const options = wrapper.findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'))
+    expect(options).toContain('Platform')
+    expect(wrapper.text()).toContain('团队 Platform 已创建')
+  })
 })
+
