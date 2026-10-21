@@ -52,7 +52,7 @@ async function passwordToken(username, password) {
   return body.access_token
 }
 
-async function api(path, { method = 'GET', token, body, raw = false } = {}) {
+async function api(path, { method = 'GET', token, body } = {}) {
   const headers = {}
   if (token) headers.Authorization = `Bearer ${token}`
   if (body !== undefined) headers['Content-Type'] = 'application/json'
@@ -61,7 +61,7 @@ async function api(path, { method = 'GET', token, body, raw = false } = {}) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  const payload = raw ? await res.text() : await res.json().catch(() => ({}))
+  const payload = await res.json().catch(() => ({}))
   if (!res.ok) {
     const err = new Error(`${method} ${path} → ${res.status} ${JSON.stringify(payload).slice(0, 200)}`)
     err.status = res.status
@@ -99,10 +99,11 @@ async function submitPendingVersion(token, orgId, teamId) {
     skillId = created.id
   }
 
-  // 版本号往后排，别覆盖已有版本
+  // 版本号往后排，别覆盖已有版本。列表顺序不保证，所以从 1.0.0 起找第一个空位
   const versions = await api(`/skills/${skillId}/versions`, { token })
-  const used = (versions.items ?? []).map((v) => v.version)
-  const next = used.length ? bumpVersion(used[used.length - 1]) : '1.0.0'
+  const used = new Set((versions.items ?? []).map((v) => v.version))
+  let next = '1.0.0'
+  while (used.has(next)) next = bumpVersion(next)
 
   const skillMd = Buffer.from(
     `---\nname: ${CFG.slug}\ndescription: E2E 验收用的示例技能\n---\n\n# ${CFG.slug}\n\n版本 ${next} 的正文。\n`,
@@ -297,7 +298,15 @@ try {
   const queueText = await a.text('[data-test="review-item"]')
   step('10. A 在审核队列看到待审版本', queueText.includes(CFG.slug), queueText.replace(/\s+/g, ' ').slice(0, 80))
 
-  await a.realClick('[data-test="review-item"]')
+  // 队列里可能还留着上几轮没批准的版本——点「当前这一版」那张，别点错
+  await a.eval(`(() => {
+    const cards = [...document.querySelectorAll('[data-test="review-item"]')];
+    const hit = cards.find((c) => c.innerText.includes(${JSON.stringify(version)}));
+    if (!hit) throw new Error('队列里没有版本 ' + ${JSON.stringify(version)});
+    hit.setAttribute('data-e2e-target', '1');
+    return true;
+  })()`)
+  await a.realClick('[data-e2e-target]')
   await a.waitFor(`!!document.querySelector('[data-test="skill-md"]')`, { label: 'SKILL.md 正文', timeout: 30000 })
   const md = await a.text('[data-test="skill-md"]')
   const diffRows = await a.eval(`document.querySelectorAll('[data-test="diff-row"]').length`)
