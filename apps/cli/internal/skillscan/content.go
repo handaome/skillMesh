@@ -42,7 +42,7 @@ func DirHashes(dir string) ([]FileDigest, error) {
 			return err
 		}
 		if fi.IsDir() {
-			if path != dir && (isIgnored(fi.Name()) || isHidden(fi.Name())) {
+			if path != dir && IsSkippedDir(fi.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

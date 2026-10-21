@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -119,6 +120,28 @@ func Test隐藏文件不进包(t *testing.T) {
 	for _, entry := range artifact.Manifest {
 		if entry.Path == ".skillmesh-install" {
 			t.Fatal("本机标记文件不该进包")
+		}
+	}
+}
+
+// 打包的文件集必须与算摘要、扫密钥的是同一批：忽略目录里的文件
+// 跟着发上去，审核页列的文件列表就和作者看到的 diff 对不上。
+func Test忽略目录不进包(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "SKILL.md"), "# Demo\n", 0o644)
+	write(t, filepath.Join(dir, "node_modules", "x.js"), "console.log(1)\n", 0o644)
+	write(t, filepath.Join(dir, "__pycache__", "x.pyc"), "\x00\x01", 0o644)
+	write(t, filepath.Join(dir, ".git", "config"), "[core]\n", 0o644)
+
+	artifact, err := Pack(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range artifact.Manifest {
+		for _, ignored := range []string{"node_modules/", "__pycache__/", ".git/"} {
+			if strings.HasPrefix(entry.Path, ignored) {
+				t.Fatalf("忽略目录不该进包: %s", entry.Path)
+			}
 		}
 	}
 }

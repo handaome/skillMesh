@@ -43,6 +43,14 @@ func IsSensitiveFile(name string) bool {
 	return false
 }
 
+// IsSkippedDir 判断一个目录要不要整目录跳过：忽略目录与隐藏目录。
+//
+// 打包、算摘要、扫密钥必须用同一套规则：发出去的文件与算摘要的文件不是同一批时，
+// 审核页看到的文件列表就和作者看到的 diff 对不上，服务端还能扫到本地没扫过的密钥。
+func IsSkippedDir(name string) bool {
+	return isIgnored(name) || isHidden(name)
+}
+
 // IgnoreList 是从一个 Skill 目录读出来的排除规则。
 type IgnoreList struct {
 	patterns []string

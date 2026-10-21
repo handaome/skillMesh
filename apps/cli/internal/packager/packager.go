@@ -67,6 +67,12 @@ func Pack(dir string) (Artifact, error) {
 			return nil
 		}
 		if fi.IsDir() {
+			// 忽略目录与隐藏目录整目录跳过：打包的文件集必须与算摘要、扫密钥的是同一批。
+			// 否则作者在 update --dry-run 里看不到的文件会跟着发上去，
+			// 审核页列出来的文件列表与作者的 diff 对不上。
+			if path != dir && skillscan.IsSkippedDir(fi.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !fi.Mode().IsRegular() {
