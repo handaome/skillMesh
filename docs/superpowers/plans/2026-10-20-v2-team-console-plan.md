@@ -10,6 +10,11 @@
 
 **上游 spec：** [docs/superpowers/specs/2026-10-20-v2-team-console-design.md](../specs/2026-10-20-v2-team-console-design.md)
 
+> **状态（2026-10-21）：代码已实现。** 13 个 Task 的代码都落地了，但下面每个 Step 的
+> `- [ ]` 勾选框**没有维护**——别拿它判断做没做，看 [验收清单](2026-10-20-v2-team-console-checklist.md)
+> 与 git log。唯二没达成的是 spec §9 切片 2/3 的交付判据：**浏览器路径未实测**，
+> 验收只做到 API/CLI 等价。
+
 ## Global Constraints
 
 以下约束适用于每个任务，不再逐条重复：

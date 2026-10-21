@@ -233,10 +233,13 @@ ALTER TABLE org_invitations ADD CONSTRAINT org_invitations_org_role_check
 v2 **不做游标分页**——队列只有 `limit`（上限 200），待审量在团队规模下足够小。
 要翻页时再按现有做法加：base64 编码的 `submitted_at|version_id` 游标。
 
-详情在列表项基础上增加：
+详情把列表项**整个放进 `item`**，再挂上详情独有的字段（不是与列表项拍平成一层——
+前端按 `detail.item.status` 判断「这一版还能不能过审」，平铺会与 `item` 混在一起）：
 
 ```json
 {
+  "item": {"skill_id": "<uuid>", "skill_slug": "java-debug", "version": "1.0.0",
+           "status": "pending_review", "submitted_by": "Dev Two", "...": "列表项原样"},
   "skill_md": "---\nname: Java Debug\n---\n...",
   "changelog": "...",
   "findings": [{"rule": "external_download",
