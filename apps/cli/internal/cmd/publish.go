@@ -297,8 +297,15 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 	if session.Status != "completed" {
 		return publishResult{}, fmt.Errorf("服务端校验未通过：%s %s", session.Status, session.ErrorCode)
 	}
-	// 团队/组织可见的版本会停在待审核，这里提前说清楚，别让人以为已经发出去了
-	if needsReview, err := client.NeedsReview(ctx, skill.ID); err == nil && needsReview {
+	// 结果看版本自己的状态，不从 Skill 的可见性去猜：服务端扫描拦下的版本
+	// 可见性还是 team，照可见性猜就会说「已提交审核」，用户等一场不会来的审核。
+	switch session.VersionStatus {
+	case "rejected":
+		return publishResult{}, fmt.Errorf(
+			"版本 %s 被服务端的制品扫描拦下了（rejected），没有进审核队列。"+
+				"服务端扫的是上传的真包，本地扫描没看到的文件也会被算进去——清掉包里的密钥再重发",
+			version)
+	case "pending_review":
 		return publishResult{
 			Action:    "已提交审核",
 			Name:      displayName,
@@ -306,21 +313,25 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 			Version:   version,
 			SizeBytes: artifact.SizeBytes,
 		}, nil
+	case "published":
+		return publishResult{
+			Action:    "已发布",
+			Name:      displayName,
+			SkillID:   skill.ID,
+			Version:   version,
+			SizeBytes: artifact.SizeBytes,
+		}, nil
+	default:
+		return publishResult{}, fmt.Errorf(
+			"服务端没有返回版本状态（拿到 %q），无法确认这次发布的结果", session.VersionStatus)
 	}
-	return publishResult{
-		Action:    "已发布",
-		Name:      displayName,
-		SkillID:   skill.ID,
-		Version:   version,
-		SizeBytes: artifact.SizeBytes,
-	}, nil
 }
 
 // createSkill 新建 Skill 元数据：可见性与归属按解析出来的范围填。
 func createSkill(ctx context.Context, client *apiclient.Client, slug, displayName, description string,
 	options publishOptions) (apiclient.Skill, error) {
 
-	return client.CreateSkill(ctx, apiclient.CreateSkillRequest{
+	skill, err := client.CreateSkill(ctx, apiclient.CreateSkillRequest{
 		Slug:           slug,
 		Name:           displayName,
 		Description:    description,
@@ -328,6 +339,30 @@ func createSkill(ctx context.Context, client *apiclient.Client, slug, displayNam
 		OrganizationID: optionalString(options.Scope.OrganizationID),
 		OwnerTeamID:    optionalString(options.Scope.TeamID),
 	})
+	if err != nil {
+		return apiclient.Skill{}, explainSlugTaken(err, slug, options.Scope)
+	}
+	return skill, nil
+}
+
+// explainSlugTaken 把服务端的 SLUG_TAKEN 翻译成人能看懂的话：
+// 团队可见的 Skill 你可能根本看不见（不是团队成员），撞名只能由服务端说。
+func explainSlugTaken(err error, slug string, scope publishScope) error {
+	if apiclient.CodeOf(err) != "SLUG_TAKEN" {
+		return err
+	}
+	where := "你名下"
+	hint := "换个 slug 重试"
+	if scope.OrganizationID != "" {
+		org := scope.OrganizationSlug
+		if org == "" {
+			org = scope.OrganizationID
+		}
+		where = "组织 " + org + " 下"
+		hint = "换个 slug 重试，或去掉 --org/--team 给已有的 Skill 发新版本"
+	}
+	return fmt.Errorf("slug %q 已被占用：%s已经有同名的 Skill（团队可见的 Skill 你可能看不见它），%s",
+		slug, where, hint)
 }
 
 // sourceOf 从项目锁文件里找这个目录的来源，整理成服务端要的形状（设计文档 §7.1）。

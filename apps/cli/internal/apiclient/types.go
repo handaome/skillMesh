@@ -4,16 +4,21 @@ package apiclient
 // 不额外加 struct tag —— 契约用 snake_case，Go 结构体同形可读性更好。
 
 type Skill struct {
-	ID            string   `json:"id"`
-	Slug          string   `json:"slug"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	Visibility    string   `json:"visibility"`
-	Status        string   `json:"status"`
-	Tags          []string `json:"tags"`
-	LatestVersion *string  `json:"latest_version"`
-	CreatedAt     string   `json:"created_at"`
-	UpdatedAt     string   `json:"updated_at"`
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Visibility  string `json:"visibility"`
+	Status      string `json:"status"`
+	// OrganizationID 与 OwnerTeamID 是 Skill 的归属，空串表示个人 Skill。
+	// 服务端一直在返回这两个字段，客户端之前没接——「已有的 Skill 属于谁」就比不出来，
+	// 于是发 v2 时只能把「带 scope」一律当成「要改归属」拦掉。
+	OrganizationID string   `json:"organization_id"`
+	OwnerTeamID    string   `json:"owner_team_id"`
+	Tags           []string `json:"tags"`
+	LatestVersion  *string  `json:"latest_version"`
+	CreatedAt      string   `json:"created_at"`
+	UpdatedAt      string   `json:"updated_at"`
 }
 
 // SkillSource 是随创建请求带上的来源信息（设计文档 §7.1）。

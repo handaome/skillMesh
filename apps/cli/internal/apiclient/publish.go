@@ -70,6 +70,10 @@ type UploadSession struct {
 	Status         string `json:"status"`
 	VerifiedSHA256 string `json:"verified_sha256"`
 	ErrorCode      string `json:"error_code"`
+	// VersionStatus 是版本的状态（rejected / pending_review / published）。
+	// 会话自己的 status 只说「上传完了没有」，不说这版被服务端怎么处理了——
+	// 拿它去推断发布结果，就会把被扫描拦下的版本说成「已提交审核」。
+	VersionStatus string `json:"version_status"`
 }
 
 // CreateSkill 建一个 Skill 元数据。
@@ -191,18 +195,9 @@ func (c *Client) ReviewVersion(ctx context.Context, skillID, version, action,
 	}
 	var out map[string]any
 	if err := c.doWith(ctx, http.MethodPost,
-		"/skills/"+skillID+"/versions/"+version+"/"+action, nil, body, &out); err != nil {
+		"/skills/"+url.PathEscape(skillID)+"/versions/"+url.PathEscape(version)+"/"+action,
+		nil, body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
-}
-
-// NeedsReview 问服务端这个 Skill 的新版本要不要走审核。
-// 猜错的后果是误导用户说「已发布」，所以这里问一句而不是客户端自己判断。
-func (c *Client) NeedsReview(ctx context.Context, skillID string) (bool, error) {
-	skill, err := c.Skill(ctx, skillID)
-	if err != nil {
-		return false, err
-	}
-	return skill.Visibility == "team" || skill.Visibility == "organization", nil
 }

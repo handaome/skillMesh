@@ -173,6 +173,39 @@ func TestCheckExistingSkill(t *testing.T) {
 	}
 }
 
+// 发 v2 时再带上一样的 --org/--team 是主流程：归属一致就该放行，
+// 归属对不上才拦，而且要说清这个 Skill 属于谁、你要发到哪、怎么办。
+func TestCheckExistingSkill比对归属(t *testing.T) {
+	teamSkill := apiclient.Skill{Slug: "demo", Visibility: "team",
+		OrganizationID: "org-1", OwnerTeamID: "team-1"}
+	sameScope := publishScope{OrganizationID: "org-1", OrganizationSlug: "acme",
+		TeamID: "team-1", TeamSlug: "platform", Visibility: "team"}
+
+	if err := checkExistingSkill(teamSkill, sameScope, ""); err != nil {
+		t.Fatalf("同一个归属不该报错: %v", err)
+	}
+	if err := checkExistingSkill(teamSkill, publishScope{}, ""); err != nil {
+		t.Fatalf("不带 scope 时该沿用它已登记的归属: %v", err)
+	}
+
+	err := checkExistingSkill(teamSkill,
+		publishScope{OrganizationID: "org-2", OrganizationSlug: "other"}, "")
+	if err == nil {
+		t.Fatal("发到别的组织应该报错")
+	}
+	for _, want := range []string{"org-1", "other", "--org/--team"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息里该有 %q，实际 %v", want, err)
+		}
+	}
+
+	// 个人 Skill 不能靠 --org 变成组织的。
+	if err := checkExistingSkill(apiclient.Skill{Slug: "demo", Visibility: "private"},
+		publishScope{OrganizationID: "org-1", OrganizationSlug: "acme"}, ""); err == nil {
+		t.Fatal("个人 Skill 加上组织应该报错")
+	}
+}
+
 // sync 这类内部调用不给 Scope，可见性得回落到 options.Visibility。
 func TestPublishOptions可见性回落(t *testing.T) {
 	if got := (publishOptions{Visibility: "private"}).visibilityFor(); got != "private" {
@@ -258,32 +291,7 @@ func TestPublishOne归属与可见性(t *testing.T) {
 	// 「已提交审核」那条分支也得报出真实大小——漏填 SizeBytes 时输出恒为「0 字节」，
 	// 用户会以为传了个空包上去。
 	t.Run("待审的版本也报出制品大小", func(t *testing.T) {
-		var putBytes int
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch {
-			case r.Method == http.MethodGet && r.URL.Path == "/skills":
-				w.Write([]byte(`{"items":[],"has_more":false}`))
-			case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1/versions":
-				w.Write([]byte(`{"items":[],"has_more":false}`))
-			case r.Method == http.MethodPost && r.URL.Path == "/skills":
-				w.Write([]byte(`{"id":"skill-1","slug":"demo","visibility":"team"}`))
-			case r.Method == http.MethodPost && r.URL.Path == "/skills/skill-1/versions":
-				w.Write([]byte(`{"version_id":"v-1","status":"draft","upload":{
-					"session_id":"s-1","method":"PUT","url":"` + "http://" + r.Host + `/put","headers":{}}}`))
-			case r.Method == http.MethodPut && r.URL.Path == "/put":
-				raw, _ := io.ReadAll(r.Body)
-				putBytes = len(raw)
-				w.WriteHeader(http.StatusOK)
-			case r.Method == http.MethodPost && r.URL.Path == "/uploads/s-1/complete":
-				w.Write([]byte(`{"id":"s-1","status":"completed"}`))
-			case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1":
-				w.Write([]byte(`{"id":"skill-1","slug":"demo","visibility":"team"}`))
-			default:
-				w.WriteHeader(http.StatusInternalServerError)
-			}
-		}))
-		defer srv.Close()
+		srv, putBytes := publishServer(t, "pending_review")
 
 		result, err := publishOne(context.Background(), apiclient.New(srv.URL, "tok", 0),
 			publishTarget{Dir: demoSkillDir(t), RelPath: "demo"},
@@ -300,10 +308,89 @@ func TestPublishOne归属与可见性(t *testing.T) {
 		if result.SizeBytes <= 0 {
 			t.Fatalf("「已提交审核」也得报出制品大小，实际 %d 字节", result.SizeBytes)
 		}
-		if result.SizeBytes != int64(putBytes) {
-			t.Fatalf("报的大小该等于实际传的字节数：报 %d，实际传 %d", result.SizeBytes, putBytes)
+		if result.SizeBytes != int64(*putBytes) {
+			t.Fatalf("报的大小该等于实际传的字节数：报 %d，实际传 %d", result.SizeBytes, *putBytes)
 		}
 	})
+
+	// 服务端扫描拦下的版本要说清楚：它没进审核队列，
+	// 说成「已提交审核」会让人等一场不会来的审核。
+	t.Run("版本被服务端拒了要报错", func(t *testing.T) {
+		srv, _ := publishServer(t, "rejected")
+
+		result, err := publishOne(context.Background(), apiclient.New(srv.URL, "tok", 0),
+			publishTarget{Dir: demoSkillDir(t), RelPath: "demo"},
+			publishOptions{
+				Slug:  "demo",
+				Scope: publishScope{OrganizationID: "org-1", TeamID: "team-1", Visibility: "team"},
+			})
+		if err == nil {
+			t.Fatalf("被拒的版本不该报成功，实际 %q", result.Action)
+		}
+		if !strings.Contains(err.Error(), "rejected") {
+			t.Fatalf("错误信息该说明版本被拒: %v", err)
+		}
+	})
+
+	// 服务端说 slug 被占用时，用户看到的应该是「slug 已被占用」，
+	// 而不是「服务内部错误」。
+	t.Run("slug被占用时报错说清楚", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/problem+json")
+			if r.Method == http.MethodGet && r.URL.Path == "/skills" {
+				w.Write([]byte(`{"items":[],"has_more":false}`))
+				return
+			}
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"status":409,"code":"SLUG_TAKEN","detail":"slug 在该组织下已被占用: demo"}`))
+		}))
+		defer srv.Close()
+
+		_, err := publishOne(context.Background(), apiclient.New(srv.URL, "tok", 0),
+			publishTarget{Dir: demoSkillDir(t), RelPath: "demo"},
+			publishOptions{
+				Slug:  "demo",
+				Scope: publishScope{OrganizationID: "org-1", OrganizationSlug: "acme", Visibility: "organization"},
+			})
+		if err == nil {
+			t.Fatal("slug 被占用应该报错")
+		}
+		if !strings.Contains(err.Error(), "已被占用") {
+			t.Fatalf("错误信息该说明 slug 已被占用: %v", err)
+		}
+	})
+}
+
+// publishServer 造一个能跑完「建 Skill → 建版本 → 传制品 → 收尾」的服务端。
+// versionStatus 是收尾时回给客户端的版本状态。
+// 第二个返回值是实际收到的制品字节数。
+func publishServer(t *testing.T, versionStatus string) (*httptest.Server, *int) {
+	t.Helper()
+	putBytes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/skills":
+			w.Write([]byte(`{"items":[],"has_more":false}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1/versions":
+			w.Write([]byte(`{"items":[],"has_more":false}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/skills":
+			w.Write([]byte(`{"id":"skill-1","slug":"demo","visibility":"team"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/skills/skill-1/versions":
+			w.Write([]byte(`{"version_id":"v-1","status":"draft","upload":{
+				"session_id":"s-1","method":"PUT","url":"` + "http://" + r.Host + `/put","headers":{}}}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/put":
+			raw, _ := io.ReadAll(r.Body)
+			putBytes = len(raw)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/uploads/s-1/complete":
+			w.Write([]byte(`{"id":"s-1","status":"completed","version_status":"` + versionStatus + `"}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &putBytes
 }
 
 // loadPublishScope 要向服务端问组织与团队，slug 解析错了用户只会看到一句空话。

@@ -208,11 +208,11 @@ export SKILLMESH_TOKEN=<access-token>
 几个注意点：
 
 - **往组织/团队发要组织角色 publisher 及以上**。CLI 拿 `GET /me` 里的组织角色判，服务端也按组织角色判，两边同口径。角色不够时报「你在组织 "acme" 的角色是 member，发布到组织/团队需要 publisher 及以上」。
-- **团队与组织可见的版本不会直接发布**——停在 `pending_review` 等审核，CLI 会打印「已提交审核」而不是「已发布」。个人与公开的版本扫描通过即发布。
-- **`--org`/`--team` 只在新建 Skill 时生效**。Skill 已存在时归属与可见性都改不了：给了归属报「Skill "java-debug" 已存在，--org/--team 只在新建时生效」，想改可见性报「Skill "java-debug" 已存在，可见性改不了（现在是 private）」。
+- **团队与组织可见的版本不会直接发布**——停在 `pending_review` 等审核，CLI 会打印「已提交审核」而不是「已发布」。个人与公开的版本扫描通过即发布。版本被服务端的扫描拦下时报错退出（`rejected`），不会假装进了审核队列。
+- **Skill 的归属只在新建时定，改不了**。给已有 Skill 发新版本时再带上**一样的** `--org`/`--team` 是允许的（重申同一个归属）；带了**不一样的**归属会报错说清这个 Skill 属于谁、你要发到哪，并提示「去掉 --org/--team 会沿用它已登记的归属」。想改可见性报「Skill "java-debug" 已存在，可见性改不了（现在是 private）」。
 - **密钥会挡住上传**。扫到 AWS Key、GitHub Token、OpenAI Key、Slack Token、Google API Key 或私钥正文时直接拒绝发布，并指出文件:行号和命中规则。文档里的占位符（`your-key-here`、`<your-token>`）不误伤；真被误伤时确认一遍再用 `--skip-secret-scan`。
 - **版本号自动累加依赖已有版本是语义化版本**。云端已有 `2024-01-01` 这种非语义化版本时，会报错让你用 `--version` 显式指定，不会瞎猜。
-- **隐藏文件不进包**。`.skillmesh-install`（本机状态标记）、`.git` 之类不会发到云端。
+- **隐藏文件与忽略目录不进包**。`.skillmesh-install`（本机状态标记）、`.git`、`node_modules`、`__pycache__` 之类不会发到云端——发出去的文件与本地算摘要、扫密钥的是同一批，`update --dry-run` 里看不到的文件不会被悄悄上传。
 - **Windows 上发布的包会丢掉脚本的可执行位**。Windows 没有 Unix 可执行位，Go 一律报 0666；Skill 里如果有 shell 脚本，在 Unix 上装完可能需要 `chmod +x`。
 
 ### 回滚到旧版本
