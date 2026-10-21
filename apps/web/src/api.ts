@@ -1,4 +1,5 @@
 import { ensureFresh, loadMe, logout, session } from './auth/session'
+import type { OrgMembership } from './auth/session'
 import router from './router'
 import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
 
@@ -86,6 +87,16 @@ export function getVersions(id: string, token?: string): Promise<VersionPage> {
 
 export function listTeams(organizationId: string): Promise<Team[]> {
   return request<Team[]>(`/organizations/${organizationId}/teams`)
+}
+
+/** 建组织。建完组织列表要重拉——session 里的 organizations 决定顶栏与团队页。 */
+export function createOrganization(slug: string, name: string): Promise<OrgMembership> {
+  return request<OrgMembership>('/organizations', 'POST', { slug, name })
+}
+
+/** 建团队。团队名与组织名可以只给 slug 一个。 */
+export function createTeam(organizationId: string, slug: string, name: string): Promise<Team> {
+  return request<Team>(`/organizations/${organizationId}/teams`, 'POST', { slug, name })
 }
 
 export function listOrgMembers(organizationId: string): Promise<Member[]> {

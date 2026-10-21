@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   ApiError,
   createInvitation,
+  createOrganization,
+  createTeam,
   listInvitations,
   listOrgMembers,
   listTeamMembers,
@@ -12,7 +14,7 @@ import {
   updateTeamRole,
 } from '../api'
 import { currentOrg } from '../auth/currentOrg'
-import { meError } from '../auth/session'
+import { loadMe, meError } from '../auth/session'
 import type { Invitation, Member, Team } from '../types'
 
 const org = currentOrg
@@ -34,6 +36,15 @@ const inviteToken = ref('')
 const selectedTeam = ref('')
 const inviteRole = ref('member')
 const inviteOrgRole = ref('member')
+
+// 新建组织 / 新建团队
+const newOrgSlug = ref('')
+const newOrgName = ref('')
+const newTeamSlug = ref('')
+const newTeamName = ref('')
+const showNewTeam = ref(false)
+const creating = ref(false)
+const createError = ref('')
 
 /** 组织角色有 owner 一档，团队没有——服务端 400 挡着，别放进下拉。 */
 const ORG_ROLE_OPTIONS = ['owner', 'admin', 'publisher', 'reviewer', 'member', 'viewer']
@@ -167,9 +178,48 @@ async function changeRole(member: Member, role: string) {
   await refreshMembers()
 }
 
+/**
+ * 建组织。组织只能被邀请进，但自己也能建——建完组织列表要重拉：
+ * 顶栏与团队页都从 session.organizations 算出来的（currentOrg 是它的 computed）。
+ */
+async function createOrg() {
+  creating.value = true
+  createError.value = ''
+  try {
+    const slug = newOrgSlug.value.trim()
+    await createOrganization(slug, newOrgName.value.trim() || slug)
+    await loadMe()
+    newOrgSlug.value = ''
+    newOrgName.value = ''
+  } catch (e) {
+    createError.value = errorText(e)
+  } finally {
+    creating.value = false
+  }
+}
+
+/** 建团队。建完直接出现在上面的下拉里。 */
+async function createTeamNow() {
+  if (!org.value) return
+  creating.value = true
+  createError.value = ''
+  try {
+    const slug = newTeamSlug.value.trim()
+    const team = await createTeam(org.value.id, slug, newTeamName.value.trim() || slug)
+    teams.value = [...teams.value, team]
+    newTeamSlug.value = ''
+    newTeamName.value = ''
+    showNewTeam.value = false
+    notice.value = `团队 ${team.name} 已创建`
+  } catch (e) {
+    createError.value = errorText(e)
+  } finally {
+    creating.value = false
+  }
+}
+
 // 换组织：团队、成员、邀请都是按组织拉的，得重取一遍。
-watch(() => org.value?.id, async () => {
-  selectedTeam.value = ''
+watch(() => org.value?.id, async () => {  selectedTeam.value = ''
   teams.value = []
   members.value = []
   invitations.value = []
@@ -191,13 +241,43 @@ onMounted(load)
       :description="meError ? '加载用户信息失败，还不知道你有没有组织。' : '你还没有加入任何组织。'"
     />
 
-    <template v-else>
+    <!-- 还没有组织时先建一个：组织只能被邀请进，但自己也能建。 -->
+    <el-card shadow="never" class="sm-mb-16">
+      <h2 class="sm-h2">新建组织</h2>
+      <p class="sm-muted">组织是团队与 Skill 归属的地方。建好后邀请同事进来。</p>
+      <div class="sm-search">
+        <el-input v-model="newOrgSlug" placeholder="组织 slug（如 acme）" data-test="org-slug" />
+        <el-input v-model="newOrgName" placeholder="组织名称（如 Acme）" data-test="org-name" />
+        <el-button
+          type="primary"
+          data-test="create-org"
+          :loading="creating"
+          @click="createOrg"
+        >创建组织</el-button>
+      </div>
+      <el-alert
+        v-if="createError"
+        data-test="create-error"
+        :title="createError"
+        type="error"
+        :closable="false"
+        show-icon
+        class="sm-mb-12"
+      />
+    </el-card>
+
+    <template v-if="org">
       <p class="sm-muted">
         组织 {{ org.name }} · 我的角色 {{ org.role }}
       </p>
 
       <el-card shadow="never" class="sm-mb-16">
-        <h2 class="sm-h2">团队</h2>
+        <div class="sm-search">
+          <h2 class="sm-h2">团队</h2>
+          <el-button data-test="create-team-toggle" @click="showNewTeam = !showNewTeam">
+            新建团队
+          </el-button>
+        </div>
         <div class="sm-search">
           <el-select
             v-model="selectedTeam"
@@ -210,6 +290,26 @@ onMounted(load)
             <el-option v-for="team in teams" :key="team.id" :label="team.name" :value="team.id" />
           </el-select>
         </div>
+        <div v-if="showNewTeam" class="sm-search sm-mb-12">
+          <el-input v-model="newTeamSlug" placeholder="团队 slug（如 platform）" data-test="team-slug" />
+          <el-input v-model="newTeamName" placeholder="团队名称（如 Platform）" data-test="team-name" />
+          <el-button
+            type="primary"
+            data-test="create-team"
+            :loading="creating"
+            @click="createTeamNow"
+          >创建团队</el-button>
+        </div>
+
+        <el-alert
+          v-if="createError"
+          data-test="create-error"
+          :title="createError"
+          type="error"
+          :closable="false"
+          show-icon
+          class="sm-mb-12"
+        />
 
         <el-alert
           v-if="memberError"
