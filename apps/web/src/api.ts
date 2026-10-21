@@ -115,6 +115,8 @@ export function createInvitation(organizationId: string, body: {
   team_id?: string
   org_role?: string
   team_role?: string
+  /** 绑到某个已有成员的 OIDC sub：填了就只有他能接受这份邀请。 */
+  subject?: string
 }): Promise<CreatedInvitation> {
   return request<CreatedInvitation>(
     `/organizations/${organizationId}/invitations`, 'POST', body)

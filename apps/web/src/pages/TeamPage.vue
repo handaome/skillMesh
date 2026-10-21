@@ -36,6 +36,8 @@ const inviteToken = ref('')
 const selectedTeam = ref('')
 const inviteRole = ref('member')
 const inviteOrgRole = ref('member')
+// 绑定的成员（OIDC sub）：邀请只对他有效。
+const inviteSubject = ref('')
 
 // 新建组织 / 新建团队
 const newOrgSlug = ref('')
@@ -137,6 +139,9 @@ async function invite() {
       org_role: inviteOrgRole.value,
       // 服务端要求：给了团队角色就必须给团队，否则 400。没选团队时别发。
       team_role: selectedTeam.value ? inviteRole.value : undefined,
+      // 绑到具体某个人：链接只对他有效。链接是要转发出去的，
+      // 不绑人的话，拿到链接的人（甚至截图里的人）都能以被邀请的角色进来。
+      subject: inviteSubject.value || undefined,
     })
     inviteLink.value = created.invite_url
     inviteToken.value = created.token
@@ -373,6 +378,20 @@ onMounted(load)
             <el-option label="团队角色 publisher" value="publisher" />
             <el-option label="团队角色 reviewer" value="reviewer" />
             <el-option label="团队角色 admin" value="admin" />
+          </el-select>
+          <el-select
+            v-model="inviteSubject"
+            placeholder="（任何拿到链接的人都能接受）"
+            data-test="invite-subject"
+            class="sm-grow"
+          >
+            <el-option label="（不绑定：任何拿到链接的人都能接受）" value="" />
+            <el-option
+              v-for="m in members"
+              :key="m.user_id"
+              :label="m.display_name"
+              :value="m.subject"
+            />
           </el-select>
           <el-button type="primary" data-test="invite" @click="invite">生成邀请链接</el-button>
         </div>

@@ -37,6 +37,8 @@ async function mountTeam() {
 const MEMBER = {
   user_id: 'u1', display_name: 'Dev Two', email: 'd2@example.com',
   role: 'member', joined_at: '2026-10-20T00:00:00Z',
+  // 邀请要绑到某个人时填的就是这个 sub
+  subject: 'sub-u1',
 }
 
 const TEAM = {
@@ -300,6 +302,32 @@ describe('TeamPage', () => {
     expect(JSON.parse(String(post?.[1]?.body))).toEqual({ slug: 'acme', name: 'Acme' })
     // 组织列表要跟着重拉：顶栏与团队页都从 session.organizations 算出来
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/me'))).toBe(true)
+  })
+
+  // 邀请链接是要转发出去的：不绑定的话，拿到链接的人都能以被邀请的角色进来
+  // （admin 角色的链接尤其危险）。绑到成员后只有他能接受。
+  it('邀请可以绑定到具体成员：请求带 subject', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return jsonResponse({ id: 'i1', token: 'raw-tok', invite_url: 'http://x/invite/raw-tok' })
+      }
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) return jsonResponse([])
+      return jsonResponse([])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    const subjectSelect = wrapper.findComponent('[data-test="invite-subject"]')
+    subjectSelect.vm.$emit('update:modelValue', 'sub-u1')
+    await flushPromises()
+
+    await wrapper.find('[data-test="invite"]').trigger('click')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(JSON.parse(String(post?.[1]?.body)).subject).toBe('sub-u1')
   })
 
   it('能建团队：填 slug 后 POST /organizations/{id}/teams', async () => {
