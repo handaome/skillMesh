@@ -40,10 +40,11 @@ func TestIssuerFromToken(t *testing.T) {
 }
 
 func TestRefresh(t *testing.T) {
-	var gotGrant string
+	var gotGrant, gotClient string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err == nil {
 			gotGrant = r.PostForm.Get("grant_type")
+			gotClient = r.PostForm.Get("client_id")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"access_token":"new-access","refresh_token":"new-refresh",
@@ -62,6 +63,10 @@ func TestRefresh(t *testing.T) {
 	}
 	if gotGrant != "refresh_token" {
 		t.Fatalf("该用 refresh_token 授权，实际 %q", gotGrant)
+	}
+	// public client：client_id 要在表单体里，不能只塞进 Basic 头
+	if gotClient != "skillmesh-cli" {
+		t.Fatalf("表单里该有 client_id，实际 %q", gotClient)
 	}
 	if fresh.AccessToken != "new-access" || fresh.RefreshToken != "new-refresh" {
 		t.Fatalf("没换成新令牌: %+v", fresh)

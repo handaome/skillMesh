@@ -52,6 +52,10 @@ func Refresh(ctx context.Context, clientID, issuer string, tokens Tokens) (Token
 		ClientID: clientID,
 		Endpoint: oauth2.Endpoint{
 			TokenURL: strings.TrimRight(issuer, "/") + "/protocol/openid-connect/token",
+			// public client：client_id 放表单体，不用 Basic 头。
+			// 默认的 AuthStyleAutoDetect 会先试 Basic，服务端一旦接受就再也不带 client_id 到表单里——
+			// 碰上只认 params 的服务端，续期会莫名失败。
+			AuthStyle: oauth2.AuthStyleInParams,
 		},
 	}
 	source := conf.TokenSource(ctx, &oauth2.Token{

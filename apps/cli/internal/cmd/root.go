@@ -82,28 +82,39 @@ func newClient() (*apiclient.Client, error) {
 	return apiclient.New(cfg.Server, tokens.AccessToken, timeout), nil
 }
 
-// refreshTokens 令牌过期时用 refresh token 换新的。
+// refreshTokens 令牌过期时用 refresh token 换新的，并把新令牌存回去。
 //
 // 常驻同步（watch/daemon）不能因为令牌过期就静默停摆：原来这里直接报「令牌已过期」，
 // 而 watch 每轮同步都走这里，于是同步会一直失败、只在日志里留一行。
 func refreshTokens(tokens auth.Tokens) (auth.Tokens, error) {
+	fresh, err := renewedTokens(tokens, cfg.ClientID)
+	if err != nil {
+		return tokens, err
+	}
+	if err := fresh.Save(tokenPath()); err != nil {
+		return fresh, fmt.Errorf("续期成功但保存新令牌失败: %w", err)
+	}
+	return fresh, nil
+}
+
+// renewedTokens 是续期这件事本身：换一个新的 access token 回来。
+//
+// 单独拆出来是为了能测——它不碰凭据管理器，也不依赖全局配置。
+// issuer 从 access token 的 iss 声明里取：登录时没把它存下来，但令牌自己知道是哪个 realm 签的。
+func renewedTokens(tokens auth.Tokens, clientID string) (auth.Tokens, error) {
 	if tokens.RefreshToken == "" {
 		return tokens, fmt.Errorf("令牌已过期，请先执行 skillmesh login")
+	}
+	if clientID == "" {
+		clientID = "skillmesh-cli"
 	}
 	issuer, err := auth.IssuerFromToken(tokens.AccessToken)
 	if err != nil {
 		return tokens, fmt.Errorf("令牌已过期且取不到 issuer，请重新执行 skillmesh login: %w", err)
 	}
-	clientID := cfg.ClientID
-	if clientID == "" {
-		clientID = "skillmesh-cli"
-	}
 	fresh, err := auth.Refresh(context.Background(), clientID, issuer, tokens)
 	if err != nil {
 		return tokens, fmt.Errorf("令牌已过期且续期失败，请重新执行 skillmesh login: %w", err)
-	}
-	if err := fresh.Save(tokenPath()); err != nil {
-		return fresh, fmt.Errorf("续期成功但保存新令牌失败: %w", err)
 	}
 	return fresh, nil
 }
