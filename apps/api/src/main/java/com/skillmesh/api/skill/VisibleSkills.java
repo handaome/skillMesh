@@ -1,5 +1,7 @@
 package com.skillmesh.api.skill;
 
+import com.skillmesh.api.org.Roles;
+
 /**
  * 「当前用户可见的 Skill」条件片段。
  *
@@ -12,9 +14,14 @@ package com.skillmesh.api.skill;
  *
  * 片段里的表别名固定为 {@code s}（skills），参数名固定为 {@code :owner}。
  *
- * team 可见的 Skill，团队成员与组织成员都能看——与
+ * team 可见的 Skill：该团队成员，或该组织的 owner/admin 能看——与
  * {@link SkillService#canView} 同一口径，两处必须一起改，
  * 一处改了另一处没改，搜索与直读就对不上了。
+ * 组织里的普通成员看不到别的团队的 Skill：团队可见归团队管，
+ * 放行到组织管理员为止（他们在审核队列里能批，「能批不能看」说不通）。
+ *
+ * 组织管理员档位取 {@link Roles#ORG_ADMIN_ROLE_SQL}——原生 SQL 的片段必须是
+ * 编译期常量，集合拼不出常量表达式，那份列表只能照着词表手写一份。
  */
 public final class VisibleSkills {
 
@@ -28,7 +35,9 @@ public final class VisibleSkills {
                exists (select 1 from team_memberships m
                        where m.team_id = s.owner_team_id and m.user_id = :owner)
                or exists (select 1 from organization_memberships m
-                       where m.organization_id = s.organization_id and m.user_id = :owner))))""";
+                       where m.organization_id = s.organization_id and m.user_id = :owner
+                         and m.role in ("""
+        + Roles.ORG_ADMIN_ROLE_SQL + ")))))";
 
     private VisibleSkills() {}
 }

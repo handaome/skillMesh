@@ -161,13 +161,16 @@ public class SkillService {
      * 可见性判定（设计文档 §10 团队管理）。
      *
      * public 谁都能看；private 只有属主；organization 要组织成员；
-     * team 团队成员或组织成员都能看。
+     * team 要该团队成员，或该组织的 owner/admin。
      * 外部调用方（版本、制品、审计）都走这里，所以一处判就够。
      *
-     * team 可见为什么也放行组织成员：团队可见的内容归团队管，也归组织管，
-     * 组织成员看一眼不越权。反过来，组织 owner 建了团队、自己没有团队成员行，
-     * 却在审核队列里看得见并能批准它——「能批不能看」说不通。
-     * 放行权（审/批）另算：那是团队范围内的事，看团队角色，没有团队行才回落组织。
+     * 读与审的口径刻意不同，别混：
+     *   读/搜/装 —— 该团队成员；该组织的 owner/admin（{@link Roles#ORG_ADMIN_ROLES}）。
+     *   审/批    —— 团队角色 reviewer+，没有团队成员行才回落组织角色（{@link OrgService#roleIn}）。
+     *
+     * 团队可见的内容归团队管：组织里的普通成员看不到别的团队的 Skill。
+     * 但组织的 owner/admin 放行——他们建团队时没有团队成员行，
+     * 却在审核队列里看得见并能批准它，「能批不能看」说不通。
      */
     public boolean canView(CurrentUser user, SkillEntity entity) {
         if ("public".equals(entity.getVisibility())
@@ -178,12 +181,25 @@ public class SkillService {
             return false;
         }
         return switch (entity.getVisibility()) {
-            case "team" -> orgs.isOrgMember(entity.getOrganizationId(), user.id())
-                || (entity.getOwnerTeamId() != null
-                    && orgs.isTeamMember(entity.getOwnerTeamId(), user.id()));
+            case "team" -> (entity.getOwnerTeamId() != null
+                    && orgs.isTeamMember(entity.getOwnerTeamId(), user.id()))
+                || isOrgAdmin(entity.getOrganizationId(), user.id());
             case "organization" -> orgs.isOrgMember(entity.getOrganizationId(), user.id());
             default -> false;
         };
+    }
+
+    /**
+     * 我是不是这个组织的管理员（owner/admin）？团队可见的 Skill 对组织管理员放行。
+     *
+     * 看的是组织角色本身，不看 {@code roleIn}——那个优先取团队角色，
+     * 这里要的是「组织里我是不是管理员」这一条。
+     * 角色可能为空（不是组织成员），判之前先挡一下：
+     * {@code Set.of} 的 contains(null) 会抛 NPE。
+     */
+    private boolean isOrgAdmin(UUID organizationId, UUID userId) {
+        String role = orgs.orgRoleOf(organizationId, userId);
+        return role != null && Roles.ORG_ADMIN_ROLES.contains(role);
     }
 
     /**

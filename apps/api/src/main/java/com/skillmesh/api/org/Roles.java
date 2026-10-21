@@ -1,7 +1,9 @@
 package com.skillmesh.api.org;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 角色词表：全站只有这一份。
@@ -47,6 +49,15 @@ public final class Roles {
      */
     public static final Set<String> ORG_ADMIN_ROLES = atOrAbove(ORG_RANK, ADMIN_ROLE);
 
+    /**
+     * 组织管理员档位在原生 SQL 里的写法：{@code 'owner', 'admin'}。
+     *
+     * 原生 SQL 走 {@code @Query}，片段必须是编译期常量，集合拼不出常量表达式——
+     * 只能照着词表常量手写这一份。Java 侧仍以 {@link #ORG_ADMIN_ROLES} 为准，
+     * 静态块盯着两边不漂（词表往上加一档而这里没跟上，当场炸）。
+     */
+    public static final String ORG_ADMIN_ROLE_SQL = "'" + OWNER_ROLE + "', '" + ADMIN_ROLE + "'";
+
     /** 组织 owner 档位：改 owner 身份只有这一档能做。 */
     public static final Set<String> ORG_OWNER_ROLES = atOrAbove(ORG_RANK, OWNER_ROLE);
 
@@ -91,6 +102,18 @@ public final class Roles {
             || !ORG_ROLES.contains(DEFAULT_ROLE) || !TEAM_ROLES.contains(DEFAULT_ROLE)) {
             throw new IllegalStateException("角色档位集合与词表对不上");
         }
+        // SQL 那份是照着词表常量手写的编译期常量：词表往上加一档时它不会自动跟上，
+        // 这里盯着两边——漂了就当场炸，别等权限漏了才发现。
+        if (!sqlRoles(ORG_ADMIN_ROLE_SQL).equals(ORG_ADMIN_ROLES)) {
+            throw new IllegalStateException("组织管理员档位的 SQL 写法与词表对不上");
+        }
+    }
+
+    /** SQL 里的角色列表（{@code 'owner', 'admin'}）还原成集合。 */
+    private static Set<String> sqlRoles(String sqlList) {
+        return Arrays.stream(sqlList.split(","))
+            .map(role -> role.trim().replace("'", ""))
+            .collect(Collectors.toSet());
     }
 
     private Roles() {}

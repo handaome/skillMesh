@@ -75,8 +75,14 @@ class OrgVisibilityTest {
         assertThat(skills.canView(outsider, load(skillId))).as("加进团队后能看见").isTrue();
     }
 
+    /**
+     * 团队可见的内容归团队管：组织里的普通成员看不到别的团队的 Skill。
+     *
+     * fix6 曾把它放宽成「组织成员也能读」，那等于把「团队可见」变成「组织内可见」——
+     * 用户已拍板收窄：只有该团队成员与该组织的 owner/admin 能看。
+     */
     @Test
-    void 组织成员看得见别的团队的Skill() throws Exception {
+    void 组织普通成员看不见别的团队的Skill() throws Exception {
         UUID orgId = createOrganization("acme");
         createTeam(orgId, "platform");
         UUID otherTeam = createTeam(orgId, "payments");
@@ -86,9 +92,35 @@ class OrgVisibilityTest {
         CurrentUser orgOnly = stranger();
         orgs.addOrgMember(owner, orgId, orgOnly.id(), "member");
 
-        // 团队可见的内容归团队管，也归组织管——组织成员看一眼不越权。
         assertThat(skills.canView(orgOnly, load(skillId)))
-            .as("组织成员不是该团队成员，也看得见团队可见的 Skill").isTrue();
+            .as("组织里的普通成员不是该团队成员，看不见团队可见的 Skill").isFalse();
+        assertThatThrownBy(() -> skills.get(orgOnly, skillId))
+            .isInstanceOf(ApiException.class)
+            .satisfies(e -> assertThat(((ApiException) e).status()).isEqualTo(404));
+        assertThat(skills.search(orgOnly, "payments-runbook", null, null, false, 20, null).items())
+            .as("组织里的普通成员搜不到别的团队的 Skill").isEmpty();
+    }
+
+    /**
+     * 组织的 admin（不是该团队成员）看得见团队可见的 Skill。
+     *
+     * 他没有团队成员行，但按词表是组织管理员——能管团队、能批待审版本，
+     * 「能批不能看」说不通。
+     */
+    @Test
+    void 组织admin不是团队成员也能读团队Skill() throws Exception {
+        UUID orgId = createOrganization("acme");
+        UUID teamId = createTeam(orgId, "platform");
+        UUID skillId = createTeamSkill(orgId, teamId, "platform-runbook");
+
+        CurrentUser admin = stranger();
+        orgs.addOrgMember(owner(), orgId, admin.id(), "admin");
+
+        assertThat(orgs.teamMembers(teamId)).as("没有该团队的成员行").isEmpty();
+        assertThat(skills.canView(admin, load(skillId))).as("组织 admin 看得见").isTrue();
+        assertThat(skills.get(admin, skillId).slug()).as("直读得到").isEqualTo("platform-runbook");
+        assertThat(skills.search(admin, "platform-runbook", null, null, false, 20, null).items())
+            .as("组织 admin 搜得到").isNotEmpty();
     }
 
     /**
