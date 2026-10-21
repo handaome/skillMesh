@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
@@ -24,6 +25,9 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * 文件级比 manifest 就行，不解包；只有「被改动的文件」才从两个 zip 里
  * 各取一个 entry 算行数。口径与 CLI 的 update --dry-run 对齐。
+ *
+ * 比的是**服务端从真 zip 算出来的清单**（artifacts.manifest_json），
+ * 不是发布方在建版本请求里自填的那份——那份只是他的说法。
  */
 @Service
 public class ArtifactDiffService {
@@ -54,23 +58,24 @@ public class ArtifactDiffService {
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public ArtifactDiffResult diffAgainstLatestPublished(UUID skillId, SkillVersionEntity next) {
-        Optional<SkillVersionEntity> base = loadBase(skillId, next);
-        String nextKey = storageKeyOf(next.getArtifactId());
-        if (nextKey == null) {
+        ArtifactEntity nextArtifact = artifactOf(next.getArtifactId());
+        if (nextArtifact == null) {
+            // 版本还没上传制品：没有清单可比。
             return ArtifactDiffResult.empty();
         }
+        Optional<SkillVersionEntity> base = loadBase(skillId, next);
         if (base.isEmpty()) {
-            List<FileChange> files = ManifestDiff.compare(List.of(), next.getManifestJson());
+            List<FileChange> files = ManifestDiff.compare(List.of(), manifestOf(nextArtifact));
             return new ArtifactDiffResult("", false, files);
         }
         SkillVersionEntity baseVersion = base.get();
-        String baseKey = storageKeyOf(baseVersion.getArtifactId());
-        if (baseKey == null) {
+        ArtifactEntity baseArtifact = artifactOf(baseVersion.getArtifactId());
+        if (baseArtifact == null) {
             return new ArtifactDiffResult(baseVersion.getVersion(), false, List.of());
         }
         List<FileChange> files = withLineCounts(
-            ManifestDiff.compare(baseVersion.getManifestJson(), next.getManifestJson()),
-            baseKey, nextKey);
+            ManifestDiff.compare(manifestOf(baseArtifact), manifestOf(nextArtifact)),
+            baseArtifact.getStorageKey(), nextArtifact.getStorageKey());
         return new ArtifactDiffResult(baseVersion.getVersion(), truncated(files), files);
     }
 
@@ -98,9 +103,25 @@ public class ArtifactDiffService {
         return versions.findBySkillIdOrderByCreatedAtDesc(skillId).stream()
             .filter(version -> "published".equals(version.getStatus()))
             .filter(version -> !version.getId().equals(next.getId()))
-            .filter(version -> version.getManifestJson() != null
-                && !version.getManifestJson().isEmpty())
+            .filter(version -> {
+                ArtifactEntity artifact = artifactOf(version.getArtifactId());
+                return artifact != null && !manifestOf(artifact).isEmpty();
+            })
             .findFirst();
+    }
+
+    /** 制品的逐文件清单（服务端从真 zip 算的那份）。 */
+    private List<Map<String, Object>> manifestOf(ArtifactEntity artifact) {
+        List<Map<String, Object>> manifest = artifact.getManifestJson();
+        return manifest == null ? List.of() : manifest;
+    }
+
+    /** 制品。制品不存在返回 null。 */
+    private ArtifactEntity artifactOf(UUID artifactId) {
+        if (artifactId == null) {
+            return null;
+        }
+        return artifacts.findById(artifactId).orElse(null);
     }
 
     /** 给被改动的文件补上行数。 */
@@ -170,13 +191,5 @@ public class ArtifactDiffService {
     /** 有一个文件只报文件级，整个 diff 就算不完整。 */
     private boolean truncated(List<FileChange> files) {
         return files.stream().anyMatch(FileChange::truncated);
-    }
-
-    /** 制品的存储键。制品不存在返回 null。 */
-    private String storageKeyOf(UUID artifactId) {
-        if (artifactId == null) {
-            return null;
-        }
-        return artifacts.findById(artifactId).map(ArtifactEntity::getStorageKey).orElse(null);
     }
 }

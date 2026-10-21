@@ -180,8 +180,9 @@ class ArtifactDiffServiceTest {
     void 基线跳过清单为空的已发布版本() throws Exception {
         UUID skillId = createSkill("empty-base");
         publish(skillId, "1.0.0", Map.of("SKILL.md", "# Runbook\n"));
-        // 中间这个版本发布了但清单是空的——不能拿它当基线。
-        publish(skillId, "1.1.0", Map.of("SKILL.md", "# Other\n"), List.of());
+        // 中间这个版本发布了但包里一个文件都没有——服务端算出的清单是空的，
+        // 不能拿它当基线。
+        publishEmpty(skillId, "1.1.0");
         publish(skillId, "1.2.0", Map.of("SKILL.md", "# Runbook v2\n"));
 
         ArtifactDiffResult result = diffs.diffAgainstLatestPublished(
@@ -190,6 +191,38 @@ class ArtifactDiffServiceTest {
         assertThat(result.baseVersion()).isEqualTo("1.0.0");
         assertThat(result.files()).singleElement()
             .extracting(FileChange::kind).isEqualTo("modified");
+    }
+
+    /**
+     * 声明的清单不可信：diff 要按服务端从真 zip 算的清单比。
+     *
+     * 发布方在建版本请求里自填 manifest——那只是他的说法。1.1.0 声明「没变」，
+     * 真包里 SKILL.md 却换了内容：diff 必须报出改动（读声明的话会报「无差异」，
+     * 审核者就信了）。
+     */
+    @Test
+    void 声明的清单不可信要按真包算() throws Exception {
+        UUID skillId = createSkill("lying");
+        publish(skillId, "1.0.0", Map.of("SKILL.md", "# A\n"), manifestOf("# A\n"));
+        // 声明写「没变」（还是 A 的摘要），真包里换成了 B
+        publish(skillId, "1.1.0", Map.of("SKILL.md", "# B\n"), manifestOf("# A\n"));
+
+        ArtifactDiffResult changed = diffs.diffAgainstLatestPublished(
+            skillId, version(skillId, "1.1.0"));
+
+        assertThat(changed.baseVersion()).isEqualTo("1.0.0");
+        assertThat(changed.files()).singleElement().satisfies(change -> {
+            assertThat(change.path()).isEqualTo("SKILL.md");
+            assertThat(change.kind()).isEqualTo("modified");
+        });
+
+        // 反过来：真包没变（声明写着别的）就该报「无差异」
+        publish(skillId, "1.2.0", Map.of("SKILL.md", "# B\n"), manifestOf("# C\n"));
+
+        ArtifactDiffResult same = diffs.diffAgainstLatestPublished(
+            skillId, version(skillId, "1.2.0"));
+
+        assertThat(same.files()).isEmpty();
     }
 
     /**
@@ -278,13 +311,30 @@ class ArtifactDiffServiceTest {
         publish(skillId, version, files, manifest);
     }
 
-    /** 同上，但清单由调用方给——用来造「清单为空」的版本。 */
+    /** 同上，但清单由调用方给——用来造「声明的清单跟真包对不上」的版本。 */
     private void publish(UUID skillId, String version, Map<String, String> files,
                         List<Map<String, Object>> manifest) throws Exception {
-        byte[] zip = TestArtifacts.zipOf(files);
+        upload(skillId, version, TestArtifacts.zipOf(files), manifest, files.size());
+    }
+
+    /** 传一个空包：包里没有文件，服务端算出来的清单是空的。 */
+    private void publishEmpty(UUID skillId, String version) throws Exception {
+        upload(skillId, version, TestArtifacts.zipOf(Map.of()), List.of(), 1);
+    }
+
+    /** 造一条声明的清单项：路径 SKILL.md，摘要按给的内容算。 */
+    private List<Map<String, Object>> manifestOf(String content) throws Exception {
+        byte[] data = content.getBytes(StandardCharsets.UTF_8);
+        return List.of(Map.of("path", "SKILL.md", "sha256", TestArtifacts.sha256(data),
+            "size_bytes", (long) data.length));
+    }
+
+    /** 建版本 → 直传 → 收尾，走真实的上传链路。 */
+    private void upload(UUID skillId, String version, byte[] zip,
+                        List<Map<String, Object>> manifest, int fileCount) throws Exception {
         String body = json.writeValueAsString(Map.of(
             "version", version, "channel", "stable", "size_bytes", zip.length,
-            "sha256", TestArtifacts.sha256(zip), "file_count", files.size(),
+            "sha256", TestArtifacts.sha256(zip), "file_count", Math.max(1, fileCount),
             "manifest", manifest));
         String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)
                 .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)

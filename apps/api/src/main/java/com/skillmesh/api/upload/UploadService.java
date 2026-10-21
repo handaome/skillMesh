@@ -6,24 +6,22 @@ import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.review.ReviewService;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.artifact.ArtifactService;
+import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
-import com.skillmesh.api.scan.ArtifactScanner;
-import com.skillmesh.api.scan.ScanEntity;
-import com.skillmesh.api.scan.ScanRepository;
+import com.skillmesh.api.scan.ArtifactScanService;
 import com.skillmesh.api.scan.ScanResult;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.dto.UploadSession;
+import java.io.IOException;
 import java.io.InputStream;
 import com.skillmesh.api.artifact.ArtifactStorage;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,23 +40,21 @@ public class UploadService {
     private final SkillRepository skills;
     private final ArtifactService artifacts;
     private final ArtifactStorage storage;
-    private final ArtifactScanner scanner;
-    private final ScanRepository scans;
+    private final ArtifactScanService scanService;
     private final AuditService audit;
     private final SigningService signing;
     private final ReviewService review;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
                          SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
-                         ArtifactScanner scanner, ScanRepository scans, AuditService audit,
+                         ArtifactScanService scanService, AuditService audit,
                          SigningService signing, ReviewService review) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
         this.artifacts = artifacts;
         this.storage = storage;
-        this.scanner = scanner;
-        this.scans = scans;
+        this.scanService = scanService;
         this.audit = audit;
         this.signing = signing;
         this.review = review;
@@ -108,12 +104,15 @@ public class UploadService {
             throw e;
         }
 
+        // 逐文件清单由服务端从真 zip 算：发布方声明的那份只是他的说法，不能当准。
+        byte[] content = readArtifact(finalKey);
+        List<Map<String, Object>> manifest = ZipManifest.of(content);
         ArtifactEntity artifact = artifacts.record(promoted.sha256(), finalKey,
-            promoted.sizeBytes(), 1, List.of());
+            promoted.sizeBytes(), manifest.size(), manifest);
         signArtifact(artifact, version);
 
         version.setArtifactId(artifact.getId());
-        ScanResult scan = runScan(version, storage.get(finalKey));
+        ScanResult scan = scanService.scanAndRecord(version.getId(), content);
         // 个人与公开的版本扫描通过就发布；团队与组织可见的要等人审
         // （设计文档 §10.1 的 draft → scanning → pending_review → published）。
         boolean needsReview = review.needsReview(version.getSkillId());
@@ -182,24 +181,15 @@ public class UploadService {
     }
 
     /**
-     * 制品定版之后立刻扫一遍，结论落 skill_scans。
-     * 命中阻断规则就不发布——服务端这份才是准的，绕开 CLI 上传也一样（设计文档 §10）。
+     * 读回刚转正的制品。读不出来就没法算清单也没法扫——直接报错。
      */
-    private ScanResult runScan(SkillVersionEntity version, InputStream content) {
-        ScanResult result = scanner.scan(content);
-        OffsetDateTime completed = OffsetDateTime.now(ZoneOffset.UTC);
-        ScanEntity row = new ScanEntity();
-        row.setId(UUID.randomUUID());
-        row.setSkillVersionId(version.getId());
-        row.setScannerName(ArtifactScanner.NAME);
-        row.setScannerVersion(ArtifactScanner.VERSION);
-        row.setStatus(result.status());
-        row.setFindingsJson(toJson(result.findings()));
-        row.setSummary(result.summary());
-        row.setStartedAt(completed.minusNanos(result.durationMs() * 1_000_000L));
-        row.setCompletedAt(completed);
-        scans.save(row);
-        return result;
+    private byte[] readArtifact(String key) {
+        try (InputStream in = storage.get(key)) {
+            return in.readAllBytes();
+        } catch (IOException e) {
+            throw new ApiException(502, ErrorCodes.ARTIFACT_MISSING,
+                "读取上传内容失败：" + e.getMessage());
+        }
     }
 
     /**
@@ -214,18 +204,5 @@ public class UploadService {
         artifact.setSignature(signature);
         artifact.setSignatureKeyId(signing.keyId());
         artifacts.saveArtifact(artifact);
-    }
-
-    private List<Map<String, Object>> toJson(List<ScanResult.Finding> findings) {
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (ScanResult.Finding finding : findings) {
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("path", finding.path());
-            entry.put("line", finding.line());
-            entry.put("rule", finding.rule());
-            entry.put("detail", finding.detail());
-            out.add(entry);
-        }
-        return out;
     }
 }
