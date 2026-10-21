@@ -76,7 +76,7 @@ class OrgVisibilityTest {
     }
 
     @Test
-    void 组织成员也看不到别的团队的Skill() throws Exception {
+    void 组织成员看得见别的团队的Skill() throws Exception {
         UUID orgId = createOrganization("acme");
         createTeam(orgId, "platform");
         UUID otherTeam = createTeam(orgId, "payments");
@@ -86,8 +86,59 @@ class OrgVisibilityTest {
         CurrentUser orgOnly = stranger();
         orgs.addOrgMember(owner, orgId, orgOnly.id(), "member");
 
+        // 团队可见的内容归团队管，也归组织管——组织成员看一眼不越权。
         assertThat(skills.canView(orgOnly, load(skillId)))
-            .as("组织成员不是该团队成员，仍然看不见").isFalse();
+            .as("组织成员不是该团队成员，也看得见团队可见的 Skill").isTrue();
+    }
+
+    /**
+     * 组织 owner 建了团队、自己没有该团队的成员行（建团队不写成员行）。
+     *
+     * 他在审核队列里能看见并批准团队 Skill（放行权有组织回落），
+     * 却读不到、搜不到、装不了——「能批不能看」说不通。
+     */
+    @Test
+    void 组织owner没有团队成员行也能读团队Skill() throws Exception {
+        UUID orgId = createOrganization("acme");
+        UUID teamId = createTeam(orgId, "platform");
+
+        // 团队 Skill 由别人建：这样「属主自己可见」那条规则不掺和，
+        // 测的确实是组织回落。
+        CurrentUser publisher = stranger();
+        orgs.addOrgMember(owner(), orgId, publisher.id(), "publisher");
+        UUID skillId = skills.create(publisher, new CreateSkillRequest(
+            "platform-runbook", "Platform Runbook", "", "team", orgId, teamId,
+            List.of(), Map.of(), null)).id();
+
+        // 前提：owner 只是组织成员，没有该团队的成员行
+        assertThat(orgs.teamMembers(teamId)).as("建团队不写成员行").isEmpty();
+
+        mockMvc.perform(get("/api/v1/skills/{id}", skillId).header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.slug").value("platform-runbook"));
+
+        String body = mockMvc.perform(get("/api/v1/skills").param("q", "platform-runbook")
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        assertThat(json.readTree(body).path("items").toString())
+            .as("组织 owner 在搜索里也搜得到").contains("platform-runbook");
+    }
+
+    /**
+     * 反向：既不是团队成员也不是组织成员的人，团队 Skill 照旧看不见、搜不到。
+     * 别把口子开大。
+     */
+    @Test
+    void 外人既看不见也搜不到团队Skill() throws Exception {
+        UUID orgId = createOrganization("acme");
+        UUID teamId = createTeam(orgId, "platform");
+        UUID skillId = createTeamSkill(orgId, teamId, "platform-runbook");
+
+        CurrentUser outsider = stranger();
+        assertThat(skills.canView(outsider, load(skillId))).as("外人看不见").isFalse();
+        assertThat(skills.search(outsider, "platform-runbook", null, null, false, 20, null)
+            .items()).as("外人搜不到").isEmpty();
     }
 
     @Test

@@ -11,6 +11,10 @@ package com.skillmesh.api.skill;
  * 子查询让数据库自己判，SQL 也更直白。
  *
  * 片段里的表别名固定为 {@code s}（skills），参数名固定为 {@code :owner}。
+ *
+ * team 可见的 Skill，团队成员与组织成员都能看——与
+ * {@link SkillService#canView} 同一口径，两处必须一起改，
+ * 一处改了另一处没改，搜索与直读就对不上了。
  */
 public final class VisibleSkills {
 
@@ -20,9 +24,11 @@ public final class VisibleSkills {
          or (s.visibility = 'organization' and exists (
                select 1 from organization_memberships m
                where m.organization_id = s.organization_id and m.user_id = :owner))
-         or (s.visibility = 'team' and exists (
-               select 1 from team_memberships m
-               where m.team_id = s.owner_team_id and m.user_id = :owner)))""";
+         or (s.visibility = 'team' and (
+               exists (select 1 from team_memberships m
+                       where m.team_id = s.owner_team_id and m.user_id = :owner)
+               or exists (select 1 from organization_memberships m
+                       where m.organization_id = s.organization_id and m.user_id = :owner))))""";
 
     private VisibleSkills() {}
 }

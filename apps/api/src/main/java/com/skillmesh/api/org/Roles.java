@@ -20,16 +20,19 @@ public final class Roles {
     /** 管理员档。 */
     public static final String ADMIN_ROLE = "admin";
 
+    /** 发布权门槛档：publisher 及以上才能往组织/团队发布。 */
+    public static final String PUBLISHER_ROLE = "publisher";
+
     /** 默认档位：邀请与「加成员」接口没给角色时用它。 */
     public static final String DEFAULT_ROLE = "member";
 
     /** 组织角色的等级顺序，从高到低。 */
     public static final List<String> ORG_RANK = List.of(
-        OWNER_ROLE, ADMIN_ROLE, "publisher", "reviewer", DEFAULT_ROLE, "viewer");
+        OWNER_ROLE, ADMIN_ROLE, PUBLISHER_ROLE, "reviewer", DEFAULT_ROLE, "viewer");
 
     /** 团队角色的等级顺序，从高到低——团队里没有 owner 这一档。 */
     public static final List<String> TEAM_RANK = List.of(
-        ADMIN_ROLE, "publisher", "reviewer", DEFAULT_ROLE, "viewer");
+        ADMIN_ROLE, PUBLISHER_ROLE, "reviewer", DEFAULT_ROLE, "viewer");
 
     /** 成员行能放的组织角色全集（含 owner）。 */
     public static final Set<String> ORG_ROLES = Set.copyOf(ORG_RANK);

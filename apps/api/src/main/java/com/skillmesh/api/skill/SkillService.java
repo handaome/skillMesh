@@ -3,6 +3,7 @@ package com.skillmesh.api.skill;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillSourceInput;
@@ -159,8 +160,14 @@ public class SkillService {
     /**
      * 可见性判定（设计文档 §10 团队管理）。
      *
-     * public 谁都能看；private 只有属主；team 要团队成员；organization 要组织成员。
+     * public 谁都能看；private 只有属主；organization 要组织成员；
+     * team 团队成员或组织成员都能看。
      * 外部调用方（版本、制品、审计）都走这里，所以一处判就够。
+     *
+     * team 可见为什么也放行组织成员：团队可见的内容归团队管，也归组织管，
+     * 组织成员看一眼不越权。反过来，组织 owner 建了团队、自己没有团队成员行，
+     * 却在审核队列里看得见并能批准它——「能批不能看」说不通。
+     * 放行权（审/批）另算：那是团队范围内的事，看团队角色，没有团队行才回落组织。
      */
     public boolean canView(CurrentUser user, SkillEntity entity) {
         if ("public".equals(entity.getVisibility())
@@ -171,8 +178,9 @@ public class SkillService {
             return false;
         }
         return switch (entity.getVisibility()) {
-            case "team" -> entity.getOwnerTeamId() != null
-                && orgs.isTeamMember(entity.getOwnerTeamId(), user.id());
+            case "team" -> orgs.isOrgMember(entity.getOrganizationId(), user.id())
+                || (entity.getOwnerTeamId() != null
+                    && orgs.isTeamMember(entity.getOwnerTeamId(), user.id()));
             case "organization" -> orgs.isOrgMember(entity.getOrganizationId(), user.id());
             default -> false;
         };
@@ -233,7 +241,7 @@ public class SkillService {
      */
     private void requireOrgPublisher(CurrentUser user, UUID organizationId) {
         String role = orgs.roleIn(organizationId, null, user.id());
-        if (!OrgService.roleAtLeast(role, "publisher")) {
+        if (!OrgService.roleAtLeast(role, Roles.PUBLISHER_ROLE)) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN,
                 "在该组织里需要 publisher 及以上角色才能发布");
         }

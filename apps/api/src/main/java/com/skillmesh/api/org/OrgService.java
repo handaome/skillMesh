@@ -63,7 +63,7 @@ public class OrgService {
 
         MembershipEntities.OrgMembership owner = new MembershipEntities.OrgMembership();
         owner.setId(new MembershipEntities.OrgKey(org.getId(), user.id()));
-        owner.setRole("owner");
+        owner.setRole(Roles.OWNER_ROLE);
         owner.setJoinedAt(now);
         orgMembers.save(owner);
 
