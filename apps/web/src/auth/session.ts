@@ -10,6 +10,8 @@ export interface Me {
   display_name: string
   email: string | null
   status: string
+  /** OIDC 的 sub——邀请要绑到某个人时填的就是它。 */
+  subject: string
 }
 
 export interface OrgMembership {
