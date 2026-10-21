@@ -186,3 +186,58 @@ dev-user2 当时团队角色是 member、组织角色是 publisher，两者结�
 8. 用 dev-user2 打开一个过期邀请链接 → 页面提示「这份邀请已经过期。」（`data-test="invalid"`）。
 9. （可选，第 15 步的浏览器等价）用 dev-user2 在 `http://127.0.0.1:5174/team` 把自己的**组织角色**降成 member，
    然后让 dev-user2 试着往团队里发一个 Skill → 应当被拒，页面报「在该组织里需要 publisher 及以上角色才能发布」。
+
+---
+
+## 追加验收：合并后的最后一轮（2026-10-21 晚）
+
+**合并**：`worktree-v2-team-console` fast-forward 合并到 `main`（`2a7659b` → `10aac95`），合并后两支同点。
+本轮只验收**合并进来的最后两个提交**：`72d6395`（服务端：组织内 slug 唯一预检 + 上传收尾回传 `version_status`）、
+`10aac95`（CLI：发布结果看版本状态、归属比对、`SLUG_TAKEN` 翻译）。
+
+### 环境（与上一轮不同的地方）
+
+| 组件 | 本轮 | 说明 |
+| --- | --- | --- |
+| 数据库 | **开发库 `skill_mesh`** | 远程 PG 上 `CREATE DATABASE` 被安全策略拦了，只能用开发库。上一轮用隔离库是因为「开发库里已经有历史数据…会干扰」；本轮改用唯一 slug（`acc2-*`）避开干扰 |
+| API | 本轮新起（worktree 代码） | 上一轮留下的进程已不在；`GET /actuator/health` → 200 UP |
+| MinIO / Keycloak / 前端 | 上一轮就在跑，未重启 | 9100 / 8180 / 5174 |
+| CLI | 本轮用 amd64 Go 重建 | `GOROOT=D:/tmp/goamd64/go`（本机默认 Go 是 32 位） |
+
+### 7 个用例
+
+| # | 操作 | 期望 | 实际 | 结论 |
+| --- | --- | --- | --- | --- |
+| 1 | 个人 Skill 发布（`acc2-personal`） | 「已发布」 | `已发布 acc2-personal -> 5ac359f7…（1.0.0，247 字节）` | 通过（`version_status=published`） |
+| 2 | 发到 acme/platform（`acc2-demo`） | 「已提交审核」 | `已提交审核 acc2-demo -> 2fe8eff6…（1.0.0，257 字节）` | 通过（`version_status=pending_review`） |
+| 3 | 发 v2，带**一样**的 `--org/--team` | 放行 | `已提交审核 acc2-demo -> 2fe8eff6…（1.0.1，276 字节）` | 通过（**旧代码在这里会报「--org/--team 只在新建时生效」**） |
+| 4 | 发 v2 到另一个组织（`acc2-org2`） | 报错说清归属 | 「Skill "acc2-demo" 已存在，归属改不了：它已登记在 组织 UUID 的团队 UUID，你要发到 组织 acc2-org2。去掉 --org/--team 会沿用它已登记的归属」 | 通过，但**已登记那侧显示的是 UUID**（已修，见下） |
+| 5 | 不带 scope 发 v2 | 沿用已登记的归属，放行 | `已提交审核 acc2-demo -> 2fe8eff6…（1.0.2，276 字节）` | 通过 |
+| 6 | 上传含 AWS key 的包 | 版本 `rejected`，complete 回 `version_status` | `complete: 202 {"session_status":"completed","version_status":"rejected"}` | 通过 |
+| 7 | 同组织内再建同名 Skill | 409 `SLUG_TAKEN` | `409 {"code":"SLUG_TAKEN","detail":"slug 在该组织下已被占用: acc2-dup"}` | 通过 |
+
+**用例 6 只能从 API 走**：CLI 本地扫描与服务端的密钥规则完全一致（同样 6 条 BLOCKING 规则），
+含密钥的包在本地就被拦，走不到服务端那一步。CLI 侧对 `version_status=rejected` 的判定由
+`publish_test.go` 的「版本被服务端拒了要报错」覆盖（走 httptest 假服务端）。
+
+### 本轮发现并修掉的问题
+
+用例 4 的报错里，**同一句话两种口径**：目标那侧是 slug（「你要发到 组织 acc2-org2」），
+已登记那侧是 UUID（「它已登记在 组织 9d7b67e9… 的团队 35c57d21…」）。用户看到 UUID 会懵。
+
+修法（CLI 侧，不动服务端）：服务端 `toResponse` 没有 org/team 的 join，给它加 slug 会在列表场景引入 N+1；
+改成 CLI 侧反查——`publishScope` 带上已解析的团队列表，`ownerScope()` 把已登记的 team id 翻成 slug，
+同一组织的组织 slug 直接复用 scope 里那个。服务端返回的 slug 拼不出时仍退回 id（我不了解那个组织）。
+
+单测：`TestCheckExistingSkill比对归属` 补一条——同一组织不同团队时，错误里要同时出现
+「组织 acme」「团队 core」「团队 platform」三个 slug。
+
+**这一路只有单测覆盖**：真实环境要验它得先在 acme 下再建一个团队（那里只有 platform），
+建团队被安全策略拦了。同组织不同**团队**的报错文案没在真实服务端跑过；
+用例 4（不同组织）验的是另一条分支，那边组织 slug 本来就查不到、显示 UUID 是对的。
+
+### 遗留
+
+- **浏览器人工验证清单（上一轮列的 9 步）仍未实测**——浏览器路径始终只做到 API 等价。
+- **验收数据留在开发库**：`acc2-personal` / `acc2-demo` / `acc2-dup` 三个 Skill、组织 `acc2-org2`、
+  团队 `core`。服务端没有删 Skill / 组织 / 团队的端点，要清只能直接删库，本轮没清。
