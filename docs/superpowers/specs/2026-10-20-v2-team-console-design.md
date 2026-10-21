@@ -407,6 +407,8 @@ Keycloak realm 需要**第二个账号**。在 `infra/keycloak/realm-skillmesh.j
 | 审核队列不排除「自己提交的版本」 | 提交人自己会在队列里看到自己发的版本，但点「通过」会被服务端 403（不能审自己发的版本）。前端拿不到提交人的 id（`submitted_by` 只是显示名），没法预先禁用按钮。 |
 | 审计仍只在 Skill 维度 | 全表扫描已修（`GET /audit-events` 改成一条 join 查询，可见性条件与搜索共用 `VisibleSkills`），但**审计台页面**仍不做。 |
 | 治理类审计事件查不出来 | 本分支新增的 `invitation.*` / `organization.*` / `team.*` / `*.membership.*` 事件写进了 `audit_events`，但两个查询端点（`GET /api/v1/skills/{id}/audit` 与 `GET /api/v1/audit-events`）都按 `target_type='skill'` 过滤，**一条也查不出来**。要查治理流水得给端点加按 `target_type` 分流的分支——本轮不做。另外 `audit_events.request_id` 从来没被写过，恒为 null。 |
+| 制品签名仍覆盖**发布方声明的清单** | 审核 diff 已改用服务端从真 zip 算的清单（不信自填），但**签名与 `content_digest` 仍用 `skill_versions.manifest_json`**（发布方声明的那份）。发布方声明与真包不符时：审核面板说真话，CLI 装的时候会对一遍本地算出的摘要与服务端的 `content_digest`，不符就拒装（`verify.go`、`report.go` 的「装下来的内容和清单摘要对不上」）——**安全上不漏，只是体验割裂**。改它要连带改签名与 CLI 验签，牵扯面大，本轮不做。 |
+| 审核队列的 `status` 参数无白名单 | `GET /api/v1/reviews?status=published` 会列出已发布版本。**不是权限洞**（同一套可见性规则仍在），但端点叫「审核队列」却能列出队列外的行，语义不对。 |
 | `install` 收 Skill ID 而非 slug | v1 的实现就是这样（`install <skill-id>`），设计文档 §7.4 的命令表写的是 slug。`skillmesh search` 输出的最后一列就是完整 ID，所以闭环走得通；让 install 同时吃 slug 是 v1 的可用性缺口，不在 v2 范围。 |
 | 发布权看**组织角色**、审核放行权看**团队角色** | 两层角色各管一件事（§5.2、§5.3）。发布与提交审核判组织角色——接受邀请会写一行 `team_role=member`，用团队角色判会把组织角色永久遮住。审核放行与队列可见性判团队角色（没有团队成员行才回落到组织角色）——审核是团队范围内的事。所以被邀请进来的人默认组织 `member`、团队 `member`：要发布得把**组织角色**提到 publisher，要审别人的东西得把**团队角色**提到 reviewer。控制台两边都能改（选中团队改团队角色，不选团队改组织角色）。 |
 | 多设备冲突可视化 | 仍只在 CLI 侧处理。 |
