@@ -235,6 +235,33 @@ class VersionFlowTest {
             .as("组织角色够就能建版本").isNotNull();
     }
 
+    /**
+     * 公开 Skill 的发版权也锁属主。
+     *
+     * public 谁都看得见，若发版也放开发版，任何登录用户都能往别人的公开 Skill
+     * 上塞一版并顶掉 latest_version——而改名字（PATCH）与撤回都锁属主，只有发版不锁。
+     */
+    @Test
+    void 公开Skill别人发版本被拒() throws Exception {
+        UUID skillId = createSkillWithVisibility("public-demo", "public");
+        CurrentUser stranger =
+            new CurrentUser(UUID.randomUUID(), "stranger", "Stranger", "s@example.com");
+
+        ApiException err = catchThrowableOfType(
+            () -> versions.create(stranger, skillId, versionRequest("1.0.0")),
+            ApiException.class);
+        assertThat(err).as("公开 Skill 只有属主能发版").isNotNull();
+        assertThat(err.status()).isEqualTo(403);
+        assertThat(err.code()).isEqualTo("FORBIDDEN");
+    }
+
+    /** 公开 Skill 的属主发新版本照旧。 */
+    @Test
+    void 公开Skill属主发版本不受影响() throws Exception {
+        UUID skillId = createSkillWithVisibility("public-owner", "public");
+        assertThat(versions.create(owner(), skillId, versionRequest("1.0.0")).versionId())
+            .as("公开 Skill 属主发新版本").isNotNull();
+    }
     /** 个人 Skill 属主自己发新版本不受影响——v1 的既有行为别误伤。 */
     @Test
     void 个人Skill属主建新版本不受影响() throws Exception {
@@ -278,6 +305,16 @@ class VersionFlowTest {
         return UUID.fromString(json.readTree(resp).path("id").asText());
     }
 
+    /** 按可见性建一个 Skill（owner 建）。 */
+    private UUID createSkillWithVisibility(String slug, String visibility) throws Exception {
+        String resp = mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("slug", slug, "name", slug,
+                    "description", "", "visibility", visibility))))
+            .andExpect(status().isCreated())
+            .andReturn().getResponse().getContentAsString();
+        return UUID.fromString(json.readTree(resp).path("id").asText());
+    }
     /** 令牌用户（测试里唯一的真实用户），组织里是 owner。 */
     private CurrentUser owner() throws Exception {
         String body = mockMvc.perform(get("/api/v1/me").header("Authorization", auth))

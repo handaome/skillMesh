@@ -1,7 +1,10 @@
 package com.skillmesh.api.audit;
 
 import com.skillmesh.api.audit.dto.ReportAuditEventRequest;
+import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.skill.SkillRepository;
+import com.skillmesh.api.skill.SkillService;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.Map;
@@ -33,10 +36,15 @@ public class AuditReportController {
 
     private final AuditService audit;
     private final CurrentUserService currentUserService;
+    private final SkillService skills;
+    private final SkillRepository skillRepository;
 
-    public AuditReportController(AuditService audit, CurrentUserService currentUserService) {
+    public AuditReportController(AuditService audit, CurrentUserService currentUserService,
+            SkillService skills, SkillRepository skillRepository) {
         this.audit = audit;
         this.currentUserService = currentUserService;
+        this.skills = skills;
+        this.skillRepository = skillRepository;
     }
 
     @PostMapping("/events")
@@ -48,10 +56,39 @@ public class AuditReportController {
                 com.skillmesh.api.common.ErrorCodes.VALIDATION_FAILED,
                 "客户端不能上报这个动作：" + req.action() + "（允许：" + String.join(", ", ALLOWED) + "）");
         }
-        audit.record(currentUserService.current(jwt), req.action(),
-            req.target_type() == null ? "skill" : req.target_type(), req.target_id(),
+        var user = currentUserService.current(jwt);
+        String targetType = req.target_type() == null ? "skill" : req.target_type();
+        String targetId = req.target_id();
+        // target 是客户端自报的：得先确认上报者看得见这个 Skill，
+        // 否则任何登录用户都能往别人的 Skill 流水里塞「安装完成」这类条目，
+        // 审计台分不出真假。同仓库别的写路径（改 Skill、看制品）都要过可见性。
+        if ("skill".equals(targetType)) {
+            requireVisibleSkill(user, targetId);
+        }
+        audit.record(user, req.action(), targetType, targetId,
             req.outcome() == null ? "success" : req.outcome(), req.details());
         return ResponseEntity.created(URI.create("/api/v1/audit/events"))
             .body(Map.of("accepted", true, "action", req.action()));
+    }
+
+    /** 上报者看得见这个 Skill 才让他往它的流水里写东西。 */
+    private void requireVisibleSkill(CurrentUser user, String targetId) {
+        if (targetId == null) {
+            throw new com.skillmesh.api.common.ApiException(400,
+                com.skillmesh.api.common.ErrorCodes.VALIDATION_FAILED, "缺少 target_id");
+        }
+        UUID skillId;
+        try {
+            skillId = UUID.fromString(targetId);
+        } catch (IllegalArgumentException e) {
+            throw new com.skillmesh.api.common.ApiException(400,
+                com.skillmesh.api.common.ErrorCodes.VALIDATION_FAILED,
+                "target_id 不是合法的 Skill id");
+        }
+        var skill = skillRepository.findById(skillId).orElse(null);
+        if (skill == null || !skills.canView(user, skill)) {
+            throw new com.skillmesh.api.common.ApiException(403,
+                com.skillmesh.api.common.ErrorCodes.FORBIDDEN, "无权给这个 Skill 上报审计事件");
+        }
     }
 }

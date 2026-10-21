@@ -2,6 +2,8 @@ package com.skillmesh.api.audit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -98,6 +101,40 @@ class AuditVisibilityTest {
         assertThat(audit.recentVisible(owner, null, 200)).isEmpty();
     }
 
+    /**
+     * 客户端上报审计事件时，target 得是上报者看得见的 Skill。
+     *
+     * 原来 target 完全由客户端给：任何登录用户都能往别人的 Skill 流水里塞
+     * 「安装完成」这类条目，details 内容也由上报者指定，审计台分不出真假。
+     */
+    @Test
+    void 上报审计事件不能指向看不见的Skill() throws Exception {
+        UUID skillId = skills.create(stranger(), new CreateSkillRequest("secret", "Secret", "",
+            "private", null, null, List.of(), Map.of(), null)).id();
+
+        mockMvc.perform(post("/api/v1/audit/events")
+                .header("Authorization", "Bearer " + tokens.accessToken())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "action", "install.completed", "target_type", "skill",
+                    "target_id", skillId.toString()))))
+            .andExpect(status().isForbidden());
+    }
+
+    /** 看得见的照常能报。 */
+    @Test
+    void 上报审计事件可以指向自己看得见的Skill() throws Exception {
+        UUID skillId = skills.create(owner, new CreateSkillRequest("mine", "Mine", "",
+            "private", null, null, List.of(), Map.of(), null)).id();
+
+        mockMvc.perform(post("/api/v1/audit/events")
+                .header("Authorization", "Bearer " + tokens.accessToken())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "action", "install.completed", "target_type", "skill",
+                    "target_id", skillId.toString()))))
+            .andExpect(status().isCreated());
+    }
     private CurrentUser currentUser() throws Exception {
         String body = mockMvc.perform(get("/api/v1/me")
                 .header("Authorization", "Bearer " + tokens.accessToken()))

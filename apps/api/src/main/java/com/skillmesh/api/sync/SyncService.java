@@ -156,8 +156,12 @@ public class SyncService {
                 continue;
             }
             // 版本行上的 manifest 是内容清单，与 CLI 同口径。
+            // 清单为空的版本要跳过、继续往下找：更早的版本可能才有清单
+            // （V2 迁移把写成 {} 的行统一成了 []）。原来遇到第一个空的就返回 null，
+            // 而 cloudRevision / loadBase / CLI 的 cloudDigest 都是跳过继续找——
+            // 同一个 Skill，服务端一处说「云端有内容」、另一处说「云端没内容」。
             if (version.getManifestJson() == null || version.getManifestJson().isEmpty()) {
-                return null;
+                continue;
             }
             return ContentDigest.of(version.getManifestJson());
         }

@@ -99,17 +99,27 @@ func runPkceFlow(ctx context.Context, issuer, clientID string) (auth.Tokens, err
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			query := r.URL.Query()
 			if query.Get("state") != state {
+				// 不是我们发起的那次回调：回个 400 就完了，别把真正的登录顶掉。
+				// 浏览器渲染完回调页会自动请求 /favicon.ico（同样没有 state），
+				// 以前这里往 done 里塞错误，用户看到的是一次毫无线索的登录失败。
 				http.Error(w, "state 不匹配", http.StatusBadRequest)
-				done <- callbackResult{err: fmt.Errorf("state 不匹配，可能是伪造的回调")}
 				return
 			}
 			if desc := query.Get("error"); desc != "" {
 				http.Error(w, desc, http.StatusBadRequest)
-				done <- callbackResult{err: fmt.Errorf("授权失败: %s", desc)}
+				select {
+				case done <- callbackResult{err: fmt.Errorf("授权失败: %s", desc)}:
+				default:
+				}
 				return
 			}
-			fmt.Fprintln(w, "登录完成，可以关闭本窗口。")
-			done <- callbackResult{code: query.Get("code")}
+			fmt.Fprintln(w, "登录完成，可以关闭这个窗口。")
+			// 非阻塞发送：真来了第二个回调（比如浏览器重试）时，
+			// 阻塞在这个发送上的 handler 会让 server.Shutdown 永远等下去。
+			select {
+			case done <- callbackResult{code: query.Get("code")}:
+			default:
+			}
 		}),
 	}
 	go server.Serve(listener)

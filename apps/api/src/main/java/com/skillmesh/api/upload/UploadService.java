@@ -168,17 +168,28 @@ public class UploadService {
         session.setStatus("verifying");
         uploads.save(session);
         try {
-            int size = storage.get(session.getTemporaryStorageKey()).readAllBytes().length;
+            byte[] data = storage.get(session.getTemporaryStorageKey()).readAllBytes();
+            int size = data.length;
             if (session.getExpectedSizeBytes() > 0 && size != session.getExpectedSizeBytes()) {
                 throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,
                     "文件大小与声明不一致：声明 " + session.getExpectedSizeBytes()
                         + "，实际 " + size);
             }
+            // 摘要也得对：整包上传那条路会重算并比对（ArtifactService.promote），
+            // 这里只比字节数的话，传输损坏或客户端算错都能蒙过去——
+            // 而响应里的 verified_sha256 回显的是声明值，从没被验证过。
+            String actual = ArtifactService.sha256(data);
+            if (session.getExpectedSha256() != null && !session.getExpectedSha256().isBlank()
+                && !actual.equals(session.getExpectedSha256())) {
+                throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,
+                    "文件摘要与声明不一致：声明 " + session.getExpectedSha256()
+                        + "，实际 " + actual);
+            }
             session.setStatus("completed");
             session.setVerifiedAt(now);
             uploads.save(session);
             return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
-                session.getExpiresAt(), session.getExpectedSha256(), session.getRelativePath(), null);
+                session.getExpiresAt(), actual, session.getRelativePath(), null);
         } catch (ApiException e) {
             session.setStatus("failed");
             session.setErrorCode(e.code());

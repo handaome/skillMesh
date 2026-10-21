@@ -275,14 +275,21 @@ public class SkillService {
      *
      * 建 Skill 时按可见性判过一次发布权，但发新版本是另一次发布动作——
      * 只判可见性的话，团队的普通成员也能往团队的待审队列里塞一版内容。
-     * private/public 不受影响：个人 Skill 属主自己发新版本是既有行为。
+     *
+     * private 与 public：只有属主能发。private 的可见性本来就要求属主；
+     * public 谁都看得见，若也放开发版，任何登录用户都能往别人的公开 Skill 上
+     * 塞一版并顶掉 latest_version——而改名字（PATCH）与撤回都锁属主，
+     * 只有发版不锁，契约自相矛盾。
      */
     public void requirePublishRight(CurrentUser user, SkillEntity skill) {
-        if (!"team".equals(skill.getVisibility())
-            && !"organization".equals(skill.getVisibility())) {
+        if ("team".equals(skill.getVisibility())
+            || "organization".equals(skill.getVisibility())) {
+            requireOrgPublisher(user, skill.getOrganizationId());
             return;
         }
-        requireOrgPublisher(user, skill.getOrganizationId());
+        if (!skill.getOwnerUserId().equals(user.id())) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能发新版本");
+        }
     }
 
     private static String normalize(String q) {
