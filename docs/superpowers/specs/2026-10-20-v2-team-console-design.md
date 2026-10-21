@@ -1,6 +1,6 @@
 # SkillMesh v2：团队控制台（最小治理闭环）
 
-> 日期：2026-10-20 ｜ 状态：待实现 ｜ 上游：[设计文档](../../设计文档.md) V1.0 §10 §15、[v1.1 需求](2026-10-19-mvp-v1-1-requirements.md)、[实现对照表](2026-10-19-design-doc-coverage.md)
+> 日期：2026-10-20 ｜ 状态：已实现（验收记录见 [闭环验收清单](../plans/2026-10-20-v2-team-console-checklist.md)） ｜ 上游：[设计文档](../../设计文档.md) V1.0 §10 §15、[v1.1 需求](2026-10-19-mvp-v1-1-requirements.md)、[实现对照表](2026-10-19-design-doc-coverage.md)
 
 ## 1. 这一版要解决的
 
@@ -64,6 +64,30 @@ CREATE TABLE org_invitations (
 );
 CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status);
 ```
+
+> V3 里的 `org_role` CHECK 抄的是**组织角色全集**（含 `owner`），不是**邀请可授角色集**——
+> 与下面「`owner` 不能通过邀请拿到」矛盾。V5 把这个约束收紧了（见下）。
+
+之后两条迁移（同样两份文件逐字相同）：
+
+**V4**（`V4__invitation_list_index.sql`）把邀请列表的索引改成与查询对上：
+唯一按组织查邀请的查询是 `findByOrganizationIdOrderByCreatedAtDesc`——只按 `organization_id` 过滤、
+按 `created_at DESC` 排序，**从不过滤 `status`**。所以索引改成 `(organization_id, created_at DESC)`：
+第二列 `status` 对那条查询没有用处，而排序键 `created_at` 原本也没被索引覆盖。
+
+**V5**（`V5__invitation_org_role_check.sql`）把 `org_role` 的 CHECK 收紧到**邀请能授**的那几档：
+
+```sql
+DELETE FROM org_invitations WHERE org_role = 'owner';
+
+ALTER TABLE org_invitations DROP CONSTRAINT org_invitations_org_role_check;
+ALTER TABLE org_invitations ADD CONSTRAINT org_invitations_org_role_check
+    CHECK (org_role IN ('admin', 'publisher', 'reviewer', 'member', 'viewer'));
+```
+
+应用层本来就有三道闸（DTO `@Pattern`、服务层 `Roles.INVITABLE_ORG_ROLES`、接受时
+`requireOwnerToGrantOwner`），所以这条不是提权洞——是**让数据库也承载这条不变量**：
+一条本该永远不可能存在的邀请不该能静悄悄躺在表里。
 
 字段说明：
 
