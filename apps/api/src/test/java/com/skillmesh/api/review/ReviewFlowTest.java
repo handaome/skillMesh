@@ -276,6 +276,36 @@ class ReviewFlowTest {
             .as("重复过审不该把版本放出去").isEqualTo("pending_review");
     }
 
+    /**
+     * 过审旧版本不能把 latest_version 顶回去。
+     *
+     * 先批 v1.1.0 再批 v1.0.1：latest 应当还是 v1.1.0，
+     * 展示层的「最新版本」不该变成旧的一版。
+     */
+    @Test
+    void 过审旧版本不会把latest顶回去() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        publish(skillId, "1.0.1");
+        publish(skillId, "1.1.0");
+
+        CurrentUser reviewer = userWithRole(orgId, teamId, "reviewer");
+        reviews.approve(reviewer, skillId, "1.1.0", "先批新的");
+        reviews.approve(reviewer, skillId, "1.0.1", "再批旧的");
+
+        assertThat(latestVersion(skillId)).isEqualTo("1.1.0");
+    }
+
+    private String latestVersion(UUID skillId) throws Exception {
+        String body = mockMvc.perform(get("/api/v1/skills/{id}", skillId)
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        return json.readTree(body).path("latest_version").asText();
+    }
+
     private String versionStatus(UUID skillId, String version) throws Exception {
         String body = mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
                 .header("Authorization", auth))

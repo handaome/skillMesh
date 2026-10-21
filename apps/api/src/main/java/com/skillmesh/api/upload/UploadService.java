@@ -16,6 +16,7 @@ import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionOrder;
 import com.skillmesh.api.version.dto.UploadSession;
 import java.io.IOException;
 import java.io.InputStream;
@@ -124,11 +125,18 @@ public class UploadService {
             version.setPublishedBy(user.id());
             version.setPublishedAt(now);
         }
+        if ("pending_review".equals(version.getStatus())) {
+            // 队列里的 submitted_at 是进队列这一刻，不是建版本那一刻。
+            version.setSubmittedAt(now);
+        }
         versions.save(version);
 
         if ("published".equals(version.getStatus())) {
             skills.findById(version.getSkillId()).ifPresent(skill -> {
-                skill.setLatestVersion(version.getVersion());
+                // latest_version 取版本号较大者：发一版旧的不能把 latest 顶回去。
+                if (VersionOrder.isGreater(version.getVersion(), skill.getLatestVersion())) {
+                    skill.setLatestVersion(version.getVersion());
+                }
                 skill.setUpdatedAt(now);
                 skills.save(skill);
             });

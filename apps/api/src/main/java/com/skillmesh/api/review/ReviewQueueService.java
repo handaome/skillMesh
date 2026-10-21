@@ -20,6 +20,7 @@ import com.skillmesh.api.skill.SourceEntity;
 import com.skillmesh.api.skill.SourceRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -134,10 +135,21 @@ public class ReviewQueueService {
             version.getVersion(),
             version.getChannel(),
             displayName(version.getCreatedBy()),
-            version.getCreatedAt() == null ? null : version.getCreatedAt().toString(),
+            submittedAt(version),
             scanSummary(version),
             sourceSummary(version),
             version.getStatus());
+    }
+
+    /**
+     * 队列里的送审时间——进待审队列的那一刻，不是建版本的那一刻
+     * （建版本与上传制品可能隔半天，队列要显示的是进队列的时间）。
+     * 老数据没有这个时间，退回建版本时间。
+     */
+    private String submittedAt(SkillVersionEntity version) {
+        OffsetDateTime at = version.getSubmittedAt() != null
+            ? version.getSubmittedAt() : version.getCreatedAt();
+        return at == null ? null : at.toString();
     }
 
     private ReviewScanSummary scanSummary(SkillVersionEntity version) {

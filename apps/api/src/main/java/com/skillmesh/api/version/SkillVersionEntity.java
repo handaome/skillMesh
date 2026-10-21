@@ -55,6 +55,10 @@ public class SkillVersionEntity {
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
+    /** 真正进待审队列的时间——建版本的时间不是它。 */
+    @Column(name = "submitted_at")
+    private OffsetDateTime submittedAt;
+
     @Column(name = "published_at")
     private OffsetDateTime publishedAt;
 
@@ -166,6 +170,14 @@ public class SkillVersionEntity {
 
     public void setCreatedAt(OffsetDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public OffsetDateTime getSubmittedAt() {
+        return submittedAt;
+    }
+
+    public void setSubmittedAt(OffsetDateTime submittedAt) {
+        this.submittedAt = submittedAt;
     }
 
     public OffsetDateTime getPublishedAt() {

@@ -1,6 +1,7 @@
 package com.skillmesh.api.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -8,8 +9,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
+import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.device.DeviceService;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
+import com.skillmesh.api.sync.dto.SyncChangesetRequest;
+import com.skillmesh.api.sync.dto.SyncChangesetResponse;
+import com.skillmesh.api.upload.UploadService;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -24,6 +30,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -42,6 +49,11 @@ class SyncUploadFlowTest {
     @Autowired private DatabaseCleaner cleaner;
     @Autowired private ObjectMapper json;
     @Autowired private OrgService orgs;
+    @Autowired private DeviceService devices;
+    @Autowired private SyncService sync;
+    @Autowired private SyncUploadService syncUploads;
+    @Autowired private UploadService uploads;
+    @Autowired private JdbcTemplate jdbc;
 
     private String auth;
 
@@ -152,6 +164,51 @@ class SyncUploadFlowTest {
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(json.readTree(versions).path("items").get(0).path("status").asText())
             .as("同步提交不能绕过审核队列").isEqualTo("pending_review");
+    }
+
+    /**
+     * 组织普通成员不能靠同步提交往团队的待审队列里塞版本。
+     *
+     * 整包上传路径有发布权那道闸（组织角色 publisher 及以上），
+     * sync 路径原来只查 canView——两条产出队列的路径口径不一致。
+     */
+    @Test
+    void 组织普通成员不能同步提交团队Skill() throws Exception {
+        CurrentUser owner = currentUser();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId);
+
+        // 组织角色只是 member 的另一个人（团队里也是 member）
+        CurrentUser member = memberOf(owner, orgId, teamId);
+        UUID deviceId = devices.register(member, "member-device", null, null, null).getId();
+        SyncChangesetResponse changeset = sync.submit(member, deviceId,
+            UUID.randomUUID().toString(),
+            new SyncChangesetRequest(skillId, "upload", "", contentHash("v1"), null, List.of()));
+
+        byte[] content = "SKILL.md".getBytes(StandardCharsets.UTF_8);
+        List<SyncUploadService.UploadSlot> slots = syncUploads.openUploads(member,
+            changeset.changesetId(),
+            List.of(new SyncUploadService.FileSpec("SKILL.md", sha256Hex(content),
+                content.length, "text/plain")));
+        putFile(slots.get(0).uploadUrl(), content);
+        uploads.complete(member, UUID.fromString(slots.get(0).uploadId()));
+
+        ApiException error = catchThrowableOfType(
+            () -> syncUploads.commit(member, changeset.changesetId(), ""), ApiException.class);
+
+        assertThat(error).isNotNull();
+        assertThat(error.status()).isEqualTo(403);
+    }
+
+    /** 造一个组织角色与团队角色都只是 member 的人。 */
+    private CurrentUser memberOf(CurrentUser owner, UUID orgId, UUID teamId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("insert into users (id, oidc_issuer, oidc_subject, display_name, status) "
+            + "values (?, 'https://kc', ?, 'Member', 'active')", id, "mem-" + id);
+        orgs.addOrgMember(owner, orgId, id, "member");
+        orgs.addTeamMember(owner, teamId, id, "member");
+        return new CurrentUser(id, "mem-" + id, "Member", null);
     }
 
     /** 开一个文件的上传会话、传上去、complete 走一遍。 */

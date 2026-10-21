@@ -11,6 +11,7 @@ import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionOrder;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -73,6 +74,8 @@ public class ReviewService {
         // 占了名额，驳回之后提交人就再也送不回去，这一版就永久卡死了。
         if (!"pending_review".equals(entity.getStatus())) {
             entity.setStatus("pending_review");
+            // 队列里的 submitted_at 是这次进队列的时间，不是建版本的时间。
+            entity.setSubmittedAt(OffsetDateTime.now(ZoneOffset.UTC));
             versions.save(entity);
         }
         audit.record(user, "version.submit", "skill", skillId, "success",
@@ -120,7 +123,11 @@ public class ReviewService {
             entity.setStatus("published");
             entity.setPublishedBy(user.id());
             entity.setPublishedAt(now);
-            skill.setLatestVersion(entity.getVersion());
+            // latest_version 取版本号较大者：先过审 v1.1.0 再过审 v1.0.1，
+            // latest 不能被旧版本顶回去。
+            if (VersionOrder.isGreater(entity.getVersion(), skill.getLatestVersion())) {
+                skill.setLatestVersion(entity.getVersion());
+            }
             skill.setUpdatedAt(now);
             skills.save(skill);
         } else {

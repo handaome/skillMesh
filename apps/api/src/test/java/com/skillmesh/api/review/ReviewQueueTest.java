@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
@@ -20,6 +21,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -141,11 +144,47 @@ class ReviewQueueTest {
     }
 
     /**
+     * 队列里的 submitted_at 是进队列的时间，不是建版本的时间。
+     *
+     * 上午建好版本（draft，没制品），下午才上传制品触发扫描与送审——
+     * 队列里显示的应当是下午那个时间，不是建版本的时间。
+     */
+    @Test
+    void 送审时间是进队列的时间不是建版本的时间() throws Exception {
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = skills.create(owner, new CreateSkillRequest("runbook", "Runbook", "",
+            "team", orgId, teamId, List.of(), Map.of(), null)).id();
+
+        byte[] zip = TestArtifacts.zipOf("SKILL.md", "# Runbook\n");
+        var node = createVersion(skillId, "1.0.0", zip);
+        // 建版本的时间挪到一小时前——送审时间不该跟着它
+        jdbc.update("update skill_versions set created_at = now() - interval '1 hour' "
+            + "where id = ?", UUID.fromString(node.path("version_id").asText()));
+        uploadAndComplete(node, zip);
+
+        String queue = mockMvc.perform(get("/api/v1/reviews").param("status", "pending_review")
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        OffsetDateTime submitted = OffsetDateTime.parse(
+            json.readTree(queue).get(0).path("submitted_at").asText());
+
+        assertThat(submitted).as("送审时间应是进队列这一刻")
+            .isAfter(OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(5));
+    }
+
+    /**
      * 造一个待审版本：团队可见的 Skill 发上去会停在 pending_review。
      * 方法名沿用原版 brief——它其实造的是待审版本，不是已发布版本。
      */
     private void publish(UUID skillId, String version) throws Exception {
         byte[] zip = TestArtifacts.zipOf("SKILL.md", "# Runbook\n");
+        uploadAndComplete(createVersion(skillId, version, zip), zip);
+    }
+
+    /** 只建版本（draft，没有制品），返回建版本响应。 */
+    private JsonNode createVersion(UUID skillId, String version, byte[] zip) throws Exception {
         String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)
                 .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of(
@@ -155,7 +194,11 @@ class ReviewQueueTest {
                         "sha256", TestArtifacts.sha256(zip), "size_bytes", zip.length))))))
             .andExpect(status().isCreated())
             .andReturn().getResponse().getContentAsString();
-        var node = json.readTree(created);
+        return json.readTree(created);
+    }
+
+    /** 直传包再收尾——版本从 draft 进 pending_review。 */
+    private void uploadAndComplete(JsonNode node, byte[] zip) throws Exception {
         HttpResponse<String> put = HttpClient.newHttpClient().send(
             HttpRequest.newBuilder(URI.create(node.path("upload").path("url").asText()))
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(zip)).build(),

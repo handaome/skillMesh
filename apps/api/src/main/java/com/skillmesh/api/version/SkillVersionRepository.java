@@ -46,7 +46,7 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
                 (select o.role from organization_memberships o
                   where o.organization_id = s.organization_id and o.user_id = :owner)
               ) = any(string_to_array(:reviewerRoles, ','))
-        order by v.created_at desc, v.id desc
+        order by v.submitted_at desc nulls last, v.created_at desc, v.id desc
         """, nativeQuery = true)
     List<SkillVersionEntity> findReviewable(@Param("owner") UUID owner,
                                              @Param("status") String status,

@@ -16,10 +16,12 @@ import com.skillmesh.api.scan.ArtifactScanService;
 import com.skillmesh.api.scan.ScanResult;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
+import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.upload.UploadSessionEntity;
 import com.skillmesh.api.upload.UploadSessionRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionOrder;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,6 +54,7 @@ public class SyncUploadService {
     private final SyncChangesetRepository changesets;
     private final UploadSessionRepository uploads;
     private final SkillRepository skills;
+    private final SkillService skillService;
     private final SkillVersionRepository versions;
     private final ArtifactService artifacts;
     private final ArtifactStorage storage;
@@ -63,13 +66,15 @@ public class SyncUploadService {
 
     public SyncUploadService(SyncChangesetRepository changesets,
                              UploadSessionRepository uploads, SkillRepository skills,
-                             SkillVersionRepository versions, ArtifactService artifacts,
+                             SkillService skillService, SkillVersionRepository versions,
+                             ArtifactService artifacts,
                              ArtifactStorage storage, DeviceService devices,
                              AuditService audit, SigningService signing,
                              ArtifactScanService scanService, ReviewService review) {
         this.changesets = changesets;
         this.uploads = uploads;
         this.skills = skills;
+        this.skillService = skillService;
         this.versions = versions;
         this.artifacts = artifacts;
         this.storage = storage;
@@ -137,6 +142,12 @@ public class SyncUploadService {
     public Map<String, Object> commit(CurrentUser user, UUID changesetId,
                                      String expectedRevision) throws IOException {
         SyncChangesetEntity changeset = requireChangeset(user, changesetId);
+        SkillEntity skill = skills.findById(changeset.getSkillId())
+            .orElseThrow(() -> ApiException.notFound("Skill"));
+        // 同步提交也是发版，跟整包上传走同一道发布权闸（组织角色 publisher 及以上）：
+        // 只查 canView 的话，团队的普通成员也能往待审队列里塞一版内容。
+        // 个人 Skill 没有组织角色，requirePublishRight 放行（与整包上传同一口径）。
+        skillService.requirePublishRight(user, skill);
         String cloud = cloudRevision(changeset.getSkillId());
         if (expectedRevision != null && !expectedRevision.isBlank()
             && !expectedRevision.equals(cloud)) {
@@ -165,8 +176,6 @@ public class SyncUploadService {
         }
 
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        SkillEntity skill = skills.findById(changeset.getSkillId())
-            .orElseThrow(() -> ApiException.notFound("Skill"));
         SkillVersionEntity version = new SkillVersionEntity();
         version.setId(UUID.randomUUID());
         version.setSkillId(skill.getId());
@@ -190,9 +199,16 @@ public class SyncUploadService {
         if ("published".equals(version.getStatus())) {
             version.setPublishedBy(user.id());
             version.setPublishedAt(now);
-            skill.setLatestVersion(version.getVersion());
+            // latest_version 取版本号较大者：发一版旧的不能把 latest 顶回去。
+            if (VersionOrder.isGreater(version.getVersion(), skill.getLatestVersion())) {
+                skill.setLatestVersion(version.getVersion());
+            }
             skill.setUpdatedAt(now);
             skills.save(skill);
+        }
+        if ("pending_review".equals(version.getStatus())) {
+            // 队列里的 submitted_at 是进队列这一刻，不是建版本那一刻。
+            version.setSubmittedAt(now);
         }
         versions.save(version);
 
