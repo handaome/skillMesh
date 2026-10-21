@@ -30,8 +30,11 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Printf("git      %s\n", strings.TrimSpace(string(out)))
 			}
 
-			if client, err := newClient(); err != nil {
-				fmt.Println("认证     未登录")
+			if client, err := newClient(cmd.Context()); err != nil {
+				// 如实说坏在哪：newClient 现在有四种失败（没登录、令牌过期续不上、
+				// 取不到 issuer、存不回新令牌），一律说成「未登录」会把人引去重新登录，
+				// 而真正的原因在别处。doctor 的职责就是说清楚哪里坏了。
+				fmt.Printf("认证     失败: %v\n", err)
 			} else if me, err := client.Me(cmd.Context()); err != nil {
 				fmt.Printf("认证     失败: %v\n", err)
 			} else {

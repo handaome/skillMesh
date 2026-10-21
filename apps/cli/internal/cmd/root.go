@@ -64,7 +64,7 @@ func Execute() error {
 // `skillmesh install --locked`）：流水线里既没有浏览器也没有凭据管理器，
 // 只能靠环境变量传令牌。交互场景仍走 `skillmesh login` 存进凭据管理器，
 // 不受这个变量影响。
-func newClient() (*apiclient.Client, error) {
+func newClient(ctx context.Context) (*apiclient.Client, error) {
 	timeout := time.Duration(cfg.Network.TimeoutSeconds) * time.Second
 	if envToken := os.Getenv("SKILLMESH_TOKEN"); envToken != "" {
 		return apiclient.New(cfg.Server, envToken, timeout), nil
@@ -74,7 +74,7 @@ func newClient() (*apiclient.Client, error) {
 		return nil, fmt.Errorf("未登录，请先执行 skillmesh login")
 	}
 	if !tokens.Valid() {
-		tokens, err = refreshTokens(tokens)
+		tokens, err = refreshTokens(ctx, tokens)
 		if err != nil {
 			return nil, err
 		}
@@ -86,8 +86,17 @@ func newClient() (*apiclient.Client, error) {
 //
 // 常驻同步（watch/daemon）不能因为令牌过期就静默停摆：原来这里直接报「令牌已过期」，
 // 而 watch 每轮同步都走这里，于是同步会一直失败、只在日志里留一行。
-func refreshTokens(tokens auth.Tokens) (auth.Tokens, error) {
-	fresh, err := renewedTokens(tokens, cfg.ClientID)
+func refreshTokens(ctx context.Context, tokens auth.Tokens) (auth.Tokens, error) {
+	// 令牌端点不按规矩回话时不能无限挂着：watch/daemon 会卡在这儿，
+	// 既不听文件变化也不同步——正是这个功能要解决的那类停摆。给续期一个上限。
+	timeout := time.Duration(cfg.Network.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	fresh, err := renewedTokens(ctx, tokens, cfg.ClientID)
 	if err != nil {
 		return tokens, err
 	}
@@ -101,7 +110,7 @@ func refreshTokens(tokens auth.Tokens) (auth.Tokens, error) {
 //
 // 单独拆出来是为了能测——它不碰凭据管理器，也不依赖全局配置。
 // issuer 从 access token 的 iss 声明里取：登录时没把它存下来，但令牌自己知道是哪个 realm 签的。
-func renewedTokens(tokens auth.Tokens, clientID string) (auth.Tokens, error) {
+func renewedTokens(ctx context.Context, tokens auth.Tokens, clientID string) (auth.Tokens, error) {
 	if tokens.RefreshToken == "" {
 		return tokens, fmt.Errorf("令牌已过期，请先执行 skillmesh login")
 	}
@@ -112,7 +121,7 @@ func renewedTokens(tokens auth.Tokens, clientID string) (auth.Tokens, error) {
 	if err != nil {
 		return tokens, fmt.Errorf("令牌已过期且取不到 issuer，请重新执行 skillmesh login: %w", err)
 	}
-	fresh, err := auth.Refresh(context.Background(), clientID, issuer, tokens)
+	fresh, err := auth.Refresh(ctx, clientID, issuer, tokens)
 	if err != nil {
 		return tokens, fmt.Errorf("令牌已过期且续期失败，请重新执行 skillmesh login: %w", err)
 	}

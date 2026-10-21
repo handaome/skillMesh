@@ -43,7 +43,7 @@ func newListCmd() *cobra.Command {
 			"发布到云端的 Skill 用 skillmesh search 查。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -200,7 +200,7 @@ func newUninstallCmd() *cobra.Command {
 			if err := lock.Save(projectRoot); err != nil {
 				return err
 			}
-			if client, err := newClient(); err == nil && entry.SourceID != "" {
+			if client, err := newClient(cmd.Context()); err == nil && entry.SourceID != "" {
 				_ = client.ReportAuditEvent(cmd.Context(), "uninstall.completed",
 					entry.SourceID, "success", map[string]string{"name": entry.Name})
 				unregisterInstallations(cmd.Context(), client, entry.SourceID)

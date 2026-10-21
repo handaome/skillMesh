@@ -108,7 +108,7 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
-	client, err := newClient()
+	client, err := newClient(ctx)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}

@@ -24,7 +24,7 @@ func newInstallCmd() *cobra.Command {
 		Short: "从 SkillMesh 注册中心安装指定版本的 Skill",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -110,8 +110,12 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 	}
 	warnRisks(skillDir)
 	warnRisksOnly(skillDir)
-	fmt.Printf("%s 验签：%s\n", req.Version.Version,
-		verifyArtifact(ctx, client, req.Version, skillDir))
+	verdict, err := verifyArtifact(ctx, client, req.Version, skillDir)
+	if err != nil {
+		// 验签不通过就不装：装下去的是不是服务端说的那份，验不过就不能进 Agent 目录。
+		return err
+	}
+	fmt.Printf("%s 验签：%s\n", req.Version.Version, verdict)
 	fmt.Println(skillscan.LicenseLine(skillDir))
 	name := skillscan.SkillName(skillDir)
 

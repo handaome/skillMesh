@@ -96,7 +96,11 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 		if err := sleepContext(ctx, wait); err != nil {
 			return false, err
 		}
-		return true, nil
+		// 不能在这里返回 nil 错误：doWith 一看 err == nil 就当成功，
+		// 把根本没填过的响应体当结果用（搜索会以为 Skill 不存在，
+		// 版本列表会当成空列表）。返回错误让它退避重试，
+		// 重试用完了才把错误抛给调用方。
+		return true, fmt.Errorf("被限流（HTTP %d），%s 后重试", resp.StatusCode, wait)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return false, decodeProblem(resp)

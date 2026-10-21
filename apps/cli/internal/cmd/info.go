@@ -18,7 +18,7 @@ func newInfoCmd() *cobra.Command {
 			"Git 来源的仓库与 commit 来自本项目的锁文件——注册中心那边没存。",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}

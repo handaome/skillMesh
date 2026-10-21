@@ -18,7 +18,7 @@ func newInstallationsCmd() *cobra.Command {
 			"装在哪台机器、哪个目录、什么版本、有没有被我改过。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}

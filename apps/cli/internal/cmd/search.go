@@ -17,7 +17,7 @@ func newSearchCmd() *cobra.Command {
 		Short: "搜索可见的 Skill",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}

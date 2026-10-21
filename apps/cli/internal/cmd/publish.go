@@ -55,7 +55,7 @@ func newPublishCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}

@@ -36,7 +36,7 @@ func newRollbackCmd() *cobra.Command {
 				return fmt.Errorf("%s 没有登记 Agent 目录，先 skillmesh install 一次", entry.Name)
 			}
 
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}

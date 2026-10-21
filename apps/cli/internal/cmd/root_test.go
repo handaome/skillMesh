@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -37,7 +38,7 @@ func TestRenewedTokens过期后续期(t *testing.T) {
 		RefreshToken: "old-refresh",
 		ExpiresAt:    time.Now().Add(-time.Hour),
 	}
-	fresh, err := renewedTokens(tokens, "skillmesh-cli")
+	fresh, err := renewedTokens(context.Background(), tokens, "skillmesh-cli")
 	if err != nil {
 		t.Fatalf("不该报错: %v", err)
 	}
@@ -58,13 +59,13 @@ func TestRenewedTokens过期后续期(t *testing.T) {
 // 这几种情况都不该"续期成功"，报错要说清人该做什么。
 func TestRenewedTokens续不了时的报错(t *testing.T) {
 	// 没有 refresh token
-	_, err := renewedTokens(auth.Tokens{AccessToken: jwtLike(map[string]any{"iss": "http://x"})}, "skillmesh-cli")
+	_, err := renewedTokens(context.Background(), auth.Tokens{AccessToken: jwtLike(map[string]any{"iss": "http://x"})}, "skillmesh-cli")
 	if err == nil || !strings.Contains(err.Error(), "skillmesh login") {
 		t.Fatalf("没有 refresh token 该提示重新登录，实际 %v", err)
 	}
 
 	// access token 不是 JWT：取不到 issuer
-	_, err = renewedTokens(auth.Tokens{AccessToken: "not-a-jwt", RefreshToken: "r"}, "skillmesh-cli")
+	_, err = renewedTokens(context.Background(), auth.Tokens{AccessToken: "not-a-jwt", RefreshToken: "r"}, "skillmesh-cli")
 	if err == nil || !strings.Contains(err.Error(), "issuer") {
 		t.Fatalf("取不到 issuer 该报错，实际 %v", err)
 	}
@@ -75,7 +76,7 @@ func TestRenewedTokens续不了时的报错(t *testing.T) {
 		w.Write([]byte(`{"error":"invalid_grant"}`))
 	}))
 	defer srv.Close()
-	_, err = renewedTokens(auth.Tokens{
+	_, err = renewedTokens(context.Background(), auth.Tokens{
 		AccessToken: jwtLike(map[string]any{"iss": srv.URL}), RefreshToken: "r",
 	}, "skillmesh-cli")
 	if err == nil || !strings.Contains(err.Error(), "续期失败") {

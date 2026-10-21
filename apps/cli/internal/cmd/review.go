@@ -29,7 +29,7 @@ func newReviewCmd() *cobra.Command {
 			if !known {
 				return fmt.Errorf("动作只能是 submit / approve / reject，收到 %q", args[0])
 			}
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}

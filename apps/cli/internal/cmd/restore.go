@@ -28,7 +28,7 @@ func newRestoreCmd() *cobra.Command {
 			"只恢复「我的」，别人的 public Skill 用 search 单独装。",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newClient()
+			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
 			}
