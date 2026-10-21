@@ -316,7 +316,13 @@ skillmesh daemon install              # 写成用户级自启动（不需要管�
 skillmesh daemon logs --tail 50
 ```
 
-守护进程启动时先做一次全量对账，弥补错过的文件系统通知。实现上用**轮询**触发扫描而不是文件监听：少一个依赖、跨平台，代价是空转时每轮 stat 一遍所有文件。
+守护进程启动时先做一次全量对账，弥补错过的文件系统通知。触发是**文件监听 + 轮询兜底**：文件事件带 2 秒防抖（编辑器写文件常分好几次，立刻扫会扫到写了一半的内容），轮询每 `--interval` 兜一次（默认 30 秒）。
+
+盯的是**用户级** Agent 目录（`~/.claude/skills` 这类），项目里的 `.claude/skills` 不在自动同步范围。
+
+**令牌过期后同步会静默停摆**：CLI 存了 refresh token 但没有用它续期，access token 一过期，watch/daemon 的同步就开始失败，
+而失败只写进日志——要 `skillmesh daemon logs --tail 50` 才看得见，重新 `skillmesh login` 才恢复。
+本机 realm 的令牌有效期已改成一年，所以这事一年才撞上一次。
 
 ### 换设备装回自己的 Skill
 

@@ -354,7 +354,7 @@ PKCE **手写，不引 `oidc-client-ts`**：
 
 用 Web Crypto API 原生能力，约 80 行。理由：`oidc-client-ts` 的 silent-renew 走 hidden iframe，在本地 Keycloak + 5174 端口下容易出意外；手写版本没有隐式定时器，行为可预测。
 
-Token 存储：`localStorage` 存 access + refresh token。access token 约 30 分钟过期（Keycloak realm 的 `accessTokenLifespan: 1800`），调用前由 `ensureFresh()` 用 refresh token 静默续期；refresh 失败 → 清空会话跳登录页。**取舍**：localStorage 有 XSS 面，这是内部管理工具的常规取舍，spec 里记明。
+Token 存储：`localStorage` 存 access + refresh token。access token 一年过期（Keycloak realm 的 `accessTokenLifespan: 31536000`，`ssoSessionIdleTimeout` 同值——refresh token 跟着它活），调用前由 `ensureFresh()` 用 refresh token 静默续期；refresh 失败 → 清空会话跳登录页。**取舍**：localStorage 有 XSS 面，这是内部管理工具的常规取舍，spec 里记明。令牌有效期这么长是因为本机 Keycloak 是开发环境（`sslRequired: none`）——换到真部署要按安全要求调短。
 
 ### 7.3 状态
 

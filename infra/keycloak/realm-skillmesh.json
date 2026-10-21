@@ -5,8 +5,8 @@
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
-  "accessTokenLifespan": 1800,
-  "ssoSessionIdleTimeout": 1800,
+  "accessTokenLifespan": 31536000,
+  "ssoSessionIdleTimeout": 31536000,
   "roles": {
     "realm": [
       { "name": "skillmesh-user" }
