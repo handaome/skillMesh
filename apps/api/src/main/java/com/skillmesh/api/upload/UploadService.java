@@ -93,9 +93,15 @@ public class UploadService {
         String finalKey = artifacts.finalKey(version.getSkillId(), version.getVersion(),
             session.getExpectedSha256());
         ArtifactService.Promoted promoted;
+        byte[] content;
+        List<Map<String, Object>> manifest;
         try {
             promoted = artifacts.promote(session.getTemporaryStorageKey(), finalKey,
                 session.getExpectedSha256(), session.getExpectedSizeBytes());
+            // 逐文件清单由服务端从真 zip 算：发布方声明的那份只是他的说法，不能当准。
+            // 算清单的同时验包：重名 entry 的包是非法制品，不能变成正式制品。
+            content = readArtifact(finalKey);
+            manifest = ZipManifest.of(content);
         } catch (ApiException e) {
             session.setStatus("failed");
             session.setErrorCode(e.code());
@@ -104,9 +110,6 @@ public class UploadService {
             throw e;
         }
 
-        // 逐文件清单由服务端从真 zip 算：发布方声明的那份只是他的说法，不能当准。
-        byte[] content = readArtifact(finalKey);
-        List<Map<String, Object>> manifest = ZipManifest.of(content);
         ArtifactEntity artifact = artifacts.record(promoted.sha256(), finalKey,
             promoted.sizeBytes(), manifest.size(), manifest);
         signArtifact(artifact, version);

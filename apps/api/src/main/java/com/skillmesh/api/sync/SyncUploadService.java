@@ -26,9 +26,11 @@ import java.io.InputStream;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -88,8 +90,15 @@ public class SyncUploadService {
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         List<UploadSlot> slots = new ArrayList<>();
+        Set<String> paths = new HashSet<>();
         for (FileSpec file : files) {
             requireSafePath(file.path());
+            // 同一个相对路径只能有一个文件：重名会让打出来的包里有重名 entry，
+            // 清单、审核面板、客户端安装器对同一路径可能各取一份字节。
+            if (!paths.add(file.path())) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                    "变更集里有重名的文件：" + file.path());
+            }
             UploadSessionEntity session = new UploadSessionEntity();
             session.setId(UUID.randomUUID());
             session.setActorUserId(user.id());

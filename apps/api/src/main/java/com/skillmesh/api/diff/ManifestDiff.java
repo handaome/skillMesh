@@ -45,6 +45,14 @@ public final class ManifestDiff {
         return changes;
     }
 
+    /**
+     * 清单按路径索引。
+     *
+     * 重名路径取**最后一个**（{@code put} 覆盖前一个）：与
+     * {@code ArtifactDiffService.readEntry}、CLI 安装器（后一个 entry 覆盖前一个）
+     * 同一个口径——面板显示的必须是客户端真会装的那一份。
+     * 重名包现在在上传时就被拒（{@code ZipManifest}），这里只是兜底。
+     */
     private static Map<String, String> index(List<Map<String, Object>> manifest) {
         Map<String, String> result = new LinkedHashMap<>();
         if (manifest == null) {

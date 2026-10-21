@@ -36,6 +36,64 @@ public final class TestArtifacts {
         return out.toByteArray();
     }
 
+    /**
+     * 造一个含重名 entry 的包：同一路径两个 entry，先无害后载荷。
+     *
+     * JDK 的 ZipOutputStream 不让写重名 entry（duplicate entry），
+     * 只能先写两个不同名的，再把第二个的名字改回第一个——名字长度相同，结构不变。
+     */
+    public static byte[] zipWithDuplicateEntry(String path, String first, String second)
+            throws Exception {
+        String decoy = decoyOf(path);
+        if (first.contains(decoy) || second.contains(decoy)) {
+            throw new IllegalArgumentException("正文里不能出现诱饵名：" + decoy);
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
+            zos.putNextEntry(new ZipEntry(path));
+            zos.write(first.getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            zos.putNextEntry(new ZipEntry(decoy));
+            zos.write(second.getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+        }
+        byte[] zip = out.toByteArray();
+        byte[] needle = decoy.getBytes(StandardCharsets.UTF_8);
+        byte[] target = path.getBytes(StandardCharsets.UTF_8);
+        for (int i = 0; i + needle.length <= zip.length; i++) {
+            boolean match = true;
+            for (int j = 0; j < needle.length; j++) {
+                if (zip[i + j] != needle[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                System.arraycopy(target, 0, zip, i, target.length);
+                i += needle.length - 1;
+            }
+        }
+        return zip;
+    }
+
+    /** n 个空 entry 的包——测「文件数上限」用。 */
+    public static byte[] zipOfEmptyEntries(int count) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (ZipOutputStream zos = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
+            for (int i = 0; i < count; i++) {
+                zos.putNextEntry(new ZipEntry("f" + i + ".txt"));
+                zos.closeEntry();
+            }
+        }
+        return out.toByteArray();
+    }
+
+    /** 同长度的另一个名字：把最后一个字符换掉。 */
+    private static String decoyOf(String path) {
+        char last = path.charAt(path.length() - 1);
+        return path.substring(0, path.length() - 1) + (last == 'x' ? 'y' : 'x');
+    }
+
     public static String sha256(byte[] data) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data));
     }

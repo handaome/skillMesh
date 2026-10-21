@@ -158,6 +158,10 @@ public class ArtifactDiffService {
     /**
      * 从 zip 里取一个 entry 的字节。取不到返回 null。
      *
+     * 重名 entry 取**最后一个**：CLI 安装器也是后一个覆盖前一个，
+     * 清单（{@code ManifestDiff}）也是后一个覆盖前一个——面板显示的必须是
+     * 客户端真会装的那一份。（重名包现在在上传时就被拒，这里只是兜底。）
+     *
      * 制品读不出来不是错误——只报文件级就行，别把整个审核页拖垮。
      * ponytail: 每个改动文件各读一次 zip，改动多了就是 N 次对象存储读取；
      * 一次读整个 zip 换成 map 更省，但内存峰值按改动文件总长涨。
@@ -165,27 +169,33 @@ public class ArtifactDiffService {
     private byte[] readEntry(String storageKey, String path) {
         try (InputStream stream = storage.get(storageKey);
              ZipInputStream zip = new ZipInputStream(stream)) {
+            byte[] found = null;
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 if (entry.isDirectory() || !path.equals(entry.getName())) {
                     continue;
                 }
-                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                byte[] chunk = new byte[8192];
-                int read;
-                while ((read = zip.read(chunk)) > 0) {
-                    buffer.write(chunk, 0, read);
-                    if (buffer.size() > MAX_ENTRY_BYTES) {
-                        return null;
-                    }
-                }
-                return buffer.toByteArray();
+                found = readCapped(zip);
             }
+            return found;
         } catch (IOException | IllegalStateException e) {
             // IOException：zip 坏了。IllegalStateException：对象存储读不到。
             return null;
         }
-        return null;
+    }
+
+    /** 读一个 entry 的内容；超过上限返回 null（这个文件只报文件级）。 */
+    private byte[] readCapped(ZipInputStream zip) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int read;
+        while ((read = zip.read(chunk)) > 0) {
+            buffer.write(chunk, 0, read);
+            if (buffer.size() > MAX_ENTRY_BYTES) {
+                return null;
+            }
+        }
+        return buffer.toByteArray();
     }
 
     /** 有一个文件只报文件级，整个 diff 就算不完整。 */
