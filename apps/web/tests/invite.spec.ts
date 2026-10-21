@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import InvitePage from '../src/pages/InvitePage.vue'
 import { currentOrg } from '../src/auth/currentOrg'
 import { session } from '../src/auth/session'
+
+// 打桩的 fetch 必须还原，否则漏到后面的用例。
+afterEach(() => vi.unstubAllGlobals())
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, statusText: 'OK', json: async () => body }

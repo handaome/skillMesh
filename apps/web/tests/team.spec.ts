@@ -7,6 +7,8 @@ import { session } from '../src/auth/session'
 
 // 组件监听当前组织，测试之间不卸载会让上一次的 watcher 继续发请求。
 enableAutoUnmount(afterEach)
+// 打桩的 fetch 必须还原，否则漏到后面的用例。
+afterEach(() => vi.unstubAllGlobals())
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, statusText: 'OK', json: async () => body }

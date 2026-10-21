@@ -34,14 +34,18 @@ async function request<T>(
   // 会话过期：静默续期后重试一次；续不上就登出并送回登录页。
   // 显式传了 token 的调用没有会话，不走这条路；retried 保证只重试一次
   // （refresh token 本身失效时否则会无限循环）。
-  if (response.status === 401 && token === undefined && bearer && !retried) {
-    if (await ensureFresh(true)) {
+  if (response.status === 401 && token === undefined && bearer) {
+    // 第一次 401：续期后重试一次。
+    if (!retried && (await ensureFresh(true))) {
       // 静默续期只换令牌，从不重拉 /me：挂载时那一次拉失败的话组织列表
       // 会一直空着，团队页对真正的组织成员说「你还没有加入任何组织」。
       // 只在列表空着时补拉——正常情况下没必要多打一次请求。
       if (!session.organizations.length) void loadMe().catch(() => {})
       return request<T>(path, method, body, token, true)
     }
+    // 续不上，或续期后重试仍是 401（令牌被服务端拒了：签发方/受众不符、被吊销、
+    // 时钟偏差）：续期救不了这个会话，按续期失败处理——清会话并送回登录页，
+    // 否则每个页面都渲染「UNAUTHORIZED」，用户只能自己点顶栏的登出。
     logout()
     // 跳不动也不该盖掉 401 本身（下面的 ApiError 才是调用方要的东西）。
     await router.push({

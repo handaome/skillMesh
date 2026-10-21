@@ -73,12 +73,6 @@ export function setTokens(tokens: { access_token: string; refresh_token?: string
   persist()
 }
 
-export function logout() {
-  Object.assign(session, empty())
-  meError.value = ''
-  localStorage.removeItem(STORAGE_KEY)
-}
-
 /**
  * /me 的代次。App 挂载与接受邀请各会拉一次，两次互不知情——
  * 后发的那份才是更新的快照，先发的那份晚到也不能把组织列表回滚掉。
@@ -86,6 +80,16 @@ export function logout() {
 let meSeq = 0
 /** 已生效的最高代次。比它旧的响应一律丢弃——失败也算生效（它挂出了错误横幅）。 */
 let meApplied = 0
+
+export function logout() {
+  Object.assign(session, empty())
+  meError.value = ''
+  // 登出要让在途的 /me 作废：把代次推到已发出的最高代，那些还没回来的
+  // 响应落地时就比不过 meApplied，不会把旧用户与旧组织写回已清空的会话
+  // （看着像还登录着，其实每个 API 都 401）。
+  meApplied = meSeq
+  localStorage.removeItem(STORAGE_KEY)
+}
 
 /**
  * 拉一次 /me，顺便把组织列表带回来。

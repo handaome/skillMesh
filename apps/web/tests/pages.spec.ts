@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import MarketPage from '../src/pages/MarketPage.vue'
+
+// 打桩的 fetch 必须还原，否则漏到后面的用例。
+afterEach(() => vi.unstubAllGlobals())
 
 const SKILL = {
   id: 'a',
@@ -135,5 +138,64 @@ describe('MarketPage', () => {
 
     expect(wrapper.find('[data-test="back"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('java-debug')
+  })
+
+  it('两次搜索时只认最后一次的结果', async () => {
+    // 第一次搜索挂住不返回（慢接口），第二次先回
+    let releaseFirst: (v: unknown) => void = () => {}
+    const firstSearch = new Promise((resolve) => { releaseFirst = resolve })
+    const OTHER = { ...SKILL, id: 'b', slug: 'python-lint', name: 'Python Lint' }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('q=java')) return firstSearch
+      if (url.includes('q=python')) {
+        return jsonResponse({ items: [OTHER], next_cursor: null, has_more: false })
+      }
+      return jsonResponse({ items: [], next_cursor: null, has_more: false })
+    }))
+    const wrapper = await mountMarket()
+
+    // 走输入框的回车：搜索按钮在 loading 时是禁用的，只有回车能并发进来
+    await wrapper.find('input').setValue('java')
+    await wrapper.find('input').trigger('keyup.enter')
+    await flushPromises()
+    await wrapper.find('input').setValue('python')
+    await wrapper.find('input').trigger('keyup.enter')
+    await flushPromises()
+    expect(wrapper.text()).toContain('python-lint')
+
+    // 第一次（java）后到：不能盖掉第二次的结果，
+    // 否则列表显示 java、输入框写着 python，用户打开的是错的 Skill
+    releaseFirst(jsonResponse({ items: [SKILL], next_cursor: null, has_more: false }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('python-lint')
+    expect(wrapper.text()).not.toContain('java-debug')
+  })
+
+  it('连续打开两个 Skill 时只认后一个', async () => {
+    const OTHER = { ...SKILL, id: 'b', slug: 'python-lint', name: 'Python Lint' }
+    // 第一个详情挂住不返回
+    let releaseFirst: (v: unknown) => void = () => {}
+    const firstDetail = new Promise((resolve) => { releaseFirst = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/skills/a')) return firstDetail
+      if (url.endsWith('/skills/b')) return jsonResponse(OTHER)
+      if (url.includes('/versions')) {
+        return jsonResponse({ items: [], next_cursor: null, has_more: false })
+      }
+      return jsonResponse({ items: [SKILL, OTHER], next_cursor: null, has_more: false })
+    }))
+    const wrapper = await mountMarket('/?skill=a')
+
+    // 地址换成另一个 Skill，详情页跟着地址走
+    await wrapper.vm.$router.replace({ query: { skill: 'b' } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('python-lint')
+
+    // 第一个（a）后到：不能盖掉第二个的详情，
+    // 否则地址上是 ?skill=b、卡片头却显示 a
+    releaseFirst(jsonResponse(SKILL))
+    await flushPromises()
+    expect(wrapper.text()).toContain('python-lint')
+    expect(wrapper.text()).not.toContain('java-debug')
   })
 })

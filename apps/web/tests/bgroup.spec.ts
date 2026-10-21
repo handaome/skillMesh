@@ -5,7 +5,7 @@ import ElementPlus from 'element-plus'
 import TeamPage from '../src/pages/TeamPage.vue'
 import ReviewDetailPage from '../src/pages/ReviewDetailPage.vue'
 import { currentOrg, selectOrganization } from '../src/auth/currentOrg'
-import { loadMe, meError, session } from '../src/auth/session'
+import { loadMe, logout, meError, session } from '../src/auth/session'
 
 // 组件监听当前组织，测试之间不卸载会让上一次的 watcher 继续发请求。
 enableAutoUnmount(afterEach)
@@ -229,6 +229,27 @@ describe('B2 两次 /me 刷新', () => {
     responses[0]()
     await older
     expect(meError.value).not.toBe('')
+  })
+
+  it('登出后在途的 /me 落地也不会把旧用户写回来', async () => {
+    logout() // 起点：干净会话
+    // /me 挂住不返回，模拟「页面刚加载完就点了登出」
+    let release: (v: unknown) => void = () => {}
+    const pending = new Promise((resolve) => { release = resolve })
+    vi.stubGlobal('fetch', vi.fn(async () => pending))
+
+    const inflight = loadMe()
+    logout()
+    release(jsonResponse({
+      user: { id: 'u1', display_name: 'Dev', email: null, status: 'active' },
+      organizations: [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }],
+    }))
+    await inflight
+
+    // 会话已经登出，在途的响应落地也不能把旧用户写回来：
+    // 那样顶栏又显示旧用户名，而令牌是空的——看着像登录着，其实每个 API 都 401。
+    expect(session.user).toBeNull()
+    expect(session.organizations).toEqual([])
   })
 })
 

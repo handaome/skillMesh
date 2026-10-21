@@ -198,4 +198,26 @@ describe('会话续期', () => {
     expect(router.currentRoute.value.path).toBe('/login')
     expect(router.currentRoute.value.query.redirect).toBe('/team')
   })
+
+  it('续期成功但重试仍是 401 时同样清会话并跳登录页', async () => {
+    session.accessToken = 'old'
+    session.refreshToken = 'r'
+    session.expiresAt = Date.now() - 1000
+    session.organizations = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/protocol/openid-connect/token')) {
+        return jsonResponse({ access_token: 'new', refresh_token: 'r2', expires_in: 60 })
+      }
+      if (!url.includes('/skills')) return jsonResponse({ user: null, organizations: [] })
+      // 令牌被服务端拒了（签发方/受众不符、被吊销、时钟偏差）：续期救不了它
+      return unauthorized()
+    }))
+
+    await router.push('/team')
+    await expect(searchSkills('x')).rejects.toMatchObject({ code: 'UNAUTHORIZED', status: 401 })
+    // 不能只抛个 401 就完事：用户得被送回登录页，否则满屏 UNAUTHORIZED，
+    // 只能自己点顶栏的登出。
+    expect(session.accessToken).toBe('')
+    expect(router.currentRoute.value.path).toBe('/login')
+  })
 })

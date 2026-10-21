@@ -113,7 +113,11 @@ onMounted(load)
             {{ detail.diff.base_version ? `对比 ${detail.diff.base_version}` : '首个版本' }}
           </el-tag>
         </h2>
-        <el-table :data="detail.diff.files" size="small">
+        <!--
+          表格只在有数据时渲染：下面已经有一个「没有文件差异」的空态了，
+          再挂一个 Element Plus 自带的「No Data」就是两个空态并排。
+        -->
+        <el-table v-if="detail.diff.files.length > 0" :data="detail.diff.files" size="small">
           <el-table-column prop="path" label="文件" min-width="180">
             <template #default="scope">
               <span class="sm-mono" data-test="diff-row">{{ scope.row.path }}</span>
