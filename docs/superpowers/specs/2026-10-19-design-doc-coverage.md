@@ -117,18 +117,18 @@
 
 ## §11 数据模型
 
-19 张表**全部有读写路径**（`db/migrations/V1__init.sql`）：users / organizations / organization_memberships / teams / team_memberships / skills / skill_sources（创建 Skill 时按客户端上报的来源写入）/ artifacts / skill_versions / skill_scans / skill_reviews / skill_permissions（结构在）/ devices / installations / sync_states / sync_changesets / sync_conflicts / upload_sessions / audit_events。
+v1 的 19 张表里 18 张有读写路径（`db/migrations/V1__init.sql`）——`skill_permissions` 只有 DDL，没有实体也没有读写路径；v2 又加了 `org_invitations`（`db/migrations/V3__team_console.sql`），实际 20 张：users / organizations / organization_memberships / teams / team_memberships / skills / skill_sources（创建 Skill 时按客户端上报的来源写入）/ artifacts / skill_versions / skill_scans / skill_reviews / skill_permissions（结构在）/ devices / installations / sync_states / sync_changesets / sync_conflicts / upload_sessions / audit_events。
 
 ## §12 API 设计
 
-契约清单（`docs/详细设计.md` §2.2）里的 28 个端点**全部实现**，含 `sources/resolve`、`sources/check-updates`、`sync/changesets` 全家（`/uploads`、`/commit`、`/resolve`）、`installations` CRUD、`audit-events`。
+契约清单（`docs/详细设计.md` §2.2）里的 28 个端点**实现了 26 个**：缺 `POST /skills/{id}/versions/{version}/review` 与 `POST /skills/{id}/versions/{version}/publish`——审核与发版实际走 `POST /review/submit`、`/review/approve`、`/review/reject` 与上传收尾的状态流转。其余含 `sources/resolve`、`sources/check-updates`、`sync/changesets` 全家（`/uploads`、`/commit`、`/resolve`）、`installations` CRUD、`audit-events`。
 
 ## §13 错误处理与可观测性
 
 | 情形 | 处理 |
 | --- | --- |
 | 网络断开 | 进持久队列，退避重试，`--retry-only` 补传 |
-| 令牌过期 | 提示重新认证；`SKILLMESH_TOKEN` 供 CI |
+| 令牌过期 | CLI 先用 refresh token 自动续期（续不上才提示重新认证）；`SKILLMESH_TOKEN` 供 CI |
 | 权限被撤销 | 403/404，不自动删除本地数据 |
 | 版本冲突 | 409 `VERSION_CONFLICT`，锁文件不动 |
 | 安全扫描命中 | 阻断发布（密钥）/ 提示（可疑内容），给文件:行号 |

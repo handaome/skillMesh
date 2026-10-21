@@ -285,4 +285,5 @@ realm 里 `skillmesh-cli` 的 `webOrigins` / `redirectUris` 配的是 `http://12
   后来补上了「新建组织 / 新建团队」，spec §10 第 2 步现在在浏览器里做得到。
   但**成功路径没在真实环境跑**：那会新建组织与团队数据，验收脚本只验了入口在、表单能填能点、
   重名时服务端给的错误显示得出来。
-- 验收脚本在仓库外（`d:\tmp\e2e`），**没有进仓库当回归**——要进仓库得给 `apps/web` 加浏览器驱动依赖。
+- 验收脚本**已经进仓库**（`apps/web/e2e/`）：用 node 内置 WebSocket 直连系统 Edge/Chrome 的调试端口，
+  **不新增任何依赖**；`cd apps/web && pnpm e2e` 就能跑。

@@ -68,7 +68,7 @@ CREATE INDEX idx_org_invitations_org ON org_invitations(organization_id, status)
 > V3 里的 `org_role` CHECK 抄的是**组织角色全集**（含 `owner`），不是**邀请可授角色集**——
 > 与下面「`owner` 不能通过邀请拿到」矛盾。V5 把这个约束收紧了（见下）。
 
-之后两条迁移（同样两份文件逐字相同）：
+之后三条迁移（同样两份文件逐字相同）：V4、V5，以及 V6（`V6__version_submitted_at.sql`，给 `skill_versions` 加 `submitted_at` 列——审核队列的送审时间与排序都建在这一列上，§5.3 的 `submitted_at` 字段就来自它）：
 
 **V4**（`V4__invitation_list_index.sql`）把邀请列表的索引改成与查询对上：
 唯一按组织查邀请的查询是 `findByOrganizationIdOrderByCreatedAtDesc`——只按 `organization_id` 过滤、
@@ -349,7 +349,7 @@ PKCE **手写，不引 `oidc-client-ts`**：
 
 | 文件 | 内容 |
 | --- | --- |
-| `src/auth/pkce.ts` | `generateVerifier()`（CSPRNG 32 字节 → base64url）、`challenge(verifier)`（Web Crypto SHA-256 → base64url）、`exchangeCode()`（POST token 端点） |
+| `src/auth/pkce.ts` | `randomVerifier()`（CSPRNG 32 字节 → base64url）、`codeChallenge(verifier)`（Web Crypto SHA-256 → base64url）、`exchangeCode(code, verifier, redirectUri)`（POST token 端点）、`buildAuthorizeUrl()`、`refreshToken()` |
 | `src/auth/session.ts` | `reactive` 单例存 access/refresh token 与当前用户；`login()` / `logout()` / `ensureFresh()` |
 
 用 Web Crypto API 原生能力，约 80 行。理由：`oidc-client-ts` 的 silent-renew 走 hidden iframe，在本地 Keycloak + 5174 端口下容易出意外；手写版本没有隐式定时器，行为可预测。
@@ -437,7 +437,7 @@ Keycloak realm 需要**第二个账号**。在 `infra/keycloak/realm-skillmesh.j
 | 制品签名仍覆盖**发布方声明的清单** | 审核 diff 已改用服务端从真 zip 算的清单（不信自填），但**签名与 `content_digest` 仍用 `skill_versions.manifest_json`**（发布方声明的那份）。发布方声明与真包不符时：审核面板说真话，CLI 装的时候会对一遍本地算出的摘要与服务端的 `content_digest`，不符就拒装（`verify.go`、`report.go` 的「装下来的内容和清单摘要对不上」）——**安全上不漏，只是体验割裂**。改它要连带改签名与 CLI 验签，牵扯面大，本轮不做。 |
 | 审核队列的 `status` 参数无白名单 | `GET /api/v1/reviews?status=published` 会列出已发布版本。**不是权限洞**（同一套可见性规则仍在），但端点叫「审核队列」却能列出队列外的行，语义不对。 |
 | 同组织成员能看到彼此的 OIDC `sub` | 邀请的 `subject` 要精确匹配 OIDC `sub`，管理员得拿得到要填的值 → 成员花名册带 `subject`、`/me` 回显自己的。同组织成员因此能看到彼此的 `sub`（Keycloak 的内部 id）。`sub` 是伪名标识不是凭据（拿到它不能登录），但这是一次信息面放宽。要收回就只能让管理员去问人，或加一个「按 user_id 换取 sub」的受限端点。 |
-| `install` 收 Skill ID 而非 slug | v1 的实现就是这样（`install <skill-id>`），设计文档 §7.4 的命令表写的是 slug。`skillmesh search` 输出的最后一列就是完整 ID，所以闭环走得通；让 install 同时吃 slug 是 v1 的可用性缺口，不在 v2 范围。 |
+| `install` 收 Skill ID 而非 slug | v1 的实现就是这样（`install <skill-id>`），设计文档 §7.4 的「推荐 CLI 命令」里其实没有 install 这一条，所以设计文档对此没有规定——这是 v1 自己留下的缺口。`skillmesh search` 输出的最后一列就是完整 ID，所以闭环走得通；让 install 同时吃 slug 是 v1 的可用性缺口，不在 v2 范围。 |
 | 发布权看**组织角色**、审核放行权看**团队角色** | 两层角色各管一件事（§5.2、§5.3）。发布与提交审核判组织角色——接受邀请会写一行 `team_role=member`，用团队角色判会把组织角色永久遮住。审核放行与队列可见性判团队角色（没有团队成员行才回落到组织角色）——审核是团队范围内的事。所以被邀请进来的人默认组织 `member`、团队 `member`：要发布得把**组织角色**提到 publisher，要审别人的东西得把**团队角色**提到 reviewer。控制台两边都能改（选中团队改团队角色，不选团队改组织角色）。 |
 | **读**团队可见的 Skill：团队成员或组织 owner/admin | 读（直读、搜索、安装）的口径与审核放行不同：审核放行是团队范围内的事，所以判团队角色；读是「这内容归谁管」——团队可见的内容归该团队管，也归管着它的组织管，所以该团队成员与该组织的 owner/admin 都能看。建团队时不写 `team_memberships` 行，组织 owner 在该团队没有团队角色——若只认团队成员，他会读不到、搜不到自己团队的东西，而他在审核队列里却能看见并批准它，「能批不能看」说不通。团队里的**普通**成员仍看不到别的团队的 Skill。 |
 | 多设备冲突可视化 | 仍只在 CLI 侧处理。 |
