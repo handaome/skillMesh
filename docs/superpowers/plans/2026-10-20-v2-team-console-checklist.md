@@ -241,3 +241,46 @@ dev-user2 当时团队角色是 member、组织角色是 publisher，两者结�
 - **浏览器人工验证清单（上一轮列的 9 步）仍未实测**——浏览器路径始终只做到 API 等价。
 - **验收数据留在开发库**：`acc2-personal` / `acc2-demo` / `acc2-dup` 三个 Skill、组织 `acc2-org2`、
   团队 `core`。服务端没有删 Skill / 组织 / 团队的端点，要清只能直接删库，本轮没清。
+
+---
+
+## 浏览器路径验收（2026-10-22）
+
+用**系统 Edge + CDP** 驱动真实浏览器（node 内置 WebSocket，不装任何依赖），把历轮「浏览器路径未实测」这条补上。
+
+### 先修了一个让浏览器登录完全不可用的 bug
+
+realm 里 `skillmesh-cli` 的 `webOrigins` / `redirectUris` 配的是 `http://127.0.0.1:*`，
+**Keycloak 不认这种「带端口的通配」**（它只认整段 `*` 或子域 `+`）。于是 token 端点对每个请求都回
+`403 Invalid origin`，浏览器换不到令牌，登录页永远停在「TypeError: Failed to fetch」。
+
+改成显式端口：`redirectUris` = `http://127.0.0.1:5174/*`（Web）、`http://127.0.0.1:53682/*`
+（CLI 浏览器回调）、`http://localhost:5174/*`；`webOrigins` 去掉路径（origin 不带路径）。
+本机 realm 用 kcadm 同步过一遍（realm 导入不覆盖已存在的 realm，改 json 只对新建 realm 生效）。
+
+### 13 步结果（浏览器真实交互）
+
+| # | 步骤 | 结果 |
+| --- | --- | --- |
+| 1 | A 登录 Web（Keycloak 授权码 + PKCE） | 顶栏显示 Dev User |
+| 1b | 市场页没有手贴 token 的输入框 | 已删 |
+| 2 | 团队页列出组织成员 | Dev User / Dev User Two |
+| 3 | 选中团队 platform | 列标题从「组织角色」变成「团队角色」 |
+| 4 | 生成邀请链接 | 拿到 `http://127.0.0.1:5174/invite/<token>` |
+| 5 | B 打开邀请链接（未登录） | 显示「登录后接受」 |
+| 5 | A 把 Dev User Two 的组织角色 publisher→member→publisher | 角色列跟着变（改的是组织角色，没选团队时） |
+| 6 | B 登录后接受邀请 | 页面显示「已加入，去团队页看看。」 |
+| 7 | A 打开审核队列 | 看到 acc2-e2e 1.0.0，提交人 Dev User Two，扫描 passed |
+| 8 | 进审核详情 | SKILL.md 正文 + 1 行文件级差异 |
+| 9 | 点「通过」 | 版本状态变 published |
+| 10 | 负例：B（非 reviewer）打开审核队列 | 空态「没有待审的版本」 |
+| 11 | 负例：访问不存在的组织的成员列表 | 404 NOT_FOUND |
+| 12 | 负例：过期邀请链接 | 页面提示「这份邀请已经过期。」 |
+| 13 | 负例：唯一 owner 改自己的组织角色 | 页面报 `VALIDATION_FAILED: 不能改自己的组织角色` |
+| 9′ | CLI：dev-user2 搜到团队 Skill 并安装 | `search` 末列是完整 ID；`install` 装进 `<项目>/.claude/skills/acc2-e2e`，锁文件一并生成 |
+
+### 仍未覆盖
+
+- **建组织/建团队在浏览器里没有入口**：团队页只能选已有组织与团队（组织列表来自 `/me`）。
+  spec §10 第 2 步的「A 建组织 acme + 团队 platform」只能用 API 做到。
+- 验收脚本在仓库外（`d:\tmp\e2e`），**没有进仓库当回归**——要进仓库得给 `apps/web` 加浏览器驱动依赖。

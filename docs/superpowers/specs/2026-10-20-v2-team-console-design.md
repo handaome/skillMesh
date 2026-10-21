@@ -343,7 +343,7 @@ LCS 长度 C → `added = 新版行数 - C`，`removed = 旧版行数 - C`。
 
 ### 7.2 鉴权会话
 
-OIDC 授权码 + PKCE，复用现有 Keycloak client `skillmesh-cli`（public + PKCE S256，`redirectUris` 为 `http://127.0.0.1:*`，已覆盖 5174）。**client 配置零改动**——realm 只在验收时加第二个用户（§9），与登录流程无关。
+OIDC 授权码 + PKCE，复用现有 Keycloak client `skillmesh-cli`（public + PKCE S256）。**client 的 `redirectUris` 与 `webOrigins` 必须显式列出端口**——Keycloak 不认 `http://127.0.0.1:*` 这种「带端口的通配」（只认整段 `*` 或子域 `+`），配错会让 token 端点对每个请求回 `403 Invalid origin`，浏览器永远换不到令牌，登录页只显示「TypeError: Failed to fetch」。当前配置：`redirectUris` = `http://127.0.0.1:5174/*`（Web）、`http://127.0.0.1:53682/*`（CLI 浏览器回调）、`http://localhost:5174/*`；`webOrigins` 去掉路径。realm 只在验收时加第二个用户（§9）。
 
 PKCE **手写，不引 `oidc-client-ts`**：
 

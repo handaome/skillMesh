@@ -22,8 +22,16 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://127.0.0.1:*"],
-      "webOrigins": ["http://127.0.0.1:*"],
+      "redirectUris": [
+        "http://127.0.0.1:5174/*",
+        "http://127.0.0.1:53682/*",
+        "http://localhost:5174/*"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:53682",
+        "http://localhost:5174"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
       },
