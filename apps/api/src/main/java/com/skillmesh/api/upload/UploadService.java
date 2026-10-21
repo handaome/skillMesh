@@ -157,8 +157,10 @@ public class UploadService {
         session.setUploadedAt(now);
         uploads.save(session);
 
+        // 版本状态一并带回去：会话的 status 只说「上传完了没有」，
+        // 客户端要判断的是这版被服务端怎么处理了（扫描拦下 / 待审 / 已发布）。
         return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
-            session.getExpiresAt(), promoted.sha256(), null);
+            session.getExpiresAt(), promoted.sha256(), null, version.getStatus());
     }
 
     /** 同步文件上传的收尾：校验字节数与摘要，通过就等着 commit。 */
@@ -176,7 +178,7 @@ public class UploadService {
             session.setVerifiedAt(now);
             uploads.save(session);
             return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
-                session.getExpiresAt(), session.getExpectedSha256(), session.getRelativePath());
+                session.getExpiresAt(), session.getExpectedSha256(), session.getRelativePath(), null);
         } catch (ApiException e) {
             session.setStatus("failed");
             session.setErrorCode(e.code());

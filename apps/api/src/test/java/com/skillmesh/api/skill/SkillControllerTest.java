@@ -21,7 +21,9 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
+import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
 
 @SpringBootTest
@@ -34,6 +36,7 @@ class SkillControllerTest {
     @Autowired private DatabaseCleaner cleaner;
     @Autowired private ObjectMapper json;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private OrgService orgs;
 
     private String auth;
 
@@ -61,6 +64,30 @@ class SkillControllerTest {
     void 同用户重复slug返回409() throws Exception {
         String body = """
             {"slug":"dup","name":"Dup","description":"","visibility":"private"}""";
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON).content(body))
+            .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON).content(body))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("SLUG_TAKEN"));
+    }
+
+    /**
+     * 组织内的 slug 唯一，团队之间也共用这一个命名空间。
+     *
+     * 团队可见的 Skill 你可能根本看不见（不是团队成员），
+     * 再建一个同名的必须回 409，而不是撞唯一索引变成 500。
+     */
+    @Test
+    void 组织内重名slug返回409() throws Exception {
+        CurrentUser user = currentUser();
+        UUID orgId = orgs.createOrganization(user, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(user, orgId, "platform", "Platform", null).getId();
+        String body = """
+            {"slug":"dup-team","name":"Dup","description":"","visibility":"team",
+             "organization_id":"%s","owner_team_id":"%s"}""".formatted(orgId, teamId);
+
         mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
                 .contentType(MediaType.APPLICATION_JSON).content(body))
             .andExpect(status().isCreated());
@@ -147,6 +174,14 @@ class SkillControllerTest {
         jdbc.update("insert into users (id, oidc_issuer, oidc_subject, display_name, status) "
             + "values (?, 'https://kc', ?, 'Other User', 'active')", id, "other-" + id);
         return id;
+    }
+
+    /** 拿当前登录用户的身份：建组织、建团队都要用它。 */
+    private CurrentUser currentUser() throws Exception {
+        String body = mockMvc.perform(get("/api/v1/me").header("Authorization", auth))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        UUID id = UUID.fromString(json.readTree(body).path("user").path("id").asText());
+        return new CurrentUser(id, "owner", "Owner", "owner@example.com");
     }
 
     @Test

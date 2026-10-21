@@ -13,6 +13,14 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
     boolean existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(UUID ownerUserId, String slug);
 
     /**
+     * 组织内是否已经有这个 slug。
+     *
+     * 对应唯一索引 uq_skills_org_slug：同一个组织里 slug 是唯一的，
+     * 团队之间也共用这一个命名空间。
+     */
+    boolean existsByOrganizationIdAndSlug(UUID organizationId, String slug);
+
+    /**
      * 搜索当前用户可见的 Skill。
      *
      * 用原生查询而不是 JPQL：tags 的数组包含（= any）与游标的元组比较

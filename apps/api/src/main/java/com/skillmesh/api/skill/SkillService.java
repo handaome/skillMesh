@@ -45,6 +45,13 @@ public class SkillService {
         if (skills.existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(user.id(), req.slug())) {
             throw new ApiException(409, ErrorCodes.SLUG_TAKEN, "slug 已被占用: " + req.slug());
         }
+        if (req.organization_id() != null
+                && skills.existsByOrganizationIdAndSlug(req.organization_id(), req.slug())) {
+            // 组织内的 slug 唯一（uq_skills_org_slug），团队之间也共用一个命名空间。
+            // 预检拦住才回 409；撞唯一索引会变成 500，客户端看不出是重名。
+            throw new ApiException(409, ErrorCodes.SLUG_TAKEN,
+                "slug 在该组织下已被占用: " + req.slug());
+        }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         SkillEntity entity = new SkillEntity();
         entity.setId(UUID.randomUUID());

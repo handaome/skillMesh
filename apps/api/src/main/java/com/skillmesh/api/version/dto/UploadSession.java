@@ -15,7 +15,8 @@ public record UploadSession(
         Upload upload,
         @JsonProperty("expires_at") OffsetDateTime expiresAt,
         @JsonProperty("verified_sha256") String verifiedSha256,
-        @JsonProperty("error_code") String errorCode) {
+        @JsonProperty("error_code") String errorCode,
+        @JsonProperty("version_status") String versionStatus) {
 
     public record Upload(String method, String url, Map<String, String> headers) {}
 }
