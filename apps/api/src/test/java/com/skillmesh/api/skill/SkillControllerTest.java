@@ -97,6 +97,61 @@ class SkillControllerTest {
             .andExpect(jsonPath("$.code").value("SLUG_TAKEN"));
     }
 
+    /**
+     * 团队之间共用一个命名空间：同一组织里换个团队建同名 Skill 也得 409。
+     *
+     * 原来那条用例两次 POST 用的是同一个 body（同一个团队），
+     * 只能证明「同组织同团队重名被拒」——把预检改成按
+     * (organization_id, owner_team_id, slug) 查，它照样全绿，
+     * 而换团队时唯一索引会拦下并变成 500。
+     */
+    @Test
+    void 同组织不同团队重名也是409() throws Exception {
+        CurrentUser user = currentUser();
+        UUID orgId = orgs.createOrganization(user, "acme2", "Acme2").getId();
+        UUID teamA = orgs.createTeam(user, orgId, "team-a", "Team A", null).getId();
+        UUID teamB = orgs.createTeam(user, orgId, "team-b", "Team B", null).getId();
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"slug":"cross-team","name":"X","description":"","visibility":"team",
+                     "organization_id":"%s","owner_team_id":"%s"}""".formatted(orgId, teamA)))
+            .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"slug":"cross-team","name":"X","description":"","visibility":"team",
+                     "organization_id":"%s","owner_team_id":"%s"}""".formatted(orgId, teamB)))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("SLUG_TAKEN"));
+    }
+
+    /**
+     * 个人空间与组织空间是两套命名空间：自己有个人 demo 时，
+     * 在组织里建 demo 不该被误挡——唯一索引 uq_skills_org_slug 只约束组织内。
+     */
+    @Test
+    void 个人空间同名不影响在组织里建() throws Exception {
+        CurrentUser user = currentUser();
+        UUID orgId = orgs.createOrganization(user, "acme3", "Acme3").getId();
+        UUID teamId = orgs.createTeam(user, orgId, "t", "T", null).getId();
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"slug":"same-name","name":"X","description":"","visibility":"private"}"""))
+            .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"slug":"same-name","name":"X","description":"","visibility":"team",
+                     "organization_id":"%s","owner_team_id":"%s"}""".formatted(orgId, teamId)))
+            .andExpect(status().isCreated());
+    }
+
     @Test
     void 非法slug返回400并带field_errors() throws Exception {
         mockMvc.perform(post("/api/v1/skills").header("Authorization", auth)

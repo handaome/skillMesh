@@ -42,7 +42,11 @@ public class SkillService {
     @Transactional
     public SkillResponse create(CurrentUser user, CreateSkillRequest req) {
         requireVisibilitySupported(user, req);
-        if (skills.existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(user.id(), req.slug())) {
+        // 个人空间与组织空间是两套命名空间：只有建个人 Skill 时才查个人名下。
+        // 原来不区分——用户自己有个个人 demo 时，在组织里建 demo 会被误挡，
+        // 而唯一索引 uq_skills_org_slug 本来允许（它只约束组织内）。
+        if (req.organization_id() == null
+                && skills.existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(user.id(), req.slug())) {
             throw new ApiException(409, ErrorCodes.SLUG_TAKEN, "slug 已被占用: " + req.slug());
         }
         if (req.organization_id() != null

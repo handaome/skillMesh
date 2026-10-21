@@ -181,6 +181,47 @@ class InvitationFlowTest {
         assertThat(orgs.roleIn(orgId, null, owner.id())).isEqualTo("owner");
     }
 
+    /**
+     * 绑定了 subject 的邀请只有本人能接受。
+     *
+     * 不绑的话，链接谁拿到谁能接受——而链接是要转发出去的（页面直接把链接与
+     * 原始 token 显示出来供复制）。这条闸以前从没被触发过：控制台发的邀请
+     * 从来不带 subject。
+     */
+    @Test
+    void 绑定成员的邀请别人接受不了() throws Exception {
+        CurrentUser admin = stranger();
+        UUID orgId = orgs.createOrganization(admin, "acme", "acme").getId();
+        String token = invitations.create(admin, orgId, null, "member", null, owner.subject()).token();
+
+        ApiException ex = catchThrowableOfType(
+            () -> invitations.accept(stranger(), token), ApiException.class);
+        assertThat(ex).as("绑了人的邀请别人接不了").isNotNull();
+        assertThat(ex.status()).isEqualTo(403);
+
+        // 本人接受照常
+        invitations.accept(owner, token);
+        assertThat(orgs.roleIn(orgId, null, owner.id())).isEqualTo("member");
+    }
+
+    /** 过期邀请：摘要显示 expired，接受回 409。 */
+    @Test
+    void 过期邀请不能接受() throws Exception {
+        UUID orgId = createOrganization("acme");
+        String token = createInvitation(orgId, null);
+        jdbc.update("update org_invitations set expires_at = now() - interval '1 day' where id = ?",
+            invitationId(token));
+
+        mockMvc.perform(get("/api/v1/invitations/{token}", token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("expired"));
+
+        mockMvc.perform(post("/api/v1/invitations/{token}/accept", token)
+                .header("Authorization", auth))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("INVITATION_INVALID"));
+    }
+
     @Test
     void 不存在的邀请是404() throws Exception {
         mockMvc.perform(get("/api/v1/invitations/{token}", "no-such-token"))
