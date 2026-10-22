@@ -101,6 +101,37 @@ describe('FileBrowser', () => {
     expect(wrapper.findAll('[data-test="tree-file"]')).toHaveLength(2)
   })
 
+  /** 抽屉：挂载即打开，关掉要通知外面卸载。 */
+  it('挂载即打开，关掉时通知外面', async () => {
+    vi.stubGlobal('fetch', stubFiles())
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="files-dialog"]').attributes('open')).toBeDefined()
+
+    await wrapper.find('[data-test="files-close"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  /** 开抽屉就是为了看内容：清单回来后自动打开第一个文件。 */
+  it('自动打开第一个文件', async () => {
+    const fetchMock = stubFiles()
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="file-content"]').text()).toContain('正文。')
+    // 读文件的请求发出去了
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/file?'))).toBe(true)
+  })
+
   it('点文件读出正文', async () => {
     const fetchMock = stubFiles()
     vi.stubGlobal('fetch', fetchMock)

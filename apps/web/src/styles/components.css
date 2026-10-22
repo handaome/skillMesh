@@ -87,6 +87,52 @@
 .sm-mine-meta { align-items: flex-end; gap: 4px; }
 .sm-mine-detail { min-width: 0; }
 
+/* 文件浏览器：抽屉占满大半屏，点开就在眼前 */
+.sm-files {
+  width: min(1320px, 94vw);
+  max-width: none;
+  height: min(820px, 92vh);
+  max-height: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sheet);
+  background: var(--surface);
+  color: var(--text);
+  overflow: hidden;
+}
+.sm-files::backdrop { background: rgb(19 20 22 / 45%); }
+.sm-files[open] { display: flex; flex-direction: column; }
+.sm-files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.sm-files-title { font-weight: 600; }
+.sm-files-close {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.sm-files-close:hover { background: var(--raised); color: var(--text); }
+.sm-files-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--pad);
+}
+/* 文件少的 Skill 不需要一棵宽树：面板跟着内容窄下来，正文多留地方。 */
+.sm-files-body.sm-files-narrow { grid-template-columns: 220px minmax(0, 1fr); }
+
 /* 文件浏览器：左树右内容 */
 .sm-browser {
   display: grid;
@@ -102,7 +148,9 @@
   max-height: 420px;
   overflow: auto;
 }
+.sm-files-body .sm-browser-side { max-height: none; height: 100%; }
 .sm-browser-main { min-width: 0; }
+.sm-files-body .sm-browser-main { height: 100%; overflow: auto; }
 .sm-browser-head {
   display: flex;
   align-items: baseline;

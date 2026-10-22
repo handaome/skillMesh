@@ -434,18 +434,16 @@ onMounted(load)
     </div>
 
     <!--
-      文件浏览占整行：塞在右栏里的话，树与正文都只剩几百像素，
-      看不清路径也读不了代码。
+      文件浏览做成抽屉：点「浏览文件」就滑出来，不用在一屏内容里找它。
+      组件挂上即打开，关掉即卸载。
     -->
-    <div v-if="browseVersion && selected" class="sm-mt-16">
-      <div class="sm-panel">
-        <div class="sm-panel-head">
-          <h2 class="sm-h2">文件</h2>
-          <span class="sm-meta">{{ selected.slug }} · {{ browseVersion }}</span>
-        </div>
-        <FileBrowser :skill-id="selected.id" :version="browseVersion" />
-      </div>
-    </div>
+    <FileBrowser
+      v-if="browseVersion && selected"
+      :skill-id="selected.id"
+      :version="browseVersion"
+      :label="`${selected.slug} · ${browseVersion}`"
+      @close="browseVersion = ''"
+    />
 
     <el-dialog
       v-model="creating"

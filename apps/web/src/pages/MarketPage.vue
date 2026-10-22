@@ -149,7 +149,8 @@ watch(
         表格只在有数据时渲染：Element Plus 自带的「No Data」也是一句谎话
         （读失败不是没有版本），跟上面的错误条并排会把人读歪。
       -->
-      <el-table v-if="!versionsLoading && versions.length > 0" :data="versions" size="small">
+      <div v-if="versionsLoading" class="sm-empty">加载中…</div>
+      <el-table v-else-if="versions.length > 0" :data="versions" size="small">
         <el-table-column prop="version" label="版本" width="120" />
         <el-table-column prop="status" label="状态" width="120" />
         <el-table-column prop="channel" label="通道" width="100" />
@@ -181,10 +182,14 @@ watch(
         text="还没有版本"
       />
 
-      <!-- 在线浏览这个版本里的文件。 -->
-      <div v-if="browseVersion" class="sm-mt-16">
-        <FileBrowser :skill-id="detail.id" :version="browseVersion" />
-      </div>
+      <!-- 在线浏览这个版本里的文件。挂载即打开抽屉。 -->
+      <FileBrowser
+        v-if="browseVersion"
+        :skill-id="detail.id"
+        :version="browseVersion"
+        :label="`${detail.slug} · ${browseVersion}`"
+        @close="browseVersion = ''"
+      />
     </template>
   </div>
 

@@ -90,14 +90,27 @@ try {
   await sleep(2000)
   await shot(page, 'mine-file-content')
 
-  // 滚到文件浏览器那一段
-  await page.eval(`(() => {
-    const el = document.querySelector('[data-test="file-tree"]');
-    if (el) el.scrollIntoView({ block: 'center' });
-    return true;
+  // 市场页的浏览入口
+  await page.goto(`${CFG.web}/`)
+  await sleep(1000)
+  await page.realClick('[data-test="search"]')
+  await sleep(1500)
+  const item = await page.eval(`(() => {
+    const el = document.querySelector('[data-test="skill-item"]');
+    if (!el) return null;
+    el.click();
+    return el.innerText.slice(0, 40);
   })()`)
-  await sleep(800)
-  await shot(page, 'mine-files-scrolled')
+  console.log('市场页点了:', item)
+  // 版本列表接口在远程 PG 上要 2 秒，等够
+  await sleep(5000)
+  const browse = await page.eval(`!!document.querySelector('[data-test="browse-files"]')`)
+  console.log('市场页有浏览按钮:', browse)
+  if (browse) {
+    await page.realClick('[data-test="browse-files"]')
+    await sleep(2500)
+    await shot(page, 'market-files')
+  }
 } finally {
   proc.kill()
 }

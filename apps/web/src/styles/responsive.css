@@ -35,6 +35,10 @@
   .sm-mine { grid-template-columns: minmax(0, 1fr); }
   .sm-browser { grid-template-columns: minmax(0, 1fr); }
   .sm-browser-side { max-height: 240px; }
+  /* 抽屉在窄屏铺满，树在上内容在下 */
+  .sm-files { width: 100vw; height: 100vh; border-radius: 0; border: 0; }
+  .sm-files-body { grid-template-columns: minmax(0, 1fr); }
+  .sm-files-body .sm-browser-side { max-height: 40vh; }
 }
 
 @media (max-width: 480px) {
