@@ -23,7 +23,11 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${SM_KEYCLOAK_ISSUER}
+          # issuer-uri 会连带做 iss 校验。容器内外 issuer 天然不一致
+          # （容器里的 127.0.0.1 指自己），所以 compose 里改用 jwk-set-uri：
+          # 只验签名，不校验 iss。两个都空则没有 JwtDecoder，启动会失败。
+          issuer-uri: ${SM_KEYCLOAK_ISSUER:}
+          jwk-set-uri: ${SM_KEYCLOAK_JWK_SET_URI:}
 
 server:
   port: 8080
