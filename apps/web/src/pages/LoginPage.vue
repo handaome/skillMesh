@@ -70,26 +70,27 @@ onMounted(async () => {
 
 <template>
   <div class="sm-login">
-    <div class="sm-login-mark" />
-    <h1 class="sm-h1">SkillMesh</h1>
-    <p class="sm-muted sm-mb-16">
+    <!-- 标记与侧栏同一个：四块拼成的网。 -->
+    <svg class="sm-login-mark" viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="1" y="1" width="7" height="7" rx="1.5" />
+      <rect x="12" y="1" width="7" height="7" rx="1.5" />
+      <rect x="1" y="12" width="7" height="7" rx="1.5" />
+      <rect x="12" y="12" width="7" height="7" rx="1.5" fill="currentColor" />
+    </svg>
+    <h1 class="sm-title">SkillMesh</h1>
+    <p class="sm-muted sm-mb-24">
       Agent Skill 的注册中心：管理你自己的 Skill，把版本发给团队，在发布前审一道。
     </p>
-    <el-alert
-      v-if="error"
-      data-test="error"
-      :title="error"
-      type="error"
-      :closable="false"
-      show-icon
-      class="sm-mb-16"
-    />
-    <el-button
-      type="primary"
-      :loading="busy"
+    <p v-if="error" class="sm-note sm-note--error sm-mb-16" data-test="error">
+      {{ error }}
+    </p>
+    <button
+      class="sm-btn sm-btn--primary sm-btn--block"
+      :disabled="busy"
       data-test="login"
-      class="sm-login-btn"
       @click="startLogin"
-    >{{ busy ? '登录中' : '用团队账号登录' }}</el-button>
+    >
+      {{ busy ? '登录中' : '用团队账号登录' }}
+    </button>
   </div>
 </template>

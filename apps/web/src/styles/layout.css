@@ -1,7 +1,8 @@
-/* 布局：左侧栏 + 右侧白色工作表。
-   侧栏与顶栏共用同一块染色底（--ground），中间没有分隔线；内容坐在白纸上，
-   右边与下边各留 8px 露出底色。 */
+/* 布局：左侧栏 + 右侧画布。
+   侧栏与画布共用同一块底色，中间一根 1px 线——不做外框，
+   画布自己就是内容。页面标题与卡片直接坐在底色上。 */
 
+/* 侧栏宽度 + 画布留白 = 1440 下的内容宽度：248 + 2×36 + 内容。 */
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -16,28 +17,30 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 16px 12px;
+  padding: 20px 12px 16px;
+  border-right: 1px solid var(--border);
   overflow: auto;
 }
 .side-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px 14px;
-  font-size: var(--fs-body);
+  gap: 9px;
+  padding: 0 8px 18px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
+/* 产品标记：网格交织的四角，取自 SkillMesh 的「网」字。 */
 .side-brand .sm-mark {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   flex: none;
-  border-radius: 5px;
-  background: var(--accent);
+  color: var(--data);
 }
+
 /* 工作空间切换器：侧栏顶端，说清当前在看哪个组织 */
-.sm-side-org { margin: 0 4px 14px; width: calc(100% - 8px); }
+.sm-side-org { margin: 0 4px 16px; width: calc(100% - 8px); }
+
 .side-nav { display: flex; flex-direction: column; gap: 2px; }
 .side-group {
   margin: 18px 8px 6px;
@@ -48,15 +51,17 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 32px;
-  padding: 0 8px;
-  border-radius: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
   color: var(--muted);
+  font-size: var(--fs-body);
   transition: background-color var(--t-hover) ease, color var(--t-hover) ease;
 }
 .side-item:hover { background: var(--raised); color: var(--text); }
-.side-item.router-link-active { background: var(--active); color: var(--text); }
-.side-item .el-icon { width: 16px; height: 16px; flex: none; }
+.side-item.router-link-active { background: var(--active); color: var(--text); font-weight: 500; }
+.side-item .sm-nav-icon { width: 16px; height: 16px; flex: none; color: currentColor; }
+
 /* 账号行：侧栏底部 */
 .side-foot { margin-top: auto; padding-top: 16px; }
 .sm-side-user {
@@ -64,39 +69,29 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
 }
 
 /* 窄屏才出现的菜单条 */
 .sm-mobilebar { display: none; }
 
-/* 工作表：白纸，边框 + 圆角，没有阴影 */
-.sheet {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sheet);
-  margin: 0 var(--sheet-inset) var(--sheet-inset) 0;
-  padding: var(--pad);
-  min-height: calc(100vh - var(--sheet-inset));
-  min-width: 0;
-}
-.sheet-wide { max-width: none; }
-
-/* 右列：菜单条 + 工作表 */
+/* 画布 */
 .sm-col {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+.sheet {
+  padding: 32px 36px 56px;
+  min-width: 0;
+  min-height: 100vh;
 }
 
 /* 未登录时的裸页面（登录页、邀请页） */
 .sm-bare {
   min-height: 100vh;
   display: grid;
-  place-items: start center;
+  place-items: center;
   padding: 24px;
 }
-
-
-
-/* 窄屏的折叠规则在 responsive.css 里，不散落在布局文件里。 */

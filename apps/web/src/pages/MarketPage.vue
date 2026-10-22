@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, getSkill, getVersions, searchSkills } from '../api'
 import type { Skill, SkillVersion } from '../types'
@@ -115,76 +115,77 @@ watch(
   },
   { immediate: true },
 )
+
+// 进页面就把能看见的 Skill 列出来：市场是一张目录，
+// 空着让人先输关键词，等于让第一屏什么都不回答。
+onMounted(search)
 </script>
 
 <template>
-  <el-alert
-    v-if="error"
-    data-test="error"
-    :title="error"
-    type="error"
-    :closable="false"
-    show-icon
-    class="sm-mb-16"
-  />
+  <p v-if="error" class="sm-note sm-note--error sm-mb-16" data-test="error">
+    {{ error }}
+  </p>
 
   <div v-if="openId" class="sm-panel">
-    <el-button text data-test="back" class="sm-mb-12" @click="back">← 返回</el-button>
+    <button class="sm-btn sm-btn--quiet sm-btn--sm sm-mb-12" data-test="back" @click="back">
+      ← 返回市场
+    </button>
     <template v-if="detail">
       <div class="sm-title-row">
         <div>
-          <h1 class="sm-h1">{{ detail.name }}</h1>
+          <h1 class="sm-title">{{ detail.name }}</h1>
           <p class="sm-sub sm-mono">{{ detail.slug }}</p>
         </div>
         <div class="sm-row">
           <span class="sm-pill">
             {{ VISIBILITY_TEXT[detail.visibility] ?? detail.visibility }}
           </span>
-          <span class="sm-pill sm-pill-accent">最新 {{ detail.latest_version ?? '—' }}</span>
+          <span class="sm-pill sm-pill-data">最新 {{ detail.latest_version ?? '—' }}</span>
         </div>
       </div>
       <p class="sm-muted sm-mb-24">{{ detail.description }}</p>
 
-      <h2 class="sm-h2 sm-mb-12">版本</h2>
+      <h2 class="sm-section sm-mb-12">版本</h2>
       <!--
-        表格只在有数据时渲染：Element Plus 自带的「No Data」也是一句谎话
-        （读失败不是没有版本），跟上面的错误条并排会把人读歪。
+        表格只在有数据时渲染：读失败不是「没有版本」，
+        跟上面的错误条并排会把人读歪。
       -->
       <div v-if="versionsLoading" class="sm-empty">加载中…</div>
-      <el-table v-else-if="versions.length > 0" :data="versions" size="small">
-        <el-table-column prop="version" label="版本" width="120" />
-        <el-table-column prop="status" label="状态" width="120" />
-        <el-table-column prop="channel" label="通道" width="100" />
-        <el-table-column label="提交" min-width="140">
-          <template #default="scope">
-            <span class="sm-mono">{{ scope.row.source_commit ?? '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="摘要" min-width="140">
-          <template #default="scope">
-            <span class="sm-mono">{{ scope.row.artifact?.sha256.slice(0, 12) ?? '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="时间" min-width="150">
-          <template #default="scope">
-            <span class="sm-text-sm" data-test="version-time">
-              {{ formatDateTime(scope.row.created_at) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="" width="100">
-          <template #default="scope">
-            <el-button
-              v-if="scope.row.artifact"
-              text
-              data-test="browse-files"
-              @click="browseVersion = browseVersion === scope.row.version ? '' : scope.row.version"
-            >
-              {{ browseVersion === scope.row.version ? '收起' : '浏览文件' }}
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div v-else-if="versions.length" class="sm-table-scroll">
+        <table class="sm-table sm-table--flush">
+          <thead>
+            <tr>
+              <th>版本</th>
+              <th>状态</th>
+              <th>通道</th>
+              <th>提交</th>
+              <th>摘要</th>
+              <th class="sm-num">创建时间</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="version in versions" :key="version.id">
+              <td class="sm-mono">{{ version.version }}</td>
+              <td>{{ version.status }}</td>
+              <td>{{ version.channel }}</td>
+              <td class="sm-mono sm-break">{{ version.source_commit ?? '—' }}</td>
+              <td class="sm-mono">{{ version.artifact?.sha256.slice(0, 12) ?? '—' }}</td>
+              <td class="sm-num" data-test="version-time">{{ formatDateTime(version.created_at) }}</td>
+              <td class="sm-actions">
+                <button
+                  v-if="version.artifact"
+                  class="sm-btn sm-btn--quiet sm-btn--sm"
+                  data-test="browse-files"
+                  @click="browseVersion = browseVersion === version.version ? '' : version.version"
+                >
+                  {{ browseVersion === version.version ? '收起' : '浏览文件' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <EmptyState
         v-if="!versionsLoading && !error && !versions.length"
         text="还没有版本"
@@ -204,30 +205,33 @@ watch(
   <section v-else>
     <div class="sm-title-row">
       <div>
-        <h1 class="sm-h1">市场</h1>
+        <h1 class="sm-title">市场</h1>
         <p class="sm-sub">你能看见的 Skill：公开的，加上团队与组织里共享的。</p>
       </div>
     </div>
 
     <div class="sm-toolbar">
-      <el-input
+      <input
         v-model="query"
-        class="sm-search"
+        class="sm-input sm-search"
+        type="search"
         placeholder="搜索 Skill 名称、描述或标签"
-        clearable
         @keyup.enter="search"
       />
-      <el-button type="primary" :loading="loading" data-test="search" @click="search">
+      <!-- 搜索按钮不禁用：正在加载时再点一次只是多发一次请求，
+           禁掉反而让人以为搜索坏了。 -->
+      <button class="sm-btn sm-btn--primary" data-test="search" @click="search">
         搜索
-      </el-button>
-      <span v-if="searched && !error" class="sm-muted sm-text-sm sm-num">
+      </button>
+      <span class="sm-spacer" />
+      <span v-if="searched && !error" class="sm-muted sm-sm sm-num">
         {{ skills.length }} 个
       </span>
     </div>
 
     <EmptyState
       v-if="!error && searched && !skills.length"
-      text="没有匹配的 Skill"
+      :text="query ? '没有匹配的 Skill，换个词试试。' : '现在还没有你能看见的 Skill。团队里有人发布后就会出现在这里。'"
     />
 
     <div v-else-if="!error" class="sm-list">
@@ -238,18 +242,23 @@ watch(
         data-test="skill-item"
         @click="open(skill.id)"
       >
-        <div class="sm-grow">
+        <div class="sm-item-body">
           <div class="sm-item-head">
-            <strong class="sm-truncate">{{ skill.name }}</strong>
-            <code class="sm-mono sm-muted">{{ skill.slug }}</code>
+            <strong class="sm-item-title sm-truncate">{{ skill.name }}</strong>
+            <!-- slug 与名字常常一样，重复两遍只是噪声。 -->
+            <code v-if="skill.slug !== skill.name" class="sm-mono sm-muted sm-meta sm-truncate">
+              {{ skill.slug }}
+            </code>
           </div>
-          <p class="sm-muted sm-text-sm sm-truncate">{{ skill.description }}</p>
+          <p class="sm-muted sm-meta sm-truncate">{{ skill.description }}</p>
         </div>
-        <div class="sm-col sm-mine-meta">
+        <div class="sm-row sm-mine-meta">
           <span class="sm-pill">
             {{ VISIBILITY_TEXT[skill.visibility] ?? skill.visibility }}
           </span>
-          <span class="sm-muted sm-text-sm sm-num">最新 {{ skill.latest_version ?? '—' }}</span>
+          <span class="sm-muted sm-meta sm-num">
+            <span class="sm-faint">最新</span> {{ skill.latest_version ?? '—' }}
+          </span>
         </div>
       </button>
     </div>

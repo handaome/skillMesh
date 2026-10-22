@@ -11,8 +11,6 @@
     "e2e": "node e2e/v2-console.mjs"
   },
   "dependencies": {
-    "@element-plus/icons-vue": "^2.3.2",
-    "element-plus": "^2.14.7",
     "vue": "^3.5.13",
     "vue-router": "^4.6.4"
   },

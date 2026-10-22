@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
 import TeamPage from '../src/pages/TeamPage.vue'
 import ReviewDetailPage from '../src/pages/ReviewDetailPage.vue'
 import { currentOrg, selectOrganization } from '../src/auth/currentOrg'
@@ -45,7 +44,7 @@ async function mountTeam() {
   })
   await router.push('/team')
   await router.isReady()
-  const wrapper = mount(TeamPage, { global: { plugins: [router, ElementPlus] } })
+  const wrapper = mount(TeamPage, { global: { plugins: [router] } })
   await flushPromises()
   return wrapper
 }
@@ -57,7 +56,7 @@ async function mountDetail(item: Record<string, unknown>) {
   })
   await router.push('/reviews/s1/1.0.0')
   await router.isReady()
-  const wrapper = mount(ReviewDetailPage, { global: { plugins: [router, ElementPlus] } })
+  const wrapper = mount(ReviewDetailPage, { global: { plugins: [router] } })
   await flushPromises()
   return wrapper
 }
@@ -88,15 +87,15 @@ describe('B1 换组织时旧组织的慢响应', () => {
     selectOrganization('org2')
     await flushPromises()
     expect(currentOrg.value?.id).toBe('org2')
-    const otherTeam = wrapper.findAllComponents({ name: 'ElOption' })
-      .map((o) => o.props('label'))
+    const otherTeam = wrapper.findAll('select[data-test="team-select"] option')
+      .map((o) => o.text())
     expect(otherTeam).toContain('OtherTeam')
 
     // org1 的慢响应这时才落地——不能把 org2 的数据盖掉
     releaseOrg1(jsonResponse([TEAM]))
     await flushPromises()
 
-    const labels = wrapper.findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'))
+    const labels = wrapper.findAll('select[data-test="team-select"] option').map((o) => o.text())
     expect(labels).toContain('OtherTeam')
     expect(labels).not.toContain('Platform')
   })

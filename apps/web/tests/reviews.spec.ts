@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
 import ReviewQueuePage from '../src/pages/ReviewQueuePage.vue'
 import ReviewDetailPage from '../src/pages/ReviewDetailPage.vue'
 
@@ -33,11 +32,11 @@ describe('ReviewQueuePage', () => {
     })
     await router.push('/reviews')
     await router.isReady()
-    const wrapper = mount(ReviewQueuePage, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mount(ReviewQueuePage, { global: { plugins: [router] } })
     await flushPromises()
 
     expect(wrapper.find('[data-test="review-item"]').text()).toContain('Runbook')
-    expect(wrapper.text()).toContain('扫描 passed')
+    expect(wrapper.text()).toContain('扫描通过')
   })
 
   it('没有待审时给出空态', async () => {
@@ -48,7 +47,7 @@ describe('ReviewQueuePage', () => {
     })
     await router.push('/reviews')
     await router.isReady()
-    const wrapper = mount(ReviewQueuePage, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mount(ReviewQueuePage, { global: { plugins: [router] } })
     await flushPromises()
     expect(wrapper.text()).toContain('没有待审的版本')
   })
@@ -75,7 +74,7 @@ describe('ReviewDetailPage', () => {
     })
     await router.push('/reviews/s1/1.0.0')
     await router.isReady()
-    const wrapper = mount(ReviewDetailPage, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mount(ReviewDetailPage, { global: { plugins: [router] } })
     await flushPromises()
 
     expect(wrapper.find('[data-test="skill-md"]').text()).toContain('Runbook')

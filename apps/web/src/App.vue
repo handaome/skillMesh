@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Grid, Menu, Tickets, User } from '@element-plus/icons-vue'
 import { currentOrg, selectOrganization } from './auth/currentOrg'
 import { ensureFresh, loadMe, logoutEndingSession, meError, session } from './auth/session'
+import AppIcon from './components/AppIcon.vue'
 
 const router = useRouter()
 
@@ -18,6 +18,13 @@ const navOpen = ref(false)
 
 /** 没登录时只留内容，不给侧栏与顶栏：登录页与邀请页自己占满整屏。 */
 const signedIn = computed(() => Boolean(session.accessToken))
+
+const NAV = [
+  { to: '/', label: '市场', icon: 'market' as const },
+  { to: '/mine', label: '我的 Skill', icon: 'box' as const },
+  { to: '/team', label: '团队', icon: 'users' as const },
+  { to: '/reviews', label: '审核', icon: 'review' as const },
+]
 
 /**
  * 拉一次 /me。失败要说出来——静默失败时团队页会对真正的组织成员说
@@ -65,56 +72,55 @@ function signOut() {
   <div v-else class="app">
     <aside class="side" :class="{ open: navOpen }">
       <router-link class="side-brand" to="/" @click="navOpen = false">
-        <span class="sm-mark" />
+        <!-- 标记：四块拼成的网，取自 SkillMesh 的「网」。 -->
+        <svg class="sm-mark" viewBox="0 0 20 20" aria-hidden="true">
+          <rect x="1" y="1" width="7" height="7" rx="1.5" />
+          <rect x="12" y="1" width="7" height="7" rx="1.5" />
+          <rect x="1" y="12" width="7" height="7" rx="1.5" />
+          <rect x="12" y="12" width="7" height="7" rx="1.5" fill="currentColor" />
+        </svg>
         SkillMesh
       </router-link>
 
-      <!-- 工作空间切换器：你在哪个组织里看，团队页就跟着谁。 -->
-      <el-select
+      <!-- 工作空间切换器：侧栏顶端，说清当前在看哪个组织 -->
+      <select
         v-if="session.organizations.length"
         v-model="orgId"
         data-test="org-switch"
-        size="small"
-        class="sm-side-org"
+        class="sm-select sm-side-org"
+        aria-label="当前组织"
       >
-        <el-option
+        <option
           v-for="o in session.organizations"
           :key="o.id"
-          :label="o.name"
           :value="o.id"
-        />
-      </el-select>
+        >
+          {{ o.name }}
+        </option>
+      </select>
 
       <nav class="side-nav">
-        <router-link class="side-item" to="/" @click="navOpen = false">
-          <el-icon><Grid /></el-icon>市场
-        </router-link>
-        <router-link class="side-item" to="/mine" @click="navOpen = false">
-          <el-icon><Box /></el-icon>我的 Skill
-        </router-link>
-        <router-link class="side-item" to="/team" @click="navOpen = false">
-          <el-icon><User /></el-icon>团队
-        </router-link>
-        <router-link class="side-item" to="/reviews" @click="navOpen = false">
-          <el-icon><Tickets /></el-icon>审核
+        <router-link
+          v-for="item in NAV"
+          :key="item.to"
+          class="side-item"
+          :to="item.to"
+          @click="navOpen = false"
+        >
+          <AppIcon class="sm-nav-icon" :name="item.icon" />
+          {{ item.label }}
         </router-link>
       </nav>
 
       <div class="side-foot">
-        <el-alert
-          v-if="meError"
-          data-test="me-error"
-          :title="meError"
-          type="error"
-          :closable="false"
-          show-icon
-          class="sm-mb-8"
-        />
+        <p v-if="meError" class="sm-note sm-note--error sm-mb-8" data-test="me-error">
+          {{ meError }}
+        </p>
         <div class="sm-side-user">
-          <el-tag v-if="session.user" type="info" effect="plain" data-test="who">
-            {{ session.user.display_name }}
-          </el-tag>
-          <el-button text data-test="logout" @click="signOut">登出</el-button>
+          <span class="sm-sm sm-muted" data-test="who">{{ session.user?.display_name }}</span>
+          <button class="sm-btn sm-btn--quiet sm-btn--sm" data-test="logout" @click="signOut">
+            登出
+          </button>
         </div>
       </div>
     </aside>
@@ -122,15 +128,14 @@ function signOut() {
     <div class="sm-col">
       <!-- 窄屏才出现的菜单条：侧栏收起来后，这里是唯一的入口。 -->
       <header class="sm-mobilebar">
-        <el-button
-          class="menu-toggle"
-          text
+        <button
+          class="sm-btn sm-btn--quiet menu-toggle"
           data-test="menu"
           aria-label="菜单"
           @click="navOpen = !navOpen"
         >
-          <el-icon><Menu /></el-icon>
-        </el-button>
+          <AppIcon name="menu" />
+        </button>
         <span class="sm-mobilebar-title">SkillMesh</span>
       </header>
 

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
 import { codeChallenge, randomVerifier } from '../src/auth/pkce'
 import { ensureFresh, session, logout } from '../src/auth/session'
 import { searchSkills } from '../src/api'
@@ -68,7 +67,7 @@ describe('LoginPage', () => {
     })
     await router.push('/login')
     await router.isReady()
-    const wrapper = mount(LoginPage, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mount(LoginPage, { global: { plugins: [router] } })
     await flushPromises()
     expect(wrapper.find('[data-test="login"]').exists()).toBe(true)
   })
@@ -85,7 +84,7 @@ describe('LoginPage', () => {
     })
     await router.push('/login?code=abc&state=forged')
     await router.isReady()
-    const wrapper = mount(LoginPage, { global: { plugins: [router, ElementPlus] } })
+    const wrapper = mount(LoginPage, { global: { plugins: [router] } })
     await flushPromises()
 
     expect(wrapper.find('[data-test="error"]').exists()).toBe(true)
@@ -108,7 +107,7 @@ describe('LoginPage', () => {
     })
     await router.push('/login?code=abc&state=st')
     await router.isReady()
-    mount(LoginPage, { global: { plugins: [router, ElementPlus] } })
+    mount(LoginPage, { global: { plugins: [router] } })
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalled()

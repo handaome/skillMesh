@@ -158,42 +158,42 @@ async function login(page, user, pass, doneExpr = `!!document.querySelector('[da
   await page.realClick('#kc-login')
   await page.waitFor(`location.href.startsWith('${CFG.web}')`, { label: '回到前端', timeout: 30000 })
   await page.waitFor(doneExpr, { label: '登录后落地', timeout: 20000 })
+  // 等用户名真的出现：元素挂上时 /me 还没回来，里面是空的。
+  await page.waitFor(
+    `(document.querySelector('[data-test="who"]')||{}).textContent?.trim()?.length > 0`,
+    { label: '顶栏用户名', timeout: 20000 },
+  )
 }
 
-/** 在 Element Plus 的下拉里选一项：先点开，再点那一项。 */
+/** 在原生 select 里选一项：设好 value 再派发 change，界面就走同一套更新路径。 */
 async function pickOption(page, rowSelector, rowText, optionText) {
   await page.eval(`(() => {
     const row = [...document.querySelectorAll(${JSON.stringify(rowSelector)})]
       .find((r) => r.innerText.includes(${JSON.stringify(rowText)}));
     if (!row) throw new Error('找不到行 ' + ${JSON.stringify(rowText)});
-    row.querySelector('[data-test="role-edit"] .el-select__wrapper').click();
+    const select = row.querySelector('[data-test="role-edit"]');
+    const option = [...select.options].find((o) => o.textContent.trim() === ${JSON.stringify(optionText)});
+    if (!option) throw new Error('找不到选项 ' + ${JSON.stringify(optionText)});
+    select.value = option.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
-  })()`)
-  await page.waitFor(
-    `[...document.querySelectorAll('.el-select-dropdown__item')].some((e) => e.offsetParent !== null && e.innerText.trim() === ${JSON.stringify(optionText)})`,
-    { label: `下拉项 ${optionText}` },
-  )
-  await page.eval(`(() => {
-    const item = [...document.querySelectorAll('.el-select-dropdown__item')]
-      .filter((e) => e.offsetParent !== null).find((e) => e.innerText.trim() === ${JSON.stringify(optionText)});
-    item.click(); return true;
   })()`)
 }
 
-/** 等某人的角色列变成目标值——点完下拉，表格要等接口回来才刷新。 */
+/** 等某人的角色列变成目标值——改完角色，表格要等接口回来才刷新。 */
 async function waitRole(page, who, want, timeout = 15000) {
   return page.waitFor(`(() => {
     const row = [...document.querySelectorAll('tr')].find((r) => r.innerText.includes(${JSON.stringify(who)}));
     if (!row) return false;
     const el = row.querySelector('[data-test="role-edit"]');
-    return el ? el.innerText.trim() === ${JSON.stringify(want)} : false;
+    return el ? el.value === ${JSON.stringify(want)} : false;
   })()`, { timeout, label: `${who} 的角色变 ${want}` })
 }
 
 async function roleOf(page, who) {
   return page.eval(`(() => {
     const row = [...document.querySelectorAll('tr')].find((r) => r.innerText.includes(${JSON.stringify(who)}));
-    return row ? row.querySelector('[data-test="role-edit"]').innerText.trim() : null;
+    return row ? row.querySelector('[data-test="role-edit"]').value : null;
   })()`)
 }
 
@@ -213,6 +213,21 @@ const teams = await api(`/organizations/${org.id}/teams`, { token: tokenA })
 const team = (teams ?? []).find((t) => t.slug === CFG.team)
 if (!team) throw new Error(`组织 ${CFG.org} 下没有团队 ${CFG.team}`)
 mark(`组织 ${org.slug} / 团队 ${team.slug} 就位`)
+
+// B 账号要先有 publisher 才能发版。上一轮跑完可能把它留在别的角色上
+//（脚本第 4 步会来回改角色），这里先摆平，脚本才能重复跑。
+const meB = await api('/me', { token: tokenB })
+const orgB = (meB.organizations ?? []).find((o) => o.slug === CFG.org)
+if (!orgB) throw new Error(`账号 ${CFG.userB} 不是组织 ${CFG.org} 的成员`)
+if (!['publisher', 'owner', 'admin'].includes(orgB.role)) {
+  const members = await api(`/organizations/${org.id}/members`, { token: tokenA })
+  const memberB = (members ?? []).find((m) => m.display_name === meB.user?.display_name)
+  if (!memberB) throw new Error(`成员表里找不到 ${CFG.userB}`)
+  await api(`/organizations/${org.id}/members/${memberB.user_id}`, {
+    method: 'PATCH', token: tokenA, body: { role: 'publisher' },
+  })
+  mark(`把 ${CFG.userB} 的组织角色提回 publisher（原为 ${orgB.role}）`)
+}
 
 const { version } = await submitPendingVersion(tokenB, org.id, team.id)
 mark(`已提交待审版本 ${CFG.slug} ${version}`)
@@ -239,7 +254,9 @@ try {
   step('3. 团队页列出组织成员', members.length >= 2, members.join(' / '))
 
   // ---- 改组织角色（不选团队时改的是组织角色）----
-  const other = members.find((m) => m !== who) ?? members[1]
+  // 找另一个成员：自己不能改（服务端会挡），要拿别人的行来试。
+  const other = members.find((m) => m.trim() !== who.trim())
+  if (!other) throw new Error('只有自己一个成员，改不了别人的角色')
   await pickOption(a, 'tr', other, 'publisher')
   await waitRole(a, other, 'publisher')
   await pickOption(a, 'tr', other, 'member')
@@ -252,23 +269,19 @@ try {
 
   // ---- 选中团队：列标题变成「团队角色」----
   await a.eval(`(() => {
-    document.querySelector('[data-test="team-select"] .el-select__wrapper').click(); return true;
-  })()`)
-  await a.waitFor(
-    `[...document.querySelectorAll('.el-select-dropdown__item')].some((e) => e.offsetParent !== null && e.innerText.trim() === '${team.name}')`,
-    { label: '团队选项' },
-  )
-  await a.eval(`(() => {
-    const item = [...document.querySelectorAll('.el-select-dropdown__item')]
-      .filter((e) => e.offsetParent !== null).find((e) => e.innerText.trim() === ${JSON.stringify(team.name)});
-    item.click(); return true;
+    const select = document.querySelector('[data-test="team-select"]');
+    const option = [...select.options].find((o) => o.textContent.trim() === ${JSON.stringify(team.name)});
+    if (!option) throw new Error('下拉里没有团队 ' + ${JSON.stringify(team.name)});
+    select.value = option.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
   })()`)
   await sleep(1200)
   const columnTitle = await a.eval(`(() => {
     const th = [...document.querySelectorAll('th')].find((t) => t.innerText.includes('角色'));
     return th ? th.innerText.trim() : null;
   })()`)
-  step('6. 选中团队后列标题变成「团队角色」', columnTitle === '团队角色', `列标题=${columnTitle}`)
+  step('6. 选中团队后列标题变成「团队角色」', columnTitle?.startsWith('团队角色') === true, `列标题=${columnTitle}`)
 
   // ---- 生成邀请 ----
   await a.realClick('[data-test="invite"]')
@@ -333,19 +346,19 @@ try {
   await a.goto(`${CFG.web}/team`)
   await a.waitFor(`!!document.querySelector('[data-test="member-row"]')`, { label: '成员表', timeout: 30000 })
   await a.eval(`(() => {
-    const row = [...document.querySelectorAll('tr')].find((r) => r.innerText.includes(${JSON.stringify(who)}) && !r.innerText.includes('Two'));
+    // 按名字精确找自己的那一行：靠 'Two' 排除别人，换个名字就失效了。
+    const row = [...document.querySelectorAll('tr')].find((r) => {
+      const name = r.querySelector('[data-test="member-row"]');
+      return name && name.textContent.trim() === ${JSON.stringify(who)};
+    });
     if (!row) throw new Error('找不到自己的行');
-    row.querySelector('[data-test="role-edit"] .el-select__wrapper').click();
+    const select = row.querySelector('[data-test="role-edit"]');
+    if (!select) throw new Error('这一行没有角色下拉');
+    const option = [...select.options].find((o) => o.textContent.trim() === 'member');
+    if (!option) throw new Error('下拉里没有 member');
+    select.value = option.value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
-  })()`)
-  await a.waitFor(
-    `[...document.querySelectorAll('.el-select-dropdown__item')].some((e) => e.offsetParent !== null && e.innerText.trim() === 'member')`,
-    { label: '下拉里的 member' },
-  )
-  await a.eval(`(() => {
-    const item = [...document.querySelectorAll('.el-select-dropdown__item')]
-      .filter((e) => e.offsetParent !== null).find((e) => e.innerText.trim() === 'member');
-    item.click(); return true;
   })()`)
   await a.waitFor(`!!document.querySelector('[data-test="error"]')`, { label: '页面报错提示', timeout: 20000 })
   const errText = await a.text('[data-test="error"]')

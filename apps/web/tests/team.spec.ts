@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
 import TeamPage from '../src/pages/TeamPage.vue'
 import { session } from '../src/auth/session'
 
@@ -29,7 +28,7 @@ async function mountTeam() {
   const router = makeRouter()
   await router.push('/team')
   await router.isReady()
-  const wrapper = mount(TeamPage, { global: { plugins: [router, ElementPlus] } })
+  const wrapper = mount(TeamPage, { global: { plugins: [router] } })
   await flushPromises()
   return wrapper
 }
@@ -90,16 +89,16 @@ describe('TeamPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountTeam()
 
-    const roleEdit = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="role-edit"]')
-    roleEdit.vm.$emit('change', 'publisher')
+    const roleEdit = wrapper.find('select[data-test="role-edit"]')
+    await roleEdit.setValue('publisher')
     await flushPromises()
 
     const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
     expect(patch?.[0]).toBe('/api/v1/organizations/org1/members/u1')
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ role: 'publisher' })
     // PATCH 之后重读列表，界面上的角色才是服务端确认过的值
-    expect(wrapper.find('[data-test="role-edit"]').text()).toBe('publisher')
+    expect((wrapper.find('select[data-test="role-edit"]').element as HTMLSelectElement).value)
+      .toBe('publisher')
   })
 
   it('改角色失败时显示服务端错误码', async () => {
@@ -117,14 +116,14 @@ describe('TeamPage', () => {
     }))
     const wrapper = await mountTeam()
 
-    const roleEdit = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="role-edit"]')
-    roleEdit.vm.$emit('change', 'publisher')
+    const roleEdit = wrapper.find('select[data-test="role-edit"]')
+    await roleEdit.setValue('publisher')
     await flushPromises()
 
     expect(wrapper.find('[data-test="error"]').text()).toContain('FORBIDDEN')
     // 改失败就还是服务端的角色，界面不能先显示一个假的
-    expect(wrapper.find('[data-test="role-edit"]').text()).toBe('member')
+    expect((wrapper.find('select[data-test="role-edit"]').element as HTMLSelectElement).value)
+      .toBe('member')
   })
 
   it('选中团队时改的是团队角色，打到团队路径', async () => {
@@ -142,18 +141,16 @@ describe('TeamPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountTeam()
 
-    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="team-select"]')
-    teamSelect.vm.$emit('update:modelValue', 't1')
-    teamSelect.vm.$emit('change', 't1')
+    const teamSelect = wrapper.find('select[data-test="team-select"]')
+    await teamSelect.setValue('t1')
     await flushPromises()
 
     // 团队视图显示的是团队角色，不是组织角色
-    expect(wrapper.find('[data-test="role-edit"]').text()).toBe('member')
+    expect((wrapper.find('select[data-test="role-edit"]').element as HTMLSelectElement).value)
+      .toBe('member')
 
-    const roleEdit = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="role-edit"]')
-    roleEdit.vm.$emit('change', 'reviewer')
+    const roleEdit = wrapper.find('select[data-test="role-edit"]')
+    await roleEdit.setValue('reviewer')
     await flushPromises()
 
     // 改的是团队角色，打的必须是团队路径（打组织路径就改不到审核放行权那一层）
@@ -175,10 +172,8 @@ describe('TeamPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountTeam()
 
-    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="team-select"]')
-    teamSelect.vm.$emit('update:modelValue', 't1')
-    teamSelect.vm.$emit('change', 't1')
+    const teamSelect = wrapper.find('select[data-test="team-select"]')
+    await teamSelect.setValue('t1')
     await flushPromises()
 
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/teams/t1/members'))).toBe(true)
@@ -200,10 +195,8 @@ describe('TeamPage', () => {
     const wrapper = await mountTeam()
     expect(wrapper.find('[data-test="member-row"]').text()).toContain('Dev Two')
 
-    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="team-select"]')
-    teamSelect.vm.$emit('update:modelValue', 't2')
-    teamSelect.vm.$emit('change', 't2')
+    const teamSelect = wrapper.find('select[data-test="team-select"]')
+    await teamSelect.setValue('t2')
     await flushPromises()
 
     // 响应回来之前，旧团队的行不能还在表里：那行的下拉还能改角色，
@@ -260,10 +253,8 @@ describe('TeamPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountTeam()
 
-    const teamSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="team-select"]')
-    teamSelect.vm.$emit('update:modelValue', 't1')
-    teamSelect.vm.$emit('change', 't1')
+    const teamSelect = wrapper.find('select[data-test="team-select"]')
+    await teamSelect.setValue('t1')
     await flushPromises()
 
     await wrapper.find('[data-test="invite"]').trigger('click')
@@ -319,9 +310,8 @@ describe('TeamPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountTeam()
 
-    const subjectSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
-      '[data-test="invite-subject"]')
-    subjectSelect.vm.$emit('update:modelValue', 'sub-u1')
+    const subjectSelect = wrapper.find('select[data-test="invite-subject"]')
+    await subjectSelect.setValue('sub-u1')
     await flushPromises()
 
     await wrapper.find('[data-test="invite"]').trigger('click')
@@ -352,7 +342,7 @@ describe('TeamPage', () => {
     expect(post?.[0]).toBe('/api/v1/organizations/org1/teams')
     expect(JSON.parse(String(post?.[1]?.body))).toEqual({ slug: 'platform', name: 'Platform' })
     // 建完要出现在团队下拉里
-    const options = wrapper.findAllComponents({ name: 'ElOption' }).map((o) => o.props('label'))
+    const options = wrapper.findAll('select[data-test="team-select"] option').map((o) => o.text())
     expect(options).toContain('Platform')
     expect(wrapper.text()).toContain('团队 Platform 已创建')
   })

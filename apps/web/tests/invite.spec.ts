@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
 import InvitePage from '../src/pages/InvitePage.vue'
 import { currentOrg } from '../src/auth/currentOrg'
 import { session } from '../src/auth/session'
@@ -29,7 +28,7 @@ async function mountInvite() {
   })
   await router.push('/invite/abc')
   await router.isReady()
-  const wrapper = mount(InvitePage, { global: { plugins: [router, ElementPlus] } })
+  const wrapper = mount(InvitePage, { global: { plugins: [router] } })
   await flushPromises()
   return wrapper
 }

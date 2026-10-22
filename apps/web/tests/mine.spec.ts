@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
 import MySkillsPage from '../src/pages/MySkillsPage.vue'
 
 enableAutoUnmount(afterEach)
@@ -30,7 +29,7 @@ async function mountMine() {
   })
   await router.push('/mine')
   await router.isReady()
-  const wrapper = mount(MySkillsPage, { global: { plugins: [router, ElementPlus] } })
+  const wrapper = mount(MySkillsPage, { global: { plugins: [router] } })
   await flushPromises()
   return wrapper
 }

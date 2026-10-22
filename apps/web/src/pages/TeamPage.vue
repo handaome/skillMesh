@@ -57,6 +57,26 @@ const TEAM_ROLE_OPTIONS = ['admin', 'publisher', 'reviewer', 'member', 'viewer']
 /** 角色下拉的选项：选了团队就是团队角色，没选就是组织角色。 */
 const roleOptions = computed(() => (selectedTeam.value ? TEAM_ROLE_OPTIONS : ORG_ROLE_OPTIONS))
 
+/** 邀请历史只列最近几条：几十条记录在页面上没有可读性。 */
+const visibleInvitations = computed(() => invitations.value.slice(0, 8))
+
+/**
+ * 角色是什么意思。表头只说「角色」时没人知道改的是哪一层——
+ * 界面上必须把这层语义说出来。
+ */
+const roleScopeLabel = computed(() =>
+  selectedTeam.value
+    ? `团队角色（${teams.value.find((t) => t.id === selectedTeam.value)?.name ?? ''}）`
+    : '组织角色',
+)
+
+/** 当前角色管的是哪件事。两层角色各管各的：发布权看组织，审核放行看团队。 */
+const roleMeaning = computed(() =>
+  selectedTeam.value
+    ? '管审核放行权：能不能放行这个团队待审的版本。'
+    : '管发布权：能不能发布到组织、能不能建团队与邀请成员。',
+)
+
 function errorText(e: unknown): string {
   return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
 }
@@ -143,20 +163,25 @@ async function load() {
         membersLoading.value = false
       }
     })(),
-    (async () => {
-      invitationsLoading.value = true
-      try {
-        const list = await listInvitations(orgId)
-        if (org.value?.id !== orgId) return
-        invitations.value = list
-      } catch (e) {
-        if (org.value?.id !== orgId) return
-        inviteError.value = errorText(e)
-      } finally {
-        invitationsLoading.value = false
-      }
-    })(),
   ])
+
+  // 邀请列表单独拉：它在远程库上要好几秒，跟成员表并行会把整页拖住，
+  // 让人先看到半张空页面。成员表先落地，邀请后到。
+  void loadInvitations(orgId)
+}
+
+async function loadInvitations(orgId: string) {
+  invitationsLoading.value = true
+  try {
+    const list = await listInvitations(orgId)
+    if (org.value?.id !== orgId) return
+    invitations.value = list
+  } catch (e) {
+    if (org.value?.id !== orgId) return
+    inviteError.value = errorText(e)
+  } finally {
+    invitationsLoading.value = false
+  }
 }
 
 async function invite() {
@@ -271,7 +296,7 @@ onMounted(load)
   <section>
     <div class="sm-title-row">
       <div>
-        <h1 class="sm-h1">团队</h1>
+        <h1 class="sm-title">团队</h1>
         <p class="sm-sub">组织是团队与 Skill 的归属地。这里管成员、角色与邀请。</p>
       </div>
     </div>
@@ -284,117 +309,143 @@ onMounted(load)
     <!-- 还没有组织时先建一个：组织只能被邀请进，但自己也能建。 -->
     <div v-if="!org" class="sm-panel">
       <div class="sm-panel-head">
-        <h2 class="sm-h2">新建组织</h2>
+        <h2 class="sm-section">新建组织</h2>
       </div>
       <p class="sm-muted sm-mb-16">组织是团队与 Skill 归属的地方。建好后邀请同事进来。</p>
       <div class="sm-toolbar">
-        <el-input v-model="newOrgSlug" placeholder="组织 slug（如 my-company）" data-test="org-slug" />
-        <el-input v-model="newOrgName" placeholder="组织名称（如 某某科技）" data-test="org-name" />
-        <el-button
-          type="primary"
+        <input
+          v-model="newOrgSlug"
+          class="sm-input"
+          placeholder="组织 slug（如 my-company）"
+          data-test="org-slug"
+        />
+        <input
+          v-model="newOrgName"
+          class="sm-input"
+          placeholder="组织名称（如 某某科技）"
+          data-test="org-name"
+        />
+        <button
+          class="sm-btn sm-btn--primary"
           data-test="create-org"
-          :loading="creating"
+          :disabled="creating"
           @click="createOrg"
-        >创建组织</el-button>
+        >
+          创建组织
+        </button>
       </div>
-      <el-alert
-        v-if="createError"
-        data-test="create-error"
-        :title="createError"
-        type="error"
-        :closable="false"
-        show-icon
-        class="sm-mt-12"
-      />
+      <p v-if="createError" class="sm-note sm-note--error sm-mt-12" data-test="create-error">
+        {{ createError }}
+      </p>
     </div>
 
     <template v-if="org">
-      <p class="sm-muted sm-mb-16">
-        组织 {{ org.name }} · 我的角色 {{ org.role }}
-      </p>
-
       <div class="sm-panel sm-mb-16">
         <div class="sm-panel-head">
-          <h2 class="sm-h2">团队</h2>
-          <el-button data-test="create-team-toggle" @click="showNewTeam = !showNewTeam">
-            新建团队
-          </el-button>
+          <h2 class="sm-section">成员</h2>
+          <span class="sm-meta">组织 {{ org.name }} · 我的角色 {{ org.role }}</span>
         </div>
-        <div class="sm-toolbar">
-          <el-select
-            v-model="selectedTeam"
-            placeholder="（不指定团队）"
-            data-test="team-select"
-            class="sm-grow"
-            @change="refreshMembers"
-          >
-            <el-option label="（不指定团队）" value="" />
-            <el-option v-for="team in teams" :key="team.id" :label="team.name" :value="team.id" />
-          </el-select>
-        </div>
-        <div v-if="showNewTeam" class="sm-toolbar">
-          <el-input v-model="newTeamSlug" placeholder="团队 slug（如 platform）" data-test="team-slug" />
-          <el-input v-model="newTeamName" placeholder="团队名称（如 Platform）" data-test="team-name" />
-          <el-button
-            type="primary"
-            data-test="create-team"
-            :loading="creating"
-            @click="createTeamNow"
-          >创建团队</el-button>
-        </div>
-
-        <el-alert
-          v-if="createError"
-          data-test="create-error"
-          :title="createError"
-          type="error"
-          :closable="false"
-          show-icon
-          class="sm-mb-12"
-        />
-
-        <el-alert
-          v-if="memberError"
-          data-test="error"
-          :title="memberError"
-          type="error"
-          :closable="false"
-          show-icon
-          class="sm-mb-12"
-        />
 
         <!--
-          表格只在有数据时渲染：Element Plus 自带的「No Data」也是一句谎话
-          （读失败不是没有成员）。改角色失败时列表仍然有效，表格照常显示。
+          范围切换：这个下拉不只换名单，还换掉「角色」两个字的意思。
+          所以标题要跟着说清楚现在改的是哪一层，否则改错了地方。
         -->
-        <el-table v-if="members.length > 0" :data="members" size="small">
-          <el-table-column label="成员" min-width="140">
-            <template #default="scope">
-              <span data-test="member-row">{{ scope.row.display_name }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="邮箱" min-width="160">
-            <template #default="scope">{{ scope.row.email ?? '—' }}</template>
-          </el-table-column>
-          <el-table-column :label="selectedTeam ? '团队角色' : '组织角色'" width="170">
-            <template #default="scope">
-              <el-select
-                :model-value="scope.row.role"
-                size="small"
-                data-test="role-edit"
-                @change="(value: string) => changeRole(scope.row, value)"
-              >
-                <el-option v-for="role in roleOptions" :key="role" :label="role" :value="role" />
-              </el-select>
-            </template>
-          </el-table-column>
-          <el-table-column label="加入时间" width="120">
-            <template #default="scope">
-              <span class="sm-text-sm">{{ scope.row.joined_at.slice(0, 10) }}</span>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="membersLoading && !members.length" class="sm-empty">加载中…</div>
+        <div class="sm-toolbar">
+          <span class="sm-muted sm-meta">范围</span>
+          <select
+            v-model="selectedTeam"
+            class="sm-select sm-scope-select"
+            data-test="team-select"
+            @change="refreshMembers"
+          >
+            <option value="">整个组织</option>
+            <option v-for="team in teams" :key="team.id" :value="team.id">
+              {{ team.name }}
+            </option>
+          </select>
+          <span class="sm-spacer" />
+          <button
+            class="sm-btn sm-btn--sm"
+            data-test="create-team-toggle"
+            @click="showNewTeam = !showNewTeam"
+          >
+            新建团队
+          </button>
+        </div>
+
+        <p class="sm-muted sm-meta sm-mb-16">
+          正在改「{{ roleScopeLabel }}」——{{ roleMeaning }}
+        </p>
+
+        <div v-if="showNewTeam" class="sm-toolbar">
+          <input
+            v-model="newTeamSlug"
+            class="sm-input"
+            placeholder="团队 slug（如 platform）"
+            data-test="team-slug"
+          />
+          <input
+            v-model="newTeamName"
+            class="sm-input"
+            placeholder="团队名称（如 Platform）"
+            data-test="team-name"
+          />
+          <button
+            class="sm-btn sm-btn--primary"
+            data-test="create-team"
+            :disabled="creating"
+            @click="createTeamNow"
+          >
+            创建团队
+          </button>
+        </div>
+
+        <p v-if="createError" class="sm-note sm-note--error sm-mb-12" data-test="create-error">
+          {{ createError }}
+        </p>
+
+        <p v-if="memberError" class="sm-note sm-note--error sm-mb-12" data-test="error">
+          {{ memberError }}
+        </p>
+
+        <!--
+          表格只在有数据时渲染：读失败不是没有成员，
+          两个空态并排会把人读歪。
+        -->
+        <div v-if="members.length" class="sm-table-scroll">
+          <table class="sm-table sm-table--flush sm-table--stack">
+            <thead>
+              <tr>
+                <th>成员</th>
+                <th>邮箱</th>
+                <th>{{ roleScopeLabel }}</th>
+                <th class="sm-num">加入时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="member in members" :key="member.user_id">
+                <td><span data-test="member-row">{{ member.display_name }}</span></td>
+                <td class="sm-muted sm-cell-sub">{{ member.email ?? '—' }}</td>
+                <td>
+                  <select
+                    class="sm-select sm-role-select"
+                    :value="member.role"
+                    data-test="role-edit"
+                    @change="changeRole(member, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="role in roleOptions" :key="role" :value="role">
+                      {{ role }}
+                    </option>
+                  </select>
+                </td>
+                <td class="sm-num sm-muted sm-cell-sub">
+                  加入于 {{ member.joined_at.slice(0, 10) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="membersLoading && !members.length" class="sm-muted sm-meta">正在读成员…</div>
         <EmptyState
           v-if="!membersLoading && !memberError && !members.length"
           text="还没有成员"
@@ -403,113 +454,126 @@ onMounted(load)
 
       <div class="sm-panel">
         <div class="sm-panel-head">
-          <h2 class="sm-h2">邀请</h2>
+          <h2 class="sm-section">邀请</h2>
+          <span class="sm-meta">链接 7 天内有效，只显示一次</span>
+        </div>
+        <div class="sm-field-grid sm-mb-16">
+          <div class="sm-field">
+            <label for="invite-org-role">组织角色</label>
+            <select id="invite-org-role" v-model="inviteOrgRole" class="sm-select" data-test="org-role-select">
+              <option value="member">member</option>
+              <option value="publisher">publisher</option>
+              <option value="reviewer">reviewer</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <div class="sm-field">
+            <label for="invite-team-role">团队角色</label>
+            <select
+              id="invite-team-role"
+              v-model="inviteRole"
+              class="sm-select"
+              data-test="role-select"
+              :disabled="!selectedTeam"
+            >
+              <option value="member">member</option>
+              <option value="publisher">publisher</option>
+              <option value="reviewer">reviewer</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <div class="sm-field">
+            <label for="invite-subject">绑定到</label>
+            <select id="invite-subject" v-model="inviteSubject" class="sm-select" data-test="invite-subject">
+              <option value="">任何拿到链接的人</option>
+              <option
+                v-for="m in members"
+                :key="m.user_id"
+                :value="m.subject"
+              >
+                {{ m.display_name }}
+              </option>
+            </select>
+          </div>
         </div>
         <div class="sm-toolbar">
-          <el-select v-model="inviteOrgRole" data-test="org-role-select" class="sm-grow">
-            <el-option label="组织角色 member" value="member" />
-            <el-option label="组织角色 publisher" value="publisher" />
-            <el-option label="组织角色 reviewer" value="reviewer" />
-            <el-option label="组织角色 admin" value="admin" />
-          </el-select>
-          <el-select v-model="inviteRole" data-test="role-select" class="sm-grow" :disabled="!selectedTeam">
-            <el-option label="团队角色 member" value="member" />
-            <el-option label="团队角色 publisher" value="publisher" />
-            <el-option label="团队角色 reviewer" value="reviewer" />
-            <el-option label="团队角色 admin" value="admin" />
-          </el-select>
-          <el-select
-            v-model="inviteSubject"
-            placeholder="（任何拿到链接的人都能接受）"
-            data-test="invite-subject"
-            class="sm-grow"
-          >
-            <el-option label="（不绑定：任何拿到链接的人都能接受）" value="" />
-            <el-option
-              v-for="m in members"
-              :key="m.user_id"
-              :label="m.display_name"
-              :value="m.subject"
-            />
-          </el-select>
-          <el-button type="primary" data-test="invite" @click="invite">生成邀请链接</el-button>
+          <button class="sm-btn sm-btn--primary" data-test="invite" @click="invite">
+            生成邀请链接
+          </button>
         </div>
 
-        <el-alert
-          v-if="inviteLink"
-          data-test="invite-link"
-          :title="inviteLink"
-          type="success"
-          :closable="false"
-          show-icon
-          class="sm-mb-12"
-        />
+        <p v-if="inviteLink" class="sm-note sm-note--success sm-mb-12 sm-break" data-test="invite-link">
+          {{ inviteLink }}
+        </p>
         <p v-if="inviteToken" class="sm-muted sm-mb-12">
           原始 token（链接指向本机时，把这个发给对方）：<code class="sm-mono" data-test="invite-token">{{ inviteToken }}</code>
         </p>
-        <el-alert
-          v-if="notice"
-          :title="notice"
-          type="info"
-          :closable="false"
-          class="sm-mb-12"
-        />
-        <el-alert
-          v-if="inviteError"
-          data-test="invite-error"
-          :title="inviteError"
-          type="error"
-          :closable="false"
-          show-icon
-          class="sm-mb-12"
-        />
+        <p v-if="notice" class="sm-note sm-mb-12">
+          {{ notice }}
+        </p>
+        <p v-if="inviteError" class="sm-note sm-note--error sm-mb-12" data-test="invite-error">
+          {{ inviteError }}
+        </p>
 
         <!-- 邀请区同理：读失败不是「没有发出过邀请」。 -->
-        <el-table v-if="invitations.length > 0" :data="invitations" size="small">
-          <el-table-column label="团队" min-width="120">
-            <template #default="scope">
-              <span data-test="invitation-row">{{ scope.row.team_name ?? '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="组织角色" width="110">
-            <template #default="scope">
-              <span data-test="invitation-org-role">{{ scope.row.org_role }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="团队角色" width="110">
-            <template #default="scope">
-              <span data-test="invitation-team-role">{{ scope.row.team_name ? scope.row.team_role : '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="110">
-            <template #default="scope">
-              <el-tag
-                size="small"
-                :type="scope.row.status === 'pending' ? 'warning' : 'info'"
-              >{{ scope.row.status }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="过期" width="120">
-            <template #default="scope">
-              <span class="sm-text-sm">{{ scope.row.expires_at.slice(0, 10) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="" width="90">
-            <template #default="scope">
-              <el-button
-                v-if="scope.row.status === 'pending'"
-                text
-                type="danger"
-                @click="revoke(scope.row.id)"
-              >撤销</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="invitationsLoading && !invitations.length" class="sm-empty">加载中…</div>
+        <div v-if="visibleInvitations.length" class="sm-table-scroll">
+          <table class="sm-table sm-table--flush sm-table--stack">
+            <thead>
+              <tr>
+                <th>团队</th>
+                <th>组织角色</th>
+                <th>团队角色</th>
+                <th>状态</th>
+                <th class="sm-num">过期</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in visibleInvitations" :key="row.id">
+                <td><span data-test="invitation-row">{{ row.team_name ?? '—' }}</span></td>
+                <td><span data-test="invitation-org-role">{{ row.org_role }}</span></td>
+                <td class="sm-drop">
+                  <span>{{ row.team_name ? row.team_role : '—' }}</span>
+                </td>
+                <td>
+                  <span
+                    class="sm-pill"
+                    :class="row.status === 'pending' ? 'sm-pill-warn' : ''"
+                  >
+                    {{ row.status === 'pending' ? '待接受' : row.status }}
+                  </span>
+                </td>
+                <td class="sm-num sm-muted sm-cell-sub">
+                  过期于 {{ row.expires_at.slice(0, 10) }}
+                  <template v-if="row.team_name">
+                    · 团队角色
+                    <span class="sm-mono" data-test="invitation-team-role">{{ row.team_role }}</span>
+                  </template>
+                  <template v-else>
+                    <span data-test="invitation-team-role" class="sm-hidden">—</span>
+                  </template>
+                </td>
+                <td class="sm-actions">
+                  <button
+                    v-if="row.status === 'pending'"
+                    class="sm-btn sm-btn--quiet sm-btn--sm"
+                    @click="revoke(row.id)"
+                  >
+                    撤销
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="invitationsLoading && !invitations.length" class="sm-muted sm-meta">正在读邀请…</div>
         <EmptyState
           v-if="!invitationsLoading && !inviteError && !invitations.length"
           text="还没有发出过邀请"
         />
+        <p v-if="invitations.length > visibleInvitations.length" class="sm-muted sm-meta sm-mt-12">
+          只显示最近 {{ visibleInvitations.length }} 条，共 {{ invitations.length }} 条。
+        </p>
       </div>
     </template>
   </section>

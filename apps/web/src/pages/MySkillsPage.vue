@@ -12,6 +12,8 @@ import type { Skill, SkillVersion } from '../types'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
+import ModalDialog from '../components/ModalDialog.vue'
+import TagInput from '../components/TagInput.vue'
 
 /** 服务端收 slug 的规则：小写字母数字开头，后跟小写字母数字或连字符，总长 2–64。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/
@@ -61,7 +63,7 @@ function errorText(e: unknown): string {
 
 /** 可见性 → 药丸的颜色。private/public 是个人空间的常态，其余颜色区分。 */
 function visibilityPill(visibility: string): string {
-  if (visibility === 'public') return 'sm-pill sm-pill-accent'
+  if (visibility === 'public') return 'sm-pill sm-pill-data'
   if (visibility === 'organization' || visibility === 'team') return 'sm-pill sm-pill-warn'
   return 'sm-pill'
 }
@@ -253,35 +255,35 @@ onMounted(load)
   <section>
     <div class="sm-title-row">
       <div>
-        <h1 class="sm-h1">我的 Skill</h1>
+        <h1 class="sm-title">我的 Skill</h1>
         <p class="sm-sub">你名下的 Skill：个人私有空间里的备份，以及你建的团队 Skill。</p>
       </div>
-      <el-button type="primary" data-test="new-skill" @click="creating = true">
+      <button class="sm-btn sm-btn--primary" data-test="new-skill" @click="creating = true">
         新建 Skill
-      </el-button>
+      </button>
     </div>
 
-    <el-alert
-      v-if="listError"
-      data-test="error"
-      :title="listError"
-      type="error"
-      :closable="false"
-      show-icon
-      class="sm-mb-16"
-    />
+    <p v-if="listError" class="sm-note sm-note--error sm-mb-16" data-test="error">
+      {{ listError }}
+    </p>
 
-    <div class="sm-mine">
+    <!--
+      没选中时列表占满整屏：这一屏问的是「我名下有什么」，
+      列表就是答案，右边留一栏空白反而像缺了东西。
+      选中之后才分出详情栏。
+    -->
+    <div class="sm-mine" :class="{ 'sm-mine-split': selected }">
       <div class="sm-mine-list">
         <div class="sm-toolbar">
-          <el-input
+          <input
             v-model="query"
-            class="sm-search"
+            class="sm-input sm-search"
+            type="search"
             placeholder="按名称、slug 或标签过滤"
-            clearable
             data-test="mine-search"
           />
-          <span class="sm-muted sm-text-sm sm-num">{{ skills.length }} 个</span>
+          <span class="sm-spacer" />
+          <span class="sm-muted sm-sm sm-num">{{ skills.length }} 个</span>
         </div>
 
         <div v-if="loading" class="sm-empty">加载中…</div>
@@ -300,108 +302,86 @@ onMounted(load)
             data-test="mine-item"
             @click="select(skill)"
           >
-            <div class="sm-grow">
+            <div class="sm-item-body">
               <div class="sm-item-head">
-                <strong class="sm-truncate">{{ skill.name }}</strong>
-                <code class="sm-mono sm-muted">{{ skill.slug }}</code>
+                <strong class="sm-item-title sm-truncate">{{ skill.name }}</strong>
+                <!-- slug 与名字常常一样，重复两遍只是噪声。 -->
+                <code v-if="skill.slug !== skill.name" class="sm-mono sm-muted sm-meta sm-truncate">
+                  {{ skill.slug }}
+                </code>
               </div>
-              <p class="sm-muted sm-text-sm sm-truncate">{{ skill.description || '（没有描述）' }}</p>
+              <p class="sm-muted sm-meta sm-truncate">{{ skill.description || '（没有描述）' }}</p>
             </div>
-            <div class="sm-col sm-mine-meta">
+            <div class="sm-row sm-mine-meta">
               <span :class="visibilityPill(skill.visibility)">
                 {{ VISIBILITY_TEXT[skill.visibility] ?? skill.visibility }}
               </span>
-              <span class="sm-muted sm-text-sm sm-num">
-                最新 {{ skill.latest_version ?? '—' }}
+              <span class="sm-muted sm-meta sm-num">
+                <span class="sm-faint">最新</span> {{ skill.latest_version ?? '—' }}
               </span>
             </div>
           </button>
         </div>
       </div>
 
-      <div class="sm-mine-detail">
+      <div v-if="selected" class="sm-mine-detail">
         <template v-if="selected">
           <div class="sm-panel">
             <div class="sm-panel-head">
-              <h2 class="sm-h2">元数据</h2>
+              <h2 class="sm-section">元数据</h2>
               <span class="sm-meta">
                 {{ selected.slug }} · 更新于 {{ selected.updated_at.slice(0, 10) }}
               </span>
             </div>
 
-            <el-alert
-              v-if="actionError"
-              data-test="action-error"
-              :title="actionError"
-              type="error"
-              :closable="false"
-              show-icon
-              class="sm-mb-12"
-            />
-            <el-alert
-              v-if="notice"
-              data-test="notice"
-              :title="notice"
-              type="success"
-              :closable="false"
-              show-icon
-              class="sm-mb-12"
-            />
+            <p v-if="actionError" class="sm-note sm-note--error sm-mb-12" data-test="action-error">
+              {{ actionError }}
+            </p>
+            <p v-if="notice" class="sm-note sm-note--success sm-mb-12" data-test="notice">
+              {{ notice }}
+            </p>
 
             <div class="sm-field sm-mb-12">
               <label for="edit-name">名称</label>
-              <el-input id="edit-name" v-model="editName" data-test="edit-name" />
+              <input id="edit-name" v-model="editName" class="sm-input" data-test="edit-name" />
             </div>
             <div class="sm-field sm-mb-12">
               <label for="edit-desc">描述</label>
-              <el-input
+              <textarea
                 id="edit-desc"
                 v-model="editDescription"
-                type="textarea"
-                :rows="3"
+                class="sm-textarea"
+                rows="3"
                 data-test="edit-desc"
               />
             </div>
             <div class="sm-field sm-mb-16">
               <label>标签</label>
-              <el-select
-                v-model="editTags"
-                multiple
-                filterable
-                allow-create
-                default-first-option
-                placeholder="回车新增一个标签"
-                data-test="edit-tags"
-              />
+              <TagInput v-model="editTags" data-test="edit-tags" />
             </div>
 
             <div class="sm-row">
-              <el-button
-                type="primary"
+              <button
+                class="sm-btn sm-btn--primary"
                 data-test="save"
-                :disabled="!dirty"
-                :loading="saving"
+                :disabled="!dirty || saving"
                 @click="save"
-              >保存</el-button>
-              <span class="sm-muted sm-text-sm">slug 与可见性不可改：会影响别人已装的内容。</span>
+              >
+                保存
+              </button>
+              <span class="sm-muted sm-sm">slug 与可见性不可改：会影响别人已装的内容。</span>
             </div>
           </div>
 
           <div class="sm-panel">
             <div class="sm-panel-head">
-              <h2 class="sm-h2">版本</h2>
+              <h2 class="sm-section">版本</h2>
               <span class="sm-meta">{{ versions.length }} 个</span>
             </div>
 
-            <el-alert
-              v-if="versionsError"
-              data-test="versions-error"
-              :title="versionsError"
-              type="error"
-              :closable="false"
-              show-icon
-              class="sm-mb-12"
-            />
+            <p v-if="versionsError" class="sm-note sm-note--error sm-mb-12" data-test="versions-error">
+              {{ versionsError }}
+            </p>
 
             <div v-if="versionsLoading" class="sm-empty">加载中…</div>
 
@@ -418,12 +398,12 @@ onMounted(load)
                     <span :class="versionPill(version.status)">
                       {{ STATUS_TEXT[version.status] ?? version.status }}
                     </span>
-                    <span class="sm-muted sm-text-sm">{{ version.channel }}</span>
+                    <span class="sm-muted sm-sm">{{ version.channel }}</span>
                   </div>
-                  <p class="sm-muted sm-text-sm sm-mono sm-break">
+                  <p class="sm-muted sm-sm sm-mono sm-break">
                     {{ version.artifact?.sha256.slice(0, 16) ?? '—' }}
                   </p>
-                  <p class="sm-muted sm-text-sm" data-test="version-time">
+                  <p class="sm-muted sm-sm" data-test="version-time">
                     创建于 {{ formatDateTime(version.created_at) }}
                     <template v-if="version.published_at">
                       · 发布于 {{ formatDateTime(version.published_at) }}
@@ -431,30 +411,27 @@ onMounted(load)
                   </p>
                 </div>
                 <div class="sm-row">
-                  <el-button
+                  <button
                     v-if="version.artifact"
-                    text
+                    class="sm-btn sm-btn--quiet sm-btn--sm"
                     data-test="browse-files"
                     @click="browseVersion = browseVersion === version.version ? '' : version.version"
                   >
                     {{ browseVersion === version.version ? '收起文件' : '浏览文件' }}
-                  </el-button>
-                  <el-button
+                  </button>
+                  <button
                     v-if="version.status !== 'revoked'"
-                    text
-                    type="danger"
+                    class="sm-btn sm-btn--quiet sm-btn--sm"
                     data-test="revoke"
                     @click="revoke(version)"
-                  >撤回</el-button>
+                  >
+                    撤回
+                  </button>
                 </div>
               </li>
             </ul>
           </div>
         </template>
-
-        <div v-else class="sm-panel">
-          <div class="sm-empty">左边选一个 Skill，看它的元数据与版本。</div>
-        </div>
       </div>
     </div>
 
@@ -471,77 +448,66 @@ onMounted(load)
       @edited="onEdited"
     />
 
-    <el-dialog
-      v-model="creating"
+    <ModalDialog
+      :open="creating"
       title="新建 Skill"
-      width="520px"
       data-test="create-dialog"
+      @close="creating = false"
     >
-      <el-alert
-        v-if="createError"
-        data-test="create-error"
-        :title="createError"
-        type="error"
-        :closable="false"
-        show-icon
-        class="sm-mb-12"
-      />
+      <p v-if="createError" class="sm-note sm-note--error sm-mb-12" data-test="create-error">
+        {{ createError }}
+      </p>
 
       <div class="sm-field sm-mb-12">
         <label for="new-slug">slug</label>
-        <el-input
+        <input
           id="new-slug"
           v-model="newSlug"
+          class="sm-input sm-input--mono"
           placeholder="如 java-debug"
-          class="sm-mono"
           data-test="new-slug"
         />
         <span class="sm-hint">只建元数据。内容与版本仍由 CLI 发布到它上面。</span>
       </div>
       <div class="sm-field sm-mb-12">
         <label for="new-name">名称</label>
-        <el-input id="new-name" v-model="newName" placeholder="留空就用 slug" data-test="new-name" />
+        <input id="new-name" v-model="newName" class="sm-input" placeholder="留空就用 slug" data-test="new-name" />
       </div>
       <div class="sm-field sm-mb-12">
         <label for="new-desc">描述</label>
-        <el-input
+        <textarea
           id="new-desc"
           v-model="newDescription"
-          type="textarea"
-          :rows="3"
+          class="sm-textarea"
+          rows="3"
           data-test="new-desc"
         />
       </div>
       <div class="sm-field sm-mb-12">
         <label>可见性</label>
-        <el-radio-group v-model="newVisibility" data-test="new-visibility">
-          <el-radio value="private">私有</el-radio>
-          <el-radio value="public">公开</el-radio>
-        </el-radio-group>
+        <div class="sm-radio-row" data-test="new-visibility">
+          <label class="sm-check">
+            <input v-model="newVisibility" type="radio" value="private" />
+            私有
+          </label>
+          <label class="sm-check">
+            <input v-model="newVisibility" type="radio" value="public" />
+            公开
+          </label>
+        </div>
         <span class="sm-hint">团队与组织可见的 Skill 由 CLI 发布时带 --org / --team 建立。</span>
       </div>
       <div class="sm-field">
         <label>标签</label>
-        <el-select
-          v-model="newTags"
-          multiple
-          filterable
-          allow-create
-          default-first-option
-          placeholder="回车新增一个标签"
-          data-test="new-tags"
-        />
+        <TagInput v-model="newTags" data-test="new-tags" />
       </div>
 
       <template #footer>
-        <el-button @click="creating = false">取消</el-button>
-        <el-button
-          type="primary"
-          data-test="create-submit"
-          :loading="creating"
-          @click="create"
-        >创建</el-button>
+        <button class="sm-btn" @click="creating = false">取消</button>
+        <button class="sm-btn sm-btn--primary" data-test="create-submit" @click="create">
+          创建
+        </button>
       </template>
-    </el-dialog>
+    </ModalDialog>
   </section>
 </template>

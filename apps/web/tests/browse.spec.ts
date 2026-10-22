@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
 import FileBrowser from '../src/components/FileBrowser.vue'
 
 enableAutoUnmount(afterEach)
@@ -38,7 +37,7 @@ describe('FileBrowser', () => {
     vi.stubGlobal('fetch', stubFiles())
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -62,7 +61,7 @@ describe('FileBrowser', () => {
     })))
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -83,7 +82,7 @@ describe('FileBrowser', () => {
     })))
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -106,7 +105,7 @@ describe('FileBrowser', () => {
     vi.stubGlobal('fetch', stubFiles())
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -123,7 +122,7 @@ describe('FileBrowser', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -158,7 +157,7 @@ describe('FileBrowser', () => {
     }))
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -191,7 +190,7 @@ describe('FileBrowser', () => {
     }))
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -232,7 +231,7 @@ describe('FileBrowser', () => {
     vi.stubGlobal('confirm', () => true)
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -265,7 +264,7 @@ describe('FileBrowser', () => {
     }))
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -298,7 +297,7 @@ describe('FileBrowser', () => {
     }))
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 
@@ -328,7 +327,7 @@ describe('FileBrowser', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = mount(FileBrowser, {
       props: { skillId: 's1', version: '1.0.0' },
-      global: { plugins: [ElementPlus] },
+      global: {},
     })
     await flushPromises()
 

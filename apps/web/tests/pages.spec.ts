@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
 import MarketPage from '../src/pages/MarketPage.vue'
 
 // 打桩的 fetch 必须还原，否则漏到后面的用例。
@@ -63,7 +62,7 @@ async function mountMarket(path = '/') {
   })
   await router.push(path)
   await router.isReady()
-  return mount(MarketPage, { global: { plugins: [router, ElementPlus] } })
+  return mount(MarketPage, { global: { plugins: [router] } })
 }
 
 describe('MarketPage', () => {
@@ -89,7 +88,9 @@ describe('MarketPage', () => {
     await wrapper.find('[data-test="search"]').trigger('click')
     await flushPromises()
 
-    expect(String(fetchMock.mock.calls[0][0])).toContain('q=rust')
+    // 页面进入时会先列一次可见的 Skill，所以搜索是后面的那次请求。
+    const urls = fetchMock.mock.calls.map(([url]) => String(url))
+    expect(urls.some((u) => u.includes('q=rust'))).toBe(true)
   })
 
   it('失败时展示错误码而不是静默失败', async () => {

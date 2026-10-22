@@ -249,6 +249,11 @@ export function listReviews(status = 'pending_review'): Promise<PendingReview[]>
   return request<PendingReview[]>(`/reviews?status=${encodeURIComponent(status)}`)
 }
 
+/** 最近放行或被拒的版本。审核页要看得见历史，不只是当下的待办。 */
+export function listRecentReviews(status: 'published' | 'rejected'): Promise<PendingReview[]> {
+  return request<PendingReview[]>(`/reviews?status=${encodeURIComponent(status)}&limit=20`)
+}
+
 export function getReviewDetail(skillId: string, version: string): Promise<ReviewDetail> {
   return request<ReviewDetail>(`/reviews/${skillId}/${encodeURIComponent(version)}`)
 }

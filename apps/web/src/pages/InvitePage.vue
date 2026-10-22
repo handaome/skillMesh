@@ -55,65 +55,55 @@ onMounted(load)
 
 <template>
   <div class="sm-login">
-    <h1 class="sm-h1">加入团队</h1>
+    <h1 class="sm-title">加入团队</h1>
 
-    <el-alert
-      v-if="error"
-      data-test="error"
-      :title="error"
-      type="error"
-      :closable="false"
-      show-icon
-      class="sm-mb-12"
-    />
+    <p v-if="error" class="sm-note sm-note--error sm-mb-12" data-test="error">
+      {{ error }}
+    </p>
 
     <template v-if="invitation">
-      <p>
+      <p class="sm-mb-12">
         组织 <strong>{{ invitation.organization_name }}</strong>
         <template v-if="invitation.team_name">
           · 团队 <strong>{{ invitation.team_name }}</strong>
         </template>
       </p>
-      <p class="sm-muted">
+      <p class="sm-muted sm-mb-16">
         角色 {{ invitation.org_role }}<template v-if="invitation.team_name"> / {{ invitation.team_role }}</template>
       </p>
-      <el-alert
+      <p
         v-if="invitation.status !== 'pending'"
+        class="sm-note sm-note--warning sm-mb-12"
         data-test="invalid"
-        :title="`这份邀请已经${invitation.status === 'expired' ? '过期' : '失效'}。`"
-        type="warning"
-        :closable="false"
-        show-icon
-        class="sm-mb-12"
-      />
+      >
+        这份邀请已经{{ invitation.status === 'expired' ? '过期' : '失效' }}。
+      </p>
 
-      <el-alert
-        v-if="done"
-        data-test="done"
-        title="已加入，去团队页看看。"
-        type="success"
-        :closable="false"
-        show-icon
-        class="sm-mb-12"
-      />
+      <p v-if="done" class="sm-note sm-note--success sm-mb-12" data-test="done">
+        已加入，去团队页看看。
+      </p>
 
-      <el-button
+      <button
         v-if="!session.accessToken"
-        type="primary"
+        class="sm-btn sm-btn--primary sm-btn--block sm-mb-8"
         data-test="login-first"
         @click="router.push({ path: '/login', query: { redirect: route.fullPath } })"
-      >登录后接受</el-button>
+      >
+        登录后接受
+      </button>
 
-      <el-button
+      <button
         v-else-if="invitation.status === 'pending' && !done"
-        type="primary"
-        :loading="busy"
+        class="sm-btn sm-btn--primary sm-btn--block"
+        :disabled="busy"
         data-test="accept"
         @click="accept"
-      >{{ busy ? '接受中' : '接受邀请' }}</el-button>
+      >
+        {{ busy ? '接受中' : '接受邀请' }}
+      </button>
 
-      <router-link v-if="done" to="/team">
-        <el-button class="sm-mt-8">去团队页</el-button>
+      <router-link v-if="done" to="/team" class="sm-btn sm-btn--block sm-mt-8">
+        去团队页
       </router-link>
     </template>
   </div>

@@ -1,9 +1,9 @@
-/* 入口：按 变量 → reset → 工具 → 组件 → 布局 → 第三方覆盖 → 响应式 的顺序加载。 */
+/* 入口：按 字体 → 变量 → reset → 工具 → 组件 → 布局 → 响应式 的顺序加载。 */
 
+@import './fonts.css';
 @import './tokens.css';
 @import './reset.css';
 @import './utilities.css';
 @import './components.css';
 @import './layout.css';
-@import './overrides.css';
 @import './responsive.css';

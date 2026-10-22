@@ -1,60 +1,67 @@
-/* 设计令牌。值来自 design-taste-frontend 抽到的 framed-sheet 方向：
-   一个染色的 L 形外框，内容坐在白色工作表上，页面上只有一处彩色（--accent）。 */
+/* 设计令牌。
+   方向来自 design-taste-frontend 抽到的 achromatic-ledger：
+   墨色的 chrome（主按钮近黑、卡片白、边框很轻）+ 页面唯一的彩色
+   （--data，青绿，只落在数据与标记上）。
+   地面用蓝灰（#f2f4f7）——账本与仪表的底色，与白卡拉开一层。 */
 
 :root {
   /* 表面与底色 */
-  --ground: #f9fbfc;      /* 侧栏与顶栏共用的染色底 */
-  --surface: #ffffff;     /* 工作表（白纸）与面板 */
-  --raised: #f4f6f8;      /* 填充的内井、hover 行 */
-  --active: #ebedee;      /* 选中项的灰药丸 */
-  --border: #e8eaec;      /* 面板 1px 边 */
-  --rule: #f0f1f2;        /* 行分隔线 */
-  --control: #cdced1;     /* 输入框描边：比面板边强一档 */
+  --ground: #f2f4f7;      /* 页面地面（蓝灰） */
+  --surface: #ffffff;     /* 卡片与面板 */
+  --raised: #eef1f5;      /* 填充的内井、hover 行 */
+  --active: #e4e9ef;      /* 选中项的灰药丸 */
+  --border: #e2e7ed;      /* 面板 1px 边 */
+  --rule: #edf0f4;        /* 行分隔线 */
+  --control: #cbd3dd;     /* 输入框描边：比面板边强一档 */
 
   /* 文字 */
-  --text: #131416;
-  --muted: #5d5f60;
-  --faint: #6b6b6b;
+  --text: #0a0d10;
+  --muted: #59616c;
+  --faint: #6b7280;       /* 4.5:1 on white */
 
-  /* 彩色：只有一处强调 + 三个语义色 */
-  --accent: #1b6c80;      /* 工作台蓝绿：焦点环、选中态、数据上的那点彩 */
-  --primary: #1d1f20;     /* 主按钮：近黑，不是品牌色 */
+  /* 唯一的彩色：数据与产品标记 */
+  --data: #1b6c80;        /* 青绿：指纹、状态强调、标记 */
+  --data-ink: #0f4451;    /* 淡底上的同色深字 */
+  --data-bg: #e3f0f3;
+
+  /* 主按钮：近黑，不是品牌色 */
+  --primary: #101418;
   --primary-ink: #ffffff;
-  --positive: #1e7b4f;
-  --negative: #c4242a;
-  --warning: #92400e;
+
+  /* 语义色 */
+  --positive: #1c6b46;
+  --negative: #b4231f;
+  --warning: #8a5200;
 
   /* 状态药丸：淡底 + 同色深字 */
-  --pill-positive-bg: #dcfae5; --pill-positive-ink: #04250e;
-  --pill-negative-bg: #ffedea; --pill-negative-ink: #831c1e;
-  --pill-warning-bg: #fffbeb; --pill-warning-ink: #92400e;
-  --pill-neutral-bg: #ebedee; --pill-neutral-ink: #353736;
-  --pill-accent-bg: #e3f0f3; --pill-accent-ink: #0f4451;
+  --pill-positive-bg: #dcf5e6; --pill-positive-ink: #06331e;
+  --pill-negative-bg: #fde9e7; --pill-negative-ink: #6d1614;
+  --pill-warning-bg: #fdf0d8; --pill-warning-ink: #6b3f00;
+  --pill-neutral-bg: #e9edf2; --pill-neutral-ink: #333a43;
 
-  /* 字体：系统栈，不外链字体服务。页面正文是中文，
-     拉丁字体只覆盖数字与少量英文，多引一份字体只会多一层网络依赖。 */
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+  /* 字体：Geist 管拉丁与数字，中文回落到系统字体 */
+  --font: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
-  --font-mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas,
-    "Liberation Mono", monospace;
-  --fs-title: 22px;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* 字号：24 / 16 / 14 / 13 / 12 五档。
+     12px 只留给元信息（日期、状态药丸、表头）；
+     列表里的描述与 slug 走 13px——它们是数据，不是脚注。 */
+  --fs-title: 24px;
   --fs-section: 16px;
-  --fs-kpi: 28px;
   --fs-body: 14px;
+  --fs-meta: 13px;
   --fs-small: 12px;
 
   /* 尺寸 */
-  --sidebar-width: 228px;
-  --topbar-height: 48px;
+  --sidebar-width: 248px;
   --gap: 24px;
-  --pad: 24px;
+  --pad: 32px;
   --card-pad: 20px;
   --radius-card: 8px;
   --radius-control: 6px;
-  --radius-sheet: 16px;
-  --sheet-inset: 8px;
-  --control-height: 32px;
-  --row-height: 48px;
+  --control-height: 34px;
+  --row-height: 52px;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --t-press: 120ms;
