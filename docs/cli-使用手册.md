@@ -24,20 +24,13 @@
 # 发布本地 Skill
 ./skillmesh.exe publish ./skills/java-debug
 ./skillmesh.exe publish ./skills/java-debug --org acme --team platform  # 发到团队，要审核
+
+# 回滚与换设备
 ./skillmesh.exe rollback java-debug --to 1.0.0
 ./skillmesh.exe restore                    # 换设备：装回个人私有空间
-
-# 本地项目状态
-./skillmesh.exe list
-./skillmesh.exe status
-./skillmesh.exe update --check
-./skillmesh.exe lock refresh
-./skillmesh.exe uninstall java-debug
-
-# 诊断
-./skillmesh.exe doctor
-./skillmesh.exe agents detect
 ```
+
+本地项目状态、更新、卸载、回收站、诊断的命令清单见下方「本地项目状态」与「诊断」两节。
 
 ### 从 Git 仓库装一个 Skill：两步
 
@@ -58,7 +51,7 @@ skills/java-debug    有
 skills/redis-cache   有
 ```
 
-**它的用途是让你知道下一步 `--path` 该填什么。** 一个仓库里通常有好几个 Skill 目录，不先看一眼只能一个个试。
+**它的用途是让你知道下一步 `--path` 该填什么。**
 
 加 `--ref` 可以指定分支、标签或 commit：
 
@@ -81,9 +74,9 @@ skills/redis-cache   有
 | `--agent` | 装给哪个 Agent。`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/`，用本机真实存在的那个 |
 | `--scope` | `user` 装到用户级（你所有项目都能用）；`project` 装到当前项目里（提交进版本控制，团队共享） |
 | `--ref` | 分支、标签或 commit。不填用仓库默认分支 |
-| `--install` | **关键开关**。不加只"登记"来源，不碰 Agent 目录；加了才真正安装 |
+| `--install` | **关键开关**。不加只「登记」来源，不碰 Agent 目录；加了才真正安装 |
 | `--dry-run` | 只列出会装什么，不实际安装 |
-| `--replace` | 目标位置已有同名目录时强制覆盖（见下方"同名目录不覆盖"） |
+| `--replace` | 目标位置已有同名目录时强制覆盖（见下方「同名目录不覆盖」） |
 | `--credential-ref` | 私有仓库用本机凭据管理器里的凭据引用，**不接受明文令牌** |
 
 执行的步骤：
@@ -107,7 +100,7 @@ Skill java-debug
 锁文件 skillmesh.lock.yaml
 ```
 
-**原子安装的意义**：装到一半失败不会毁掉你原来的版本——旧版本先被备份，新版本校验通过才切换，切换失败自动回滚。
+**原子安装的意义**：装到一半失败不会毁掉你原来的版本——旧版本先被备份，切换失败自动回滚。
 
 #### 一次装整个仓库的 Skill
 
@@ -221,7 +214,7 @@ export SKILLMESH_TOKEN=<access-token>
 ./skillmesh.exe rollback <skill-name> --to 1.0.0
 ```
 
-版本制品不可变，所以回滚不是"改回去"，而是**再装一次更早的版本**——服务端那份旧制品一直原样留着，随时能装回去。装完锁文件里的版本号、摘要一起回退。
+版本制品不可变，所以回滚不是「改回去」，而是**再装一次更早的版本**——服务端那份旧制品一直原样留着，随时能装回去。装完锁文件里的版本号、摘要一起回退。
 
 只支持注册中心来源（`install` 装的）。Git 来源要固定版本用 `skillmesh add <url> --ref <tag>`，或 `update` 之后手动 checkout 到指定 commit。
 
@@ -261,7 +254,7 @@ skillmesh installations --status conflict  # 只看有问题的
 - `list` = **本地装了什么**（读项目里的 `skillmesh.lock.yaml`）
 - `search` = **云端有什么**（调 `/api/v1/skills`）
 
-`publish` 只把 Skill 发到云端，**不在本地装任何东西**，所以发布完 `list` 仍然是空的——这是设计如此（锁文件记录的是"已安装的 Skill 的解析结果"，用来让 CI 复现同样的安装）。发布完用 `search` 查。
+`publish` 只把 Skill 发到云端，**不在本地装任何东西**，所以发布完 `list` 仍然是空的——这是设计如此（锁文件记的是已安装 Skill 的解析结果）。发布完用 `search` 查。
 
 ### 更新前先看差异，本地改过就不覆盖
 
@@ -276,7 +269,7 @@ demo-skill —— 3 个文件有变化
     删除 old.md
 ```
 
-判重和"本地有没有被改过"都用**内容摘要**（对「路径 + 逐文件 SHA-256」排序后哈希），不用 zip 的 sha256——同一份内容重新打包，压缩实现或文件权限位一变摘要就变，会把没变误判成变。装的时候摘要记进锁文件的 `installed_hash`。
+判重和「本地有没有被改过」都用**内容摘要**（对「路径 + 逐文件 SHA-256」排序后哈希），不用 zip 的 sha256——同一份内容重新打包，压缩实现或文件权限位一变摘要就变，会把没变误判成变。装的时候摘要记进锁文件的 `installed_hash`。
 
 本地有未提交修改时，`update` 会打印「跳过 xxx —— 本地有改动，保留本地版本」，不动你的文件、锁文件也不改，退出码仍是 0（其余 Skill 照常更新）。差异大到不值得逐行算时只报文件级，二进制文件同样只报文件级。
 
@@ -293,7 +286,7 @@ skillmesh sync --retry-only      # 只重试断网失败的任务
 skillmesh sync --skip-new        # 只同步已收编的，首次发现先留在本地
 ```
 
-**首次发现不等于收编**：新出现在授权目录里的 Skill 默认会被备份到个人私有空间（绝不自动公开），`--skip-new` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
+**首次发现不等于收编**：新出现在授权目录里的 Skill 默认会备份到个人私有空间，**不会自动公开**；`--skip-new` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
 
 判定看三份摘要：**基线**（上次同步时）、**本地**、**云端**。
 
@@ -364,20 +357,6 @@ skillmesh daemon logs --tail 50
 
 **制品签名**（设计文档 §10 制品完整性）：服务端在制品定版时对**清单摘要**做 Ed25519 签名，签名随版本列表返回。客户端装之前验两件事——签名对不对得上，以及装下来的内容摘要和清单对不对得上。`install` 会打印结果（`已验签（内容与签名一致）` / `未签名` / `验签失败：…`）；**验签不通过就不装**——失败会带着原因退出，东西不会进 Agent 目录。
 
-服务端不配密钥就不签（空签名不会被误当成验过了）：
-
-```bash
-openssl genpkey -algorithm ed25519 -out skillmesh-signing.pem
-openssl pkey -in skillmesh-signing.pem -pubout -outform DER | tail -c 32 | base64 -w0   # 公钥
-openssl pkcs8 -topk8 -nocrypt -in skillmesh-signing.pem -outform DER | base64 -w0          # 私钥
-```
-
-```bash
-SM_SIGNING_PRIVATE_KEY=<私钥 base64>
-SM_SIGNING_PUBLIC_KEY=<公钥 base64>
-SM_SIGNING_KEY_ID=2026-10
-```
-
 客户端从 `GET /api/v1/keys/verify` 取公钥。要把「注册中心当前的密钥」变成「我信任的密钥」，在 `config.yaml` 里钉死它：
 
 ```yaml
@@ -386,7 +365,7 @@ verify:
   pinned_public_key: <base64 原始 32 字节>
 ```
 
-钉了之后，服务端换密钥而你没更新配置，验签会**硬失败**（不会只看「签名能不能验过」）。没钉也没配服务端密钥时，CLI 会明说「未验证来源」——能确认内容摘要对得上，但不能确认是谁签的。
+钉了之后，服务端换密钥而你没更新配置，验签会**硬失败**（不会只看「签名能不能验过」）。没钉也没配服务端密钥时，CLI 会明说「未验证来源」——能确认内容摘要对得上，但不能确认是谁签的。服务端怎么生成与配置签名密钥见 [部署与排障](部署与排障.md#制品签名密钥)。
 
 **被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
 
@@ -396,15 +375,6 @@ verify:
 ./skillmesh.exe doctor        # 服务端地址、配置目录、git 是否可用、登录状态、各 Agent 目录是否存在
 ./skillmesh.exe agents detect  # 各 Agent 的用户级/项目级目录表格
 ```
-
-CI 里没有浏览器也没有凭据管理器，用环境变量传令牌：
-
-```bash
-export SKILLMESH_TOKEN=<access-token>
-./skillmesh.exe install <skill-id> --locked
-```
-
-`--locked` 会校验远端解析结果与 `skillmesh.lock.yaml` 是否一致，不一致直接失败，防止构建环境静默漂移。
 
 配置在 `%APPDATA%\SkillMesh\config.yaml`（Linux/macOS 走 XDG），Agent 的目录在配置里指定，不在代码里硬编码：
 
