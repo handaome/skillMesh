@@ -175,6 +175,55 @@ describe('FileBrowser', () => {
     expect(wrapper.emitted('edited')).toBeTruthy()
   })
 
+  /**
+   * 连着改两次：第二次得基于上一次产出的新版本。
+   *
+   * 还按打开时的旧版本改的话，新版本里上一轮改掉的东西就被悄悄盖掉了，
+   * 面板却一直报「已保存」——改动就这么没了。
+   */
+  it('第二次编辑基于新版本', async () => {
+    const calls: { url: string; method?: string }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method })
+      if (init?.method === 'PUT') {
+        return jsonResponse({
+          skill_id: 's1', version: '1.0.1', file_count: 3,
+          sha256: 'd'.repeat(64), status: 'published',
+        })
+      }
+      if (url.includes('/file?')) {
+        return jsonResponse({
+          version: '1.0.0', path: 'SKILL.md', size_bytes: 120,
+          sha256: 'a'.repeat(64), binary: false, content: '# 旧内容\n',
+        })
+      }
+      return jsonResponse(FILES)
+    }))
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: {},
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="start-edit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="file-editor"]').setValue('# 第一次\n')
+    await wrapper.find('[data-test="save-file"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-test="start-edit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="file-editor"]').setValue('# 第二次\n')
+    await wrapper.find('[data-test="save-file"]').trigger('click')
+    await flushPromises()
+
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts).toHaveLength(2)
+    expect(puts[0].url).toBe('/api/v1/skills/s1/versions/1.0.0/file')
+    // 第二次要基于 1.0.1，不然第一轮的改动就被盖掉了
+    expect(puts[1].url).toBe('/api/v1/skills/s1/versions/1.0.1/file')
+  })
+
   /** 新建文件：产出新版本。 */
   it('新建文件产出新版本', async () => {
     const calls: { url: string; method?: string; body?: unknown }[] = []

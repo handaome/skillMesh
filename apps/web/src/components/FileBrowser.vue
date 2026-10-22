@@ -7,7 +7,17 @@ import EmptyState from './EmptyState.vue'
 import type { VersionFileContent, VersionFiles } from '../types'
 
 const props = defineProps<{ skillId: string; version: string; label?: string }>()
-const emit = defineEmits<{ close: []; edited: [] }>()
+const emit = defineEmits<{ close: []; edited: [version: string] }>()
+
+/**
+ * 编辑的基准版本。
+ *
+ * 改一个文件会产出**新版本**，下一次编辑得基于那个新版本。
+ * 还按打开时的旧版本改的话，新版本里上一轮改掉的东西就被悄悄丢了，
+ * 控制台却报「已保存为新版本」——改动就这么没了。
+ */
+const baseVersion = ref(props.version)
+watch(() => props.version, (v) => { baseVersion.value = v })
 
 const dialog = ref<HTMLDialogElement | null>(null)
 const files = ref<VersionFiles | null>(null)
@@ -136,7 +146,7 @@ async function load() {
   current.value = null
   contentError.value = ''
   try {
-    files.value = await listVersionFiles(props.skillId, props.version)
+    files.value = await listVersionFiles(props.skillId, baseVersion.value)
     // 清单回来后自动打开第一个文件：开抽屉就是为了看内容，
     // 让用户先点一下文件再等一次请求是白等。
     const first = files.value.files.find((f) => f.path === 'SKILL.md')
@@ -155,9 +165,8 @@ async function open(path: string) {
   contentError.value = ''
   editing.value = false
   saveError.value = ''
-  saveNotice.value = ''
   try {
-    current.value = await readVersionFile(props.skillId, props.version, path)
+    current.value = await readVersionFile(props.skillId, baseVersion.value, path)
   } catch (e) {
     current.value = null
     contentError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
@@ -199,7 +208,7 @@ async function save() {
   saveError.value = ''
   saveNotice.value = ''
   try {
-    const result = await editVersionFile(props.skillId, props.version, {
+    const result = await editVersionFile(props.skillId, baseVersion.value, {
       path: file.path,
       content: draft.value,
       operation: 'replace',
@@ -208,11 +217,28 @@ async function save() {
     })
     editing.value = false
     saveNotice.value = `已保存为新版本 ${result.version}（${statusText(result.status)}）。`
-    emit('edited')
+    await moveBase(result.version, file.path)
   } catch (e) {
     saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
   } finally {
     saving.value = false
+  }
+}
+
+/**
+ * 编辑产出新版本后，把基准版本挪到新版本上。
+ *
+ * 基准不挪，下一次编辑还是基于旧版本：上一轮改掉的内容会被新版本悄悄盖掉，
+ * 面板却一直报「已保存」。顺带把文件内容重读一遍——屏幕上得是新版本里的那份。
+ */
+async function moveBase(version: string, path?: string) {
+  baseVersion.value = version
+  emit('edited', version)
+  if (!path) return
+  try {
+    current.value = await readVersionFile(props.skillId, version, path)
+  } catch {
+    // 读不回来就算了：改动已经存成新版本了，别在这儿报错吓人。
   }
 }
 
@@ -227,7 +253,7 @@ async function createFile() {
   saveError.value = ''
   saveNotice.value = ''
   try {
-    const result = await editVersionFile(props.skillId, props.version, {
+    const result = await editVersionFile(props.skillId, baseVersion.value, {
       path,
       content: newContent.value,
       operation: 'create',
@@ -237,7 +263,7 @@ async function createFile() {
     newPath.value = ''
     newContent.value = ''
     saveNotice.value = `已新建 ${path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
-    emit('edited')
+    await moveBase(result.version, path)
   } catch (e) {
     saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
   } finally {
@@ -262,7 +288,7 @@ async function upload() {
   uploadError.value = ''
   saveNotice.value = ''
   try {
-    const result = await editVersionFile(props.skillId, props.version, {
+    const result = await editVersionFile(props.skillId, baseVersion.value, {
       path,
       content_base64: await readBase64(file),
       operation: 'create',
@@ -274,7 +300,7 @@ async function upload() {
     uploadPath.value = ''
     uploadExecutable.value = false
     saveNotice.value = `已上传 ${path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
-    emit('edited')
+    await moveBase(result.version, path)
   } catch (e) {
     uploadError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
   } finally {
@@ -330,14 +356,14 @@ async function deleteFile() {
   saveError.value = ''
   saveNotice.value = ''
   try {
-    const result = await editVersionFile(props.skillId, props.version, {
+    const result = await editVersionFile(props.skillId, baseVersion.value, {
       path: file.path,
       operation: 'delete',
       changelog: `在控制台删除 ${file.path}`,
     })
     saveNotice.value = `已删除 ${file.path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
     current.value = null
-    emit('edited')
+    await moveBase(result.version)
   } catch (e) {
     saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
   } finally {

@@ -23,6 +23,7 @@ import java.io.InputStream;
 import com.skillmesh.api.artifact.ArtifactStorage;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -86,8 +87,17 @@ public class UploadService {
             return completeSyncFile(session, now);
         }
 
-        SkillVersionEntity version = versions.findById(session.getSkillVersionId())
+        SkillVersionEntity version = versions.findByIdForUpdate(session.getSkillVersionId())
             .orElseThrow(() -> ApiException.notFound("版本"));
+        // 撤回不可逆：撤回了的版本不能再被上传会话转成已发布或待审。
+        // 撤回与收尾锁同一行，两个动作不会交错。
+        if ("revoked".equals(version.getStatus()) || "yanked".equals(version.getStatus())) {
+            session.setStatus("failed");
+            session.setErrorCode(ErrorCodes.VERSION_CONFLICT);
+            uploads.save(session);
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "版本已撤回，不能再发布");
+        }
         session.setStatus("verifying");
         uploads.save(session);
 
@@ -96,6 +106,7 @@ public class UploadService {
         ArtifactService.Promoted promoted;
         byte[] content;
         List<Map<String, Object>> manifest;
+        boolean manifestMatches;
         try {
             promoted = artifacts.promote(session.getTemporaryStorageKey(), finalKey,
                 session.getExpectedSha256(), session.getExpectedSizeBytes());
@@ -103,6 +114,13 @@ public class UploadService {
             // 算清单的同时验包：重名 entry 的包是非法制品，不能变成正式制品。
             content = readArtifact(finalKey);
             manifest = ZipManifest.of(content);
+            // 详细设计 §13：服务端重新计算归档内实际路径和哈希，并与上传声明比对。
+            // 比对的结果是用真值——声明跟真包不符也照收，但记一笔，
+            // 免得发布方以为声明说了算，审核面板却列着另一份文件清单。
+            manifestMatches = sameFiles(version.getManifestJson(), manifest);
+            // 换成真清单：签的摘要、对外发的 content_digest、
+            // 审核面板列的文件，都是包里真实的那份。
+            version.setManifestJson(manifest);
         } catch (ApiException e) {
             session.setStatus("failed");
             session.setErrorCode(e.code());
@@ -132,7 +150,9 @@ public class UploadService {
         versions.save(version);
 
         if ("published".equals(version.getStatus())) {
-            skills.findById(version.getSkillId()).ifPresent(skill -> {
+            // 锁住这一行再改 latest_version：不锁的话两个并发发布会各读各的，
+            // 后写的把先写的顶掉，latest 就退回了旧版本。
+            skills.findByIdForUpdate(version.getSkillId()).ifPresent(skill -> {
                 // latest_version 取版本号较大者：发一版旧的不能把 latest 顶回去。
                 if (VersionOrder.isGreater(version.getVersion(), skill.getLatestVersion())) {
                     skill.setLatestVersion(version.getVersion());
@@ -150,7 +170,9 @@ public class UploadService {
         audit.record(user, action, "skill", version.getSkillId(),
             "rejected".equals(version.getStatus()) ? "failure" : "success",
             Map.of("version", version.getVersion(), "sha256", promoted.sha256(),
-                "scan_status", scan.status()));
+                "scan_status", scan.status(),
+                // 声明的清单跟真包对不上：收下了，但记一笔——发布方说的不算数。
+                "manifest_mismatch", !manifestMatches));
 
         session.setStatus("completed");
         session.setVerifiedAt(now);
@@ -161,6 +183,29 @@ public class UploadService {
         // 客户端要判断的是这版被服务端怎么处理了（扫描拦下 / 待审 / 已发布）。
         return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
             session.getExpiresAt(), promoted.sha256(), null, version.getStatus());
+    }
+
+    /**
+     * 两份清单是不是同一批文件（路径 + 摘要一致）。
+     *
+     * 声明的那份是发布方自己填的，真包那份是服务端算出来的——对不上就说明
+     * 声明不可信，以真包为准。没声明清单就当对不上（等于没填）。
+     */
+    private boolean sameFiles(List<Map<String, Object>> declared,
+                              List<Map<String, Object>> actual) {
+        if (declared == null || declared.isEmpty()) {
+            return false;
+        }
+        return filesOf(declared).equals(filesOf(actual));
+    }
+
+    /** 清单里的文件：路径 → 摘要。 */
+    private Map<String, String> filesOf(List<Map<String, Object>> manifest) {
+        Map<String, String> files = new HashMap<>();
+        for (Map<String, Object> item : manifest) {
+            files.put(String.valueOf(item.get("path")), String.valueOf(item.get("sha256")));
+        }
+        return files;
     }
 
     /** 同步文件上传的收尾：校验字节数与摘要，通过就等着 commit。 */

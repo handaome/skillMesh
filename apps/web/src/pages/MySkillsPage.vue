@@ -161,13 +161,15 @@ function clearSelection() {
  * 抽屉里显示的还是源版本（那才是被改的），列表里多出来的那一版才是结果——
  * 两边都得对上，不能只刷一半。
  */
-async function onEdited() {
+async function onEdited(version?: string) {
   if (!selected.value) return
   const skill = selected.value
   try {
     const page = await getVersions(skill.id)
     if (selected.value?.id !== skill.id) return
     versions.value = page.items
+    // 抽屉跟着新版本走：编辑产出的是新版本，接着改得基于它。
+    if (version) browseVersion.value = version
   } catch (e) {
     versionsError.value = errorText(e)
   }

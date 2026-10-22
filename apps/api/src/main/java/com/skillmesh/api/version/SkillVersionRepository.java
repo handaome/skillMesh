@@ -66,4 +66,14 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
     @Query("select v from SkillVersionEntity v where v.skillId = :skillId and v.version = :version")
     Optional<SkillVersionEntity> findBySkillIdAndVersionForUpdate(@Param("skillId") UUID skillId,
                                                                   @Param("version") String version);
+
+    /**
+     * 按 id 取版本并锁住这一行（SELECT ... FOR UPDATE）。
+     *
+     * 上传收尾与撤回要串行化：撤回了的版本不该又被上传会话转成已发布。
+     * 两边锁同一行，后到的那个读到的是对方提交完的状态。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select v from SkillVersionEntity v where v.id = :id")
+    Optional<SkillVersionEntity> findByIdForUpdate(@Param("id") UUID id);
 }

@@ -15,4 +15,7 @@ public interface InstallationRepository extends JpaRepository<InstallationEntity
 
     Optional<InstallationEntity> findByUserIdAndDeviceIdAndTargetPathAndSkillId(
         UUID userId, UUID deviceId, String targetPath, UUID skillId);
+
+    /** 这个用户装过这个 Skill 没有（不论状态）。 */
+    boolean existsByUserIdAndSkillId(UUID userId, UUID skillId);
 }

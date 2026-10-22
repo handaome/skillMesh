@@ -94,6 +94,16 @@ public class VersionEditService {
 
         SkillVersionEntity source = versions.findBySkillIdAndVersion(skillId, sourceVersion)
             .orElseThrow(() -> ApiException.notFound("版本 " + sourceVersion));
+        // 编辑要基于不旧于最新已发布版本的那一版。
+        //
+        // 拿旧底稿重打包，产出的新版本号是新的，内容却是旧的——
+        // 新版本里的改动就这么被悄悄盖掉了。宁可在这里说清楚。
+        String latestPublished = latestPublishedVersion(skillId);
+        if (latestPublished != null && VersionOrder.isGreater(latestPublished, sourceVersion)) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "这个版本不是最新的（最新已发布的是 " + latestPublished + "），"
+                    + "基于最新版本编辑才不会丢改动");
+        }
         ArtifactEntity sourceArtifact = artifactOf(source);
 
         String path = normalizePath(request.path());
@@ -197,13 +207,37 @@ public class VersionEditService {
         if (requested != null && !requested.isBlank()) {
             return requested.trim();
         }
+        String latest = latestVersion(skillId);
+        return latest == null ? "1.0.0" : bumpPatch(latest);
+    }
+
+    /** 这个 Skill 已有的最大版本号（按版本号比，不按创建时间）。 */
+    private String latestVersion(UUID skillId) {
         String latest = null;
         for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
             if (latest == null || VersionOrder.isGreater(version.getVersion(), latest)) {
                 latest = version.getVersion();
             }
         }
-        return latest == null ? "1.0.0" : bumpPatch(latest);
+        return latest;
+    }
+
+    /**
+     * 最新已发布版本的版本号。没有已发布版本时返回 null。
+     *
+     * 草稿、被拒的版本不算：它们的内容没进过世界，编辑基于已发布的那版不算丢东西。
+     */
+    private String latestPublishedVersion(UUID skillId) {
+        String latest = null;
+        for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
+            if (!"published".equals(version.getStatus())) {
+                continue;
+            }
+            if (latest == null || VersionOrder.isGreater(version.getVersion(), latest)) {
+                latest = version.getVersion();
+            }
+        }
+        return latest;
     }
 
     /** 给版本号的 patch 位加一。解析不了就报错——别猜。 */

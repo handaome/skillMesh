@@ -52,6 +52,19 @@ class ArtifactScannerTest {
         assertThat(result.findings()).anyMatch(f -> f.rule().equals("安装依赖"));
     }
 
+    /**
+     * 路径穿越要阻断发布。
+     *
+     * entry 名越界的包，装的时候就会写到 Agent 目录外面去——这不是「疑似」，
+     * 是确定会出事，所以不能只记个 warning 就放行。
+     */
+    @Test
+    void 路径穿越要阻断() throws Exception {
+        ScanResult result = scanZip("../evil.sh", "#!/bin/sh\necho hi\n");
+        assertThat(result.blocked()).as("越界路径必须拦住").isTrue();
+        assertThat(result.findings()).anyMatch(f -> f.rule().equals("路径穿越"));
+    }
+
     private ScanResult scanZip(String name, String content) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (ZipOutputStream zos = new ZipOutputStream(out, StandardCharsets.UTF_8)) {

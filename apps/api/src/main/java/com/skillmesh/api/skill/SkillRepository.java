@@ -1,14 +1,28 @@
 package com.skillmesh.api.skill;
 
+import jakarta.persistence.LockModeType;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
+
+    /**
+     * 取 Skill 并锁住这一行（SELECT ... FOR UPDATE）。
+     *
+     * 发版要更新 latest_version：不锁的话两个并发发布会各读各的
+     * latest_version，后写的把先写的顶掉——latest 退回到旧版本。
+     * 锁的顺序是「先版本行、后 Skill 行」，两条路径一致才不会死锁。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from SkillEntity s where s.id = :id")
+    Optional<SkillEntity> findByIdForUpdate(@Param("id") UUID id);
 
     boolean existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(UUID ownerUserId, String slug);
 

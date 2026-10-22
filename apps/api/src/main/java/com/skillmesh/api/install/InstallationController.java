@@ -104,9 +104,11 @@ public class InstallationController {
         entity.setLastCheckedAt(now);
         installations.save(entity);
 
+        // 流水里不记本机绝对路径：审计台是按 Skill 可见的，
+        // 谁看得见这个 Skill 就看得见这条流水——路径只留在安装登记表里（只有本人可见）。
         audit.record(user, isNew ? "installation.register" : "installation.refresh",
             "skill", req.skill_id(), "success",
-            Map.of("target_path", req.target_path(), "version",
+            Map.of("agent", req.agent() == null ? "" : req.agent(), "version",
                 req.installed_version() == null ? "" : req.installed_version()));
         return ResponseEntity.created(URI.create("/api/v1/installations/" + entity.getId()))
             .body(toResponse(entity));

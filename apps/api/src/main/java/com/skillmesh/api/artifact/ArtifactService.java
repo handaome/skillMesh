@@ -2,6 +2,7 @@ package com.skillmesh.api.artifact;
 
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
@@ -58,10 +59,22 @@ public class ArtifactService {
             throw new ApiException(422, ErrorCodes.ARTIFACT_MISSING,
                 "上传对象不存在或已过期，请重新上传");
         }
-        byte[] bytes = readAll(storage.get(tempKey));
-        if (bytes.length > MAX_ARTIFACT_BYTES) {
+        // 先问对象多大：预签名地址在有效期内还能继续 PUT，对象可能比声明的大得多。
+        // 不先看一眼就整包读进堆，一个大对象就能把堆撑爆。
+        long storedSize = storage.size(tempKey);
+        if (storedSize > MAX_ARTIFACT_BYTES) {
             storage.delete(tempKey);
             throw new ApiException(422, ErrorCodes.VALIDATION_FAILED, "制品超过大小上限");
+        }
+        byte[] bytes;
+        try {
+            bytes = readAll(storage.get(tempKey));
+        } catch (ApiException e) {
+            storage.delete(tempKey);
+            throw e;
+        } catch (IOException e) {
+            storage.delete(tempKey);
+            throw new ApiException(502, ErrorCodes.ARTIFACT_MISSING, "读取上传对象失败");
         }
         if (expectedSizeBytes > 0 && bytes.length != expectedSizeBytes) {
             storage.delete(tempKey);
@@ -123,11 +136,24 @@ public class ArtifactService {
         }
     }
 
-    private byte[] readAll(InputStream in) {
+    /**
+     * 有上限地读一个对象。
+     *
+     * 不用 readAllBytes：对象大小不由我们决定（预签名地址还能继续 PUT），
+     * 读进堆的字节必须有上限——不然一个大对象就够把服务打死。
+     */
+    private byte[] readAll(InputStream in) throws IOException {
         try (in) {
-            return in.readAllBytes();
-        } catch (IOException e) {
-            throw new IllegalStateException("读取上传对象失败", e);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                if (out.size() + (long) read > MAX_ARTIFACT_BYTES) {
+                    throw new ApiException(422, ErrorCodes.VALIDATION_FAILED, "制品超过大小上限");
+                }
+                out.write(buffer, 0, read);
+            }
+            return out.toByteArray();
         }
     }
 

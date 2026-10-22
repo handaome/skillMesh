@@ -30,6 +30,12 @@ public final class ZipManifest {
     /** 解压后的总字节上限。压缩包本身有 50MB 上限，解压后可以大出几十倍。 */
     public static final long MAX_TOTAL_BYTES = 200L << 20;
 
+    /**
+     * 单个文件解压后的上限。与扫描器（{@code ArtifactScanner}）同一个数：
+     * 扫描器按这个数拒，服务端就别先把这么大的东西读进堆里。
+     */
+    public static final long MAX_FILE_BYTES = 20L << 20;
+
     private ZipManifest() {}
 
     /**
@@ -60,7 +66,7 @@ public final class ZipManifest {
                 if (entry.isDirectory()) {
                     continue;
                 }
-                byte[] data = readAll(in, MAX_TOTAL_BYTES - total);
+                byte[] data = readAll(in, Math.min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total), entry.getName());
                 total += data.length;
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("path", entry.getName());
@@ -77,14 +83,14 @@ public final class ZipManifest {
     }
 
     /** 读一个 entry 的内容。剩下的额度不够读完就是超限，直接拒。 */
-    private static byte[] readAll(ZipInputStream in, long budget) throws IOException {
+    private static byte[] readAll(ZipInputStream in, long budget, String path) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
         int read;
         while ((read = in.read(buffer)) > 0) {
             if (out.size() + (long) read > budget) {
                 throw new ApiException(422, ErrorCodes.VALIDATION_FAILED,
-                    "制品解压后超过大小上限 " + MAX_TOTAL_BYTES + " 字节");
+                    "制品里的 " + path + " 超过大小上限 " + budget + " 字节");
             }
             out.write(buffer, 0, read);
         }

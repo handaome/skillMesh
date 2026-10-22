@@ -55,7 +55,7 @@ public class AuditController {
     public List<EventResponse> forSkill(@AuthenticationPrincipal Jwt jwt,
                                         @PathVariable UUID skillId,
                                         @RequestParam(defaultValue = "50") int limit) {
-        var skill = skills.findById(skillId).orElseThrow();
+        var skill = skills.findById(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
         if (!skillService.canView(currentUserService.current(jwt), skill)) {
             throw ApiException.notFound("Skill");
         }

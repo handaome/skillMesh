@@ -91,6 +91,20 @@ public class ArtifactStorage {
         }
     }
 
+    /**
+     * 对象大小（字节）。对象不存在时返回 -1。
+     *
+     * 用来在把内容读进堆之前先问一句「它多大」——
+     * 预签名地址在有效期内还能继续 PUT，对象可能比声明的大得多。
+     */
+    public long size(String key) {
+        try {
+            return client.statObject(StatObjectArgs.builder().bucket(bucket).object(key).build()).size();
+        } catch (Exception e) {
+            return -1L;
+        }
+    }
+
     public void delete(String key) {
         try {
             client.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(key).build());

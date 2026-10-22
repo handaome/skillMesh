@@ -95,6 +95,25 @@ async function open(id: string) {
   }
 }
 
+/**
+ * 编辑产出新版本：刷新版本列表，抽屉跟着新版本走。
+ *
+ * 不刷新的话，这一页的版本表停在旧版本，新版本在这儿根本看不见——
+ * 用户以为没保存成功，又改一遍。
+ */
+async function onEdited(version?: string) {
+  if (!detail.value) return
+  const id = detail.value.id
+  try {
+    const page = await getVersions(id)
+    if (detail.value?.id !== id) return
+    versions.value = page.items
+    if (version) browseVersion.value = version
+  } catch (e) {
+    error.value = errorText(e)
+  }
+}
+
 function back() {
   openId.value = null
   detail.value = null
@@ -198,6 +217,7 @@ onMounted(search)
         :version="browseVersion"
         :label="`${detail.slug} · ${browseVersion}`"
         @close="browseVersion = ''"
+        @edited="onEdited"
       />
     </template>
   </div>

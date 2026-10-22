@@ -196,10 +196,16 @@ public class SkillVersionService {
         if (!skill.getOwnerUserId().equals(user.id())) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能撤回自己的版本");
         }
-        SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
+        SkillVersionEntity entity = versions.findBySkillIdAndVersionForUpdate(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
         if ("revoked".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已经是撤回状态");
+        }
+        // DDL 要求 revoked 的版本必须有制品（skill_versions 的 check 约束）。
+        // 没有制品还去撤，撞约束会变成 500——这里直接说清楚。
+        if (entity.getArtifactId() == null) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "该版本还没有上传制品，没有东西可撤回");
         }
         String previous = entity.getStatus();
         // DDL 要求 revoked 必须带 revoked_at（V1__init.sql 的 check 约束）。

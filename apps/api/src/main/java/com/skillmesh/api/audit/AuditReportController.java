@@ -3,6 +3,8 @@ package com.skillmesh.api.audit;
 import com.skillmesh.api.audit.dto.ReportAuditEventRequest;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.install.InstallationRepository;
+import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import jakarta.validation.Valid;
@@ -31,20 +33,24 @@ public class AuditReportController {
     /** 允许客户端上报的动作。别的 action 直接 400。 */
     private static final Set<String> ALLOWED = Set.of(
         "install.completed", "install.failed", "install.upgraded", "install.rolled_back",
-        "uninstall.completed", "sync.conflict_reported", "sync.retried",
-        "source.policy_changed");
+        "uninstall.completed", "sync.conflict_reported", "sync.retried");
 
     private final AuditService audit;
     private final CurrentUserService currentUserService;
     private final SkillService skills;
     private final SkillRepository skillRepository;
+    private final InstallationRepository installations;
+    private final OrgService orgs;
 
     public AuditReportController(AuditService audit, CurrentUserService currentUserService,
-            SkillService skills, SkillRepository skillRepository) {
+            SkillService skills, SkillRepository skillRepository,
+            InstallationRepository installations, OrgService orgs) {
         this.audit = audit;
         this.currentUserService = currentUserService;
         this.skills = skills;
         this.skillRepository = skillRepository;
+        this.installations = installations;
+        this.orgs = orgs;
     }
 
     @PostMapping("/events")
@@ -59,11 +65,11 @@ public class AuditReportController {
         var user = currentUserService.current(jwt);
         String targetType = req.target_type() == null ? "skill" : req.target_type();
         String targetId = req.target_id();
-        // target 是客户端自报的：得先确认上报者看得见这个 Skill，
+        // target 是客户端自报的：得先确认上报者跟这个 Skill 真有关系，
         // 否则任何登录用户都能往别人的 Skill 流水里塞「安装完成」这类条目，
         // 审计台分不出真假。同仓库别的写路径（改 Skill、看制品）都要过可见性。
         if ("skill".equals(targetType)) {
-            requireVisibleSkill(user, targetId);
+            requireRelatedSkill(user, targetId);
         }
         audit.record(user, req.action(), targetType, targetId,
             req.outcome() == null ? "success" : req.outcome(), req.details());
@@ -71,8 +77,15 @@ public class AuditReportController {
             .body(Map.of("accepted", true, "action", req.action()));
     }
 
-    /** 上报者看得见这个 Skill 才让他往它的流水里写东西。 */
-    private void requireVisibleSkill(CurrentUser user, String targetId) {
+    /**
+     * 上报者得跟这个 Skill 有关系，才让他往它的流水里写东西。
+     *
+     * 只判「看得见」太松：公开 Skill 谁都看得见，于是任何登录用户都能往
+     * 别人的 Skill 流水里塞「安装完成」这类条目，审计台就分不出真假。
+     * 这里要的是三种关系之一：它是属主、它是这个组织/团队的成员、
+     * 或者它真装过这个 Skill（安装记录摆在那儿）。
+     */
+    private void requireRelatedSkill(CurrentUser user, String targetId) {
         if (targetId == null) {
             throw new com.skillmesh.api.common.ApiException(400,
                 com.skillmesh.api.common.ErrorCodes.VALIDATION_FAILED, "缺少 target_id");
@@ -90,5 +103,20 @@ public class AuditReportController {
             throw new com.skillmesh.api.common.ApiException(403,
                 com.skillmesh.api.common.ErrorCodes.FORBIDDEN, "无权给这个 Skill 上报审计事件");
         }
+        if (skill.getOwnerUserId().equals(user.id())) {
+            return;
+        }
+        if (skill.getOrganizationId() != null
+            && (orgs.isOrgMember(skill.getOrganizationId(), user.id())
+                || (skill.getOwnerTeamId() != null
+                    && orgs.isTeamMember(skill.getOwnerTeamId(), user.id())))) {
+            return;
+        }
+        if (installations.existsByUserIdAndSkillId(user.id(), skillId)) {
+            return;
+        }
+        throw new com.skillmesh.api.common.ApiException(403,
+            com.skillmesh.api.common.ErrorCodes.FORBIDDEN,
+            "你没装过这个 Skill，也不是它的属主或成员，不能给它上报审计事件");
     }
 }

@@ -84,6 +84,33 @@ class UploadArtifactTest {
             .isEqualTo("published");
     }
 
+    /**
+     * 清单以服务端从真 zip 算的为准。
+     *
+     * 发布方自填的清单只是他的说法：这里声明「只有 SKILL.md」，
+     * 真包里却还有 secret.sh。审核面板列的文件、content_digest、
+     * 签名覆盖的摘要，都得是真包那份——不然审核的人看的是一份假的文件清单。
+     */
+    @Test
+    void 声明的清单不可信时以真包为准() throws Exception {
+        UUID skillId = createSkill();
+        byte[] zip = TestArtifacts.zipOf(Map.of("SKILL.md", "# A\n", "secret.sh", "echo hi\n"));
+
+        String sessionId = upload(skillId, "1.0.0", zip);
+
+        mockMvc.perform(post("/api/v1/uploads/{id}/complete", sessionId)
+                .header("Authorization", auth))
+            .andExpect(status().isAccepted());
+
+        String body = mockMvc.perform(get("/api/v1/skills/{id}/versions/{v}", skillId, "1.0.0")
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsString();
+        var manifest = json.readTree(body).path("manifest");
+        assertThat(manifest).hasSize(2);
+        assertThat(manifest.toString()).contains("secret.sh");
+    }
+
     /** 建版本 → 直传包，返回上传会话 id。 */
     private String upload(UUID skillId, String version, byte[] zip) throws Exception {
         String created = mockMvc.perform(post("/api/v1/skills/{id}/versions", skillId)

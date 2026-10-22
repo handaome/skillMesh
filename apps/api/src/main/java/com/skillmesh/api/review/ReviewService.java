@@ -67,6 +67,10 @@ public class ReviewService {
         if ("published".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已发布，无需再提交审核");
         }
+        // 撤回不可逆：撤回了的版本不能再送回审核队列。
+        if ("revoked".equals(entity.getStatus()) || "yanked".equals(entity.getStatus())) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已撤回，不能再送审");
+        }
         // 送审前必须已经上传过制品、也被服务端扫过——否则这道扫描闸形同虚设。
         requireScannable(entity, false);
         // 送审是幂等的：已经在队列里就什么都不用做。
@@ -123,13 +127,17 @@ public class ReviewService {
             entity.setStatus("published");
             entity.setPublishedBy(user.id());
             entity.setPublishedAt(now);
-            // latest_version 取版本号较大者：先过审 v1.1.0 再过审 v1.0.1，
-            // latest 不能被旧版本顶回去。
-            if (VersionOrder.isGreater(entity.getVersion(), skill.getLatestVersion())) {
-                skill.setLatestVersion(entity.getVersion());
-            }
-            skill.setUpdatedAt(now);
-            skills.save(skill);
+            // 锁住这一行再改 latest_version：并发过审时后写的会把先写的顶掉，
+            // latest 就退回了旧版本。锁的顺序与上传收尾一致（先版本行、后 Skill 行）。
+            skills.findByIdForUpdate(skillId).ifPresent(locked -> {
+                // latest_version 取版本号较大者：先过审 v1.1.0 再过审 v1.0.1，
+                // latest 不能被旧版本顶回去。
+                if (VersionOrder.isGreater(entity.getVersion(), locked.getLatestVersion())) {
+                    locked.setLatestVersion(entity.getVersion());
+                }
+                locked.setUpdatedAt(now);
+                skills.save(locked);
+            });
         } else {
             entity.setStatus("rejected");
         }

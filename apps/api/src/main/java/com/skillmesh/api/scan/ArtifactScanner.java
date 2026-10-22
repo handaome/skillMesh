@@ -29,6 +29,9 @@ public class ArtifactScanner {
     private static final long MAX_TOTAL_BYTES = 50L << 20;
     private static final int MAX_FILES = 5000;
 
+    /** 路径穿越这条规则的名字。 */
+    private static final String RULE_PATH_TRAVERSAL = "路径穿越";
+
     /** 超过这个时长按「未完成」处理，不让它拖住上传流程。 */
     private static final long TIMEOUT_MS = 30_000;
 
@@ -128,15 +131,11 @@ public class ArtifactScanner {
                 }
                 String path = entry.getName();
                 if (path.startsWith("/") || path.contains("..")) {
-                    findings.add(new ScanResult.Finding(path, 0, "路径穿越",
+                    findings.add(new ScanResult.Finding(path, 0, RULE_PATH_TRAVERSAL,
                         "制品里出现越界路径，不该发到云端"));
                     continue;
                 }
-                byte[] data = readEntry(zip);
-                if (data.length > MAX_FILE_BYTES) {
-                    // 边读边卡住：单个解压项就能撑爆内存的话，不该先读进来再判断。
-                    return "文件 " + path + " 超过单文件大小上限";
-                }
+                byte[] data = readEntry(zip, MAX_FILE_BYTES, path);
                 total += data.length;
                 if (total > MAX_TOTAL_BYTES) {
                     return "制品总大小超过上限 " + MAX_TOTAL_BYTES;
@@ -185,15 +184,29 @@ public class ArtifactScanner {
     }
 
     private static boolean isBlocking(ScanResult.Finding finding) {
+        // 路径穿越是包自己的毛病：条目名越界，装到 Agent 目录外面就写出去了。
+        // 这种不能只记个 warning——它不是「疑似」，是确定会出事。
+        if (RULE_PATH_TRAVERSAL.equals(finding.rule())) {
+            return true;
+        }
         return RULES.stream().anyMatch(rule -> rule.name().equals(finding.rule())
             && rule.blocking());
     }
 
-    private byte[] readEntry(ZipInputStream zip) throws IOException {
+    /**
+     * 读一个解压项，**边读边卡上限**。
+     *
+     * 先读进来再看大小就晚了：一个 500MB 的解压项能把堆撑爆，
+     * 那时再判断超限已经没意义。
+     */
+    private byte[] readEntry(ZipInputStream zip, long limit, String path) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
         int read;
         while ((read = zip.read(buffer)) > 0) {
+            if (out.size() + (long) read > limit) {
+                throw new IOException("文件 " + path + " 超过单文件大小上限 " + limit + " 字节");
+            }
             out.write(buffer, 0, read);
         }
         return out.toByteArray();
