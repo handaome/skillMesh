@@ -17,11 +17,17 @@ const (
 // Decide 比较基线、本地、云端三份摘要，决定这次同步做什么。
 //
 // base 为空表示这台机器从没同步过（没有基线），此时以本地为准上传。
+// cloud 为空表示云端没有可比的内容——这个 Skill 云端不存在，或还没有已发布版本。
+// 那不是「云端更新了」，云端根本没有东西可下：以本地为准重新传上去。
+//
+// cloud 为空还堵住了一个坑：云端的库被重建过（服务端的 Skill 全没了），
+// 本机基线还留着旧记录。这时三方比较会把「云端没有」当成「云端变了」，
+// 于是去下载一个不存在的 Skill——请求里带着空的 skill_id，撞出一句看不懂的 401。
 func Decide(base, local, cloud string) Decision {
 	if local == cloud {
 		return UpToDate
 	}
-	if base == "" {
+	if base == "" || cloud == "" {
 		return Upload
 	}
 	switch {

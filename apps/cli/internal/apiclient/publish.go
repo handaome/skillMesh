@@ -3,7 +3,6 @@ package apiclient
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,12 +77,8 @@ type UploadSession struct {
 
 // CreateSkill 建一个 Skill 元数据。
 func (c *Client) CreateSkill(ctx context.Context, req CreateSkillRequest) (Skill, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return Skill{}, err
-	}
 	var out Skill
-	if err := c.send(ctx, http.MethodPost, "/skills", body, &out); err != nil {
+	if err := c.doWith(ctx, http.MethodPost, "/skills", nil, req, &out); err != nil {
 		return Skill{}, err
 	}
 	return out, nil
@@ -112,13 +107,9 @@ func (c *Client) FindSkillBySlug(ctx context.Context, slug string) (Skill, bool,
 
 // CreateVersion 建一个候选版本，返回直传对象存储的目标。
 func (c *Client) CreateVersion(ctx context.Context, skillID string, req CreateVersionRequest) (CreateVersionResponse, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return CreateVersionResponse{}, err
-	}
 	var out CreateVersionResponse
 	path := "/skills/" + url.PathEscape(skillID) + "/versions"
-	if err := c.send(ctx, http.MethodPost, path, body, &out); err != nil {
+	if err := c.doWith(ctx, http.MethodPost, path, nil, req, &out); err != nil {
 		return CreateVersionResponse{}, err
 	}
 	return out, nil
@@ -128,7 +119,7 @@ func (c *Client) CreateVersion(ctx context.Context, skillID string, req CreateVe
 func (c *Client) CompleteUpload(ctx context.Context, sessionID string) (UploadSession, error) {
 	var out UploadSession
 	path := "/uploads/" + url.PathEscape(sessionID) + "/complete"
-	if err := c.send(ctx, http.MethodPost, path, []byte("{}"), &out); err != nil {
+	if err := c.doWith(ctx, http.MethodPost, path, nil, map[string]any{}, &out); err != nil {
 		return UploadSession{}, err
 	}
 	return out, nil
@@ -154,33 +145,6 @@ func (c *Client) PutArtifact(ctx context.Context, target UploadTarget, data []by
 		return fmt.Errorf("上传制品失败（HTTP %d）：%s", response.StatusCode, string(body))
 	}
 	return nil
-}
-
-// send 发一个带 JSON body 的请求。
-func (c *Client) send(ctx context.Context, method, path string, body []byte, out any) error {
-	target := c.base + path
-	request, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		request.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	response, err := c.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("请求 %s 失败: %w", target, err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return decodeProblem(response)
-	}
-	if out == nil {
-		_, _ = io.Copy(io.Discard, response.Body)
-		return nil
-	}
-	return json.NewDecoder(response.Body).Decode(out)
 }
 
 var _ = strconv.Itoa

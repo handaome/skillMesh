@@ -323,11 +323,9 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 	}
 	cloudHash := ""
 	if found {
-		// 云端已经有这个 Skill，但本机状态可能没记它的 ID（换过机器、或
-		// 之前是别的路径同步的）。补上，否则变更集会提交一个空 skill_id。
-		if target.SkillID == "" {
-			target.SkillID = skill.ID
-		}
+		// 云端给的 ID 才是真的：本机记的可能指向旧库（服务端的库重建过，
+		// 旧的 skill_id 就是条死链），拿它去报变更集只会换来一句 404。
+		target.SkillID = skill.ID
 		cloudHash, err = cloudDigest(ctx, client, skill.ID, local.SHA256)
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil

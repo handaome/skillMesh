@@ -14,6 +14,10 @@ func Test三方比较定出同步动作(t *testing.T) {
 		{"只有本地变了", "a", "b", "a", Upload},
 		{"只有云端变了", "a", "a", "b", Download},
 		{"两边都变了", "a", "b", "c", Conflict},
+		// 云端的库被重建过：云端没有这个 Skill，本地也没变——
+		// 该重新传上去，不是去下载一个不存在的 Skill。
+		{"云端没有可比内容且本地没变", "a", "a", "", Upload},
+		{"云端没有可比内容且本地变了", "a", "b", "", Upload},
 	}
 	for _, c := range cases {
 		if got := Decide(c.base, c.local, c.cloud); got != c.want {
