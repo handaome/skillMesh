@@ -126,13 +126,16 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 	// 同一份内容可能同时出现在多个位置：多个 Agent 目录、符号链接目录、
 	// 甚至是某个 Skill 内部的嵌套子 Skill。按内容摘要去重，只同步一次。
 	uploaded := map[string]string{}
-	for _, target := range targets {
+	for i, target := range targets {
+		progressStart(i+1, len(targets), target.Name)
+		started := time.Now()
 		digest, digestErr := skillscan.DirDigest(target.Path)
 		if digestErr == nil {
 			if first, seen := uploaded[digest]; seen {
+				detail := "与 " + first + " 内容一致，已同步过，跳过"
 				results = append(results, syncResult{Name: target.Name, Path: target.Path,
-					Outcome: skipped,
-					Detail:  "与 " + first + " 内容一致，已同步过，跳过"})
+					Outcome: skipped, Detail: detail})
+				progressDone(string(skipped)+"："+detail, time.Since(started))
 				continue
 			}
 			uploaded[digest] = target.Name
@@ -140,8 +143,10 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 		result, entry, err := syncOne(ctx, client, target, options)
 		if err != nil {
 			results = append(results, failedResult(target, err.Error()))
+			progressDone(string(failed)+"："+oneLine(err.Error()), time.Since(started))
 			continue
 		}
+		progressDone(progressText(result, options.DryRun), time.Since(started))
 		if result.Outcome == failed || result.Outcome == conflicted {
 			// 没同步成的不算数，别把后面同内容的也一起挡掉
 			delete(uploaded, digest)
@@ -170,6 +175,42 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 		}
 	}
 	return results, queue, nil
+}
+
+// progressStart 打出「正在处理哪个」。同一行先不换行，处理完再补上结果。
+//
+// 同步要打包再上传，十几个 Skill 跑下来不是一瞬间的事——不出声就不知道卡在哪。
+// 进度走 stderr，结果表格走 stdout：把 stdout 重定向到文件时，进度还在屏幕上。
+func progressStart(index, total int, name string) {
+	fmt.Fprintf(os.Stderr, "[%d/%d] %s …", index, total, name)
+}
+
+// progressDone 补上这一行的结果与耗时。
+func progressDone(text string, elapsed time.Duration) {
+	fmt.Fprintf(os.Stderr, " %s（%s）\n", text, elapsedText(elapsed))
+}
+
+// progressText 拼进度行上的结果说明。
+//
+// 正常同步只说结果，摘要留给最后的表格——表格里已经有了，重复一遍没意义。
+// 出问题或演练时才带详情：出事要当场看见，演练的结果也不能只说「无变化」。
+func progressText(result syncResult, dryRun bool) string {
+	switch {
+	case dryRun:
+		return "演练：" + oneLine(result.Detail)
+	case result.Outcome == failed || result.Outcome == conflicted:
+		return string(result.Outcome) + "：" + oneLine(result.Detail)
+	default:
+		return string(result.Outcome)
+	}
+}
+
+// elapsedText 把耗时写成人看得懂的短串。
+func elapsedText(d time.Duration) string {
+	if d < time.Second {
+		return d.Round(time.Millisecond).String()
+	}
+	return d.Round(100 * time.Millisecond).String()
 }
 
 // queueKey 拼队列/基线的主键。用分隔符避免名字里带分隔符时撞车。
