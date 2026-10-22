@@ -69,9 +69,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <el-card class="sm-login" shadow="never">
+  <div class="sm-login">
+    <div class="sm-login-mark" />
     <h1 class="sm-h1">SkillMesh</h1>
-    <p class="sm-muted">用团队账号登录，管理组织、团队与审核。</p>
+    <p class="sm-muted sm-mb-16">
+      Agent Skill 的注册中心：管理你自己的 Skill，把版本发给团队，在发布前审一道。
+    </p>
     <el-alert
       v-if="error"
       data-test="error"
@@ -79,12 +82,14 @@ onMounted(async () => {
       type="error"
       :closable="false"
       show-icon
+      class="sm-mb-16"
     />
     <el-button
       type="primary"
       :loading="busy"
       data-test="login"
+      class="sm-login-btn"
       @click="startLogin"
-    >{{ busy ? '登录中' : '登录' }}</el-button>
-  </el-card>
+    >{{ busy ? '登录中' : '用团队账号登录' }}</el-button>
+  </div>
 </template>

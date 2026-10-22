@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, getSkill, getVersions, searchSkills } from '../api'
 import type { Skill, SkillVersion } from '../types'
+import EmptyState from '../components/EmptyState.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +22,13 @@ const versionsLoading = ref(false)
 
 function errorText(e: unknown): string {
   return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+}
+
+const VISIBILITY_TEXT: Record<string, string> = {
+  private: '私有',
+  public: '公开',
+  team: '团队可见',
+  organization: '组织可见',
 }
 
 /**
@@ -110,20 +118,27 @@ watch(
     type="error"
     :closable="false"
     show-icon
-    class="sm-mb-12"
+    class="sm-mb-16"
   />
 
-  <el-card v-if="openId" shadow="never">
-    <el-button text data-test="back" @click="back">← 返回</el-button>
+  <div v-if="openId" class="sm-panel">
+    <el-button text data-test="back" class="sm-mb-12" @click="back">← 返回</el-button>
     <template v-if="detail">
-      <h1 class="sm-h1">{{ detail.name }}</h1>
-      <p class="sm-mono sm-muted">{{ detail.slug }}</p>
-      <p>{{ detail.description }}</p>
-      <p>
-        <el-tag size="small">{{ detail.visibility }}</el-tag>
-        <el-tag size="small" type="info" class="sm-ml-4">最新 {{ detail.latest_version ?? '—' }}</el-tag>
-      </p>
-      <h2 class="sm-h2 sm-mt-24">版本</h2>
+      <div class="sm-title-row">
+        <div>
+          <h1 class="sm-h1">{{ detail.name }}</h1>
+          <p class="sm-sub sm-mono">{{ detail.slug }}</p>
+        </div>
+        <div class="sm-row">
+          <span class="sm-pill">
+            {{ VISIBILITY_TEXT[detail.visibility] ?? detail.visibility }}
+          </span>
+          <span class="sm-pill sm-pill-accent">最新 {{ detail.latest_version ?? '—' }}</span>
+        </div>
+      </div>
+      <p class="sm-muted sm-mb-24">{{ detail.description }}</p>
+
+      <h2 class="sm-h2 sm-mb-12">版本</h2>
       <!--
         表格只在有数据时渲染：Element Plus 自带的「No Data」也是一句谎话
         （读失败不是没有版本），跟上面的错误条并排会把人读歪。
@@ -143,19 +158,25 @@ watch(
           </template>
         </el-table-column>
       </el-table>
-      <el-empty
+      <EmptyState
         v-if="!versionsLoading && !error && !versions.length"
-        description="还没有版本"
-        :image-size="60"
+        text="还没有版本"
       />
     </template>
-  </el-card>
+  </div>
 
   <section v-else>
-    <div class="sm-search">
+    <div class="sm-title-row">
+      <div>
+        <h1 class="sm-h1">市场</h1>
+        <p class="sm-sub">你能看见的 Skill：公开的，加上团队与组织里共享的。</p>
+      </div>
+    </div>
+
+    <div class="sm-toolbar">
       <el-input
         v-model="query"
-        class="sm-grow"
+        class="sm-search"
         placeholder="搜索 Skill 名称、描述或标签"
         clearable
         @keyup.enter="search"
@@ -163,30 +184,38 @@ watch(
       <el-button type="primary" :loading="loading" data-test="search" @click="search">
         搜索
       </el-button>
+      <span v-if="searched && !error" class="sm-muted sm-text-sm sm-num">
+        {{ skills.length }} 个
+      </span>
     </div>
 
-    <el-empty
+    <EmptyState
       v-if="!error && searched && !skills.length"
-      description="没有匹配的 Skill"
+      text="没有匹配的 Skill"
     />
 
     <div v-else-if="!error" class="sm-list">
-      <el-card
+      <button
         v-for="skill in skills"
         :key="skill.id"
-        shadow="hover"
-        class="sm-item"
+        class="sm-item sm-item-btn"
         data-test="skill-item"
         @click="open(skill.id)"
       >
-        <div class="sm-item-head">
-          <strong>{{ skill.name }}</strong>
-          <code class="sm-mono sm-muted">{{ skill.slug }}</code>
-          <el-tag size="small">{{ skill.visibility }}</el-tag>
+        <div class="sm-grow">
+          <div class="sm-item-head">
+            <strong class="sm-truncate">{{ skill.name }}</strong>
+            <code class="sm-mono sm-muted">{{ skill.slug }}</code>
+          </div>
+          <p class="sm-muted sm-text-sm sm-truncate">{{ skill.description }}</p>
         </div>
-        <p class="sm-muted">{{ skill.description }}</p>
-        <p class="sm-muted sm-text-sm">最新版本 {{ skill.latest_version ?? '—' }}</p>
-      </el-card>
+        <div class="sm-col sm-mine-meta">
+          <span class="sm-pill">
+            {{ VISIBILITY_TEXT[skill.visibility] ?? skill.visibility }}
+          </span>
+          <span class="sm-muted sm-text-sm sm-num">最新 {{ skill.latest_version ?? '—' }}</span>
+        </div>
+      </button>
     </div>
   </section>
 </template>

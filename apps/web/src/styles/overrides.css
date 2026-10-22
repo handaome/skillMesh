@@ -1,0 +1,146 @@
+/* Element Plus 覆盖：改主题变量，不改组件结构。
+   组件外观（按钮、表格、输入框、卡片、标签）在这里统一成自建库的样子。 */
+
+:root {
+  /* 字体与基础色 */
+  --el-font-family: var(--font);
+  --el-font-size-base: var(--fs-body);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: #3c3e40;
+  --el-text-color-secondary: var(--muted);
+  --el-text-color-placeholder: var(--faint);
+  --el-text-color-disabled: #a8aaac;
+
+  --el-border-color: var(--control);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--rule);
+  --el-border-color-hover: var(--muted);
+  --el-border-radius-base: var(--radius-control);
+  --el-border-radius-small: 4px;
+
+  --el-fill-color-blank: var(--surface);
+  --el-fill-color-light: var(--raised);
+  --el-fill-color-lighter: #f7f9fa;
+  --el-bg-color: var(--surface);
+  --el-bg-color-overlay: var(--surface);
+
+  /* 主色 = 强调色（焦点环、选中态用）；填充的主按钮另在下面改成近黑 */
+  --el-color-primary: var(--accent);
+  --el-color-primary-rgb: 27, 108, 128;
+  --el-color-primary-light-3: #4d8b9b;
+  --el-color-primary-light-5: #86aab5;
+  --el-color-primary-light-7: #becdd3;
+  --el-color-primary-light-8: #d4dfe3;
+  --el-color-primary-light-9: #e9eff1;
+  --el-color-primary-dark-2: #155666;
+
+  --el-color-success: var(--positive);
+  --el-color-warning: var(--warning);
+  --el-color-danger: var(--negative);
+  --el-color-error: var(--negative);
+  --el-color-info: var(--muted);
+
+  --el-disabled-bg-color: var(--raised);
+  --el-disabled-text-color: #a8aaac;
+  --el-disabled-border-color: var(--border);
+
+  /* 卡片：白底 + 1px 边，没有阴影 */
+  --el-card-bg-color: var(--surface);
+  --el-card-border-color: var(--border);
+  --el-card-border-radius: var(--radius-card);
+  --el-card-padding: var(--card-pad);
+
+  /* 表格：表头没有色块，行间一条细线 */
+  --el-table-border-color: var(--rule);
+  --el-table-header-bg-color: transparent;
+  --el-table-header-text-color: var(--muted);
+  --el-table-text-color: var(--text);
+  --el-table-tr-bg-color: var(--surface);
+  --el-table-row-hover-bg-color: var(--raised);
+  --el-table-current-row-bg-color: var(--active);
+
+  /* 标签：淡底 + 同色深字 */
+  --el-tag-border-radius: 999px;
+  --el-tag-font-size: var(--fs-small);
+
+  --el-box-shadow-light: 0 2px 12px rgb(19 20 22 / 8%);
+}
+
+/* 填充的主按钮是近黑，不是品牌色——页面上只有一处彩色，留给数据。 */
+.el-button--primary {
+  --el-button-text-color: var(--primary-ink);
+  --el-button-bg-color: var(--primary);
+  --el-button-border-color: var(--primary);
+  --el-button-hover-text-color: var(--primary-ink);
+  --el-button-hover-bg-color: #000;
+  --el-button-hover-border-color: #000;
+  --el-button-active-bg-color: #000;
+  --el-button-active-border-color: #000;
+  --el-button-disabled-bg-color: #4a4c4e;
+  --el-button-disabled-border-color: #4a4c4e;
+}
+
+/* 次要按钮 hover 走墨色，不染品牌色 */
+.el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):not(.el-button--warning) {
+  --el-button-hover-text-color: var(--text);
+  --el-button-hover-bg-color: var(--raised);
+  --el-button-hover-border-color: var(--control);
+}
+
+/* 危险按钮：淡底深字，跟其它状态药丸一个口径 */
+.el-button--danger {
+  --el-button-text-color: var(--pill-negative-ink);
+  --el-button-bg-color: var(--pill-negative-bg);
+  --el-button-border-color: transparent;
+  --el-button-hover-text-color: var(--pill-negative-ink);
+  --el-button-hover-bg-color: #ffe0dc;
+  --el-button-hover-border-color: transparent;
+  --el-button-active-bg-color: #ffd4cf;
+  --el-button-active-border-color: transparent;
+}
+
+/* 无类型的标签是中性药丸；带 type 的保留语义色 */
+.el-tag--primary {
+  --el-tag-text-color: var(--pill-neutral-ink);
+  --el-tag-bg-color: var(--pill-neutral-bg);
+  --el-tag-border-color: transparent;
+}
+.el-tag--info {
+  --el-tag-text-color: var(--pill-neutral-ink);
+  --el-tag-bg-color: var(--pill-neutral-bg);
+  --el-tag-border-color: transparent;
+}
+
+/* 表头：小字灰色，句首大小写，不加粗 */
+.el-table th.el-table__cell {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+}
+.el-table td.el-table__cell { padding: 10px 0; }
+.el-table::before,
+.el-table__inner-wrapper::before { display: none; }
+
+/* 输入框与选择器：32px 高、6px 圆角 */
+.el-input__wrapper,
+.el-select__wrapper {
+  min-height: var(--control-height);
+  border-radius: var(--radius-control);
+  box-shadow: 0 0 0 1px var(--control) inset;
+}
+.el-input__wrapper:hover,
+.el-select__wrapper:hover { box-shadow: 0 0 0 1px var(--muted) inset; }
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused { box-shadow: 0 0 0 1px var(--accent) inset; }
+
+/* 弹层：浮起来的东西可以有阴影 */
+.el-popper.is-light,
+.el-select-dropdown,
+.el-dropdown-menu { border-color: var(--border); }
+.el-popper.is-light .el-popper__arrow::before { border-color: var(--border); }
+
+/* 抽屉与对话框 */
+.el-dialog { border-radius: var(--radius-card); }
+.el-dialog__title { font-weight: 600; }
+.el-drawer__header { margin-bottom: 0; color: var(--text); font-weight: 600; }

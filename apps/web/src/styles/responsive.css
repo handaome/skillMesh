@@ -1,0 +1,41 @@
+/* 响应式：所有 @media 集中在这里，组件与布局文件里不散落断点。 */
+
+@media (max-width: 860px) {
+  /* 外框消失：侧栏变成抽屉，工作表铺满整屏 */
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .side {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 260px;
+    z-index: 30;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    transform: translateX(-100%);
+    transition: transform var(--t-ui) var(--ease-out);
+  }
+  .side.open { transform: none; }
+  .sm-mobilebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--topbar-height);
+    padding: 0 8px;
+  }
+  .sm-mobilebar-title { font-weight: 600; }
+  .menu-toggle { display: inline-flex; }
+  .sheet {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    padding: 16px;
+    min-height: calc(100vh - var(--topbar-height));
+  }
+  .sm-title-row { flex-wrap: wrap; align-items: flex-start; }
+  /* 左右两栏在窄屏叠起来 */
+  .sm-mine { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 480px) {
+  .sm-toolbar { flex-direction: column; align-items: stretch; }
+  .sm-toolbar .sm-spacer { display: none; }
+}

@@ -54,7 +54,7 @@ onMounted(load)
 </script>
 
 <template>
-  <el-card class="sm-login" shadow="never">
+  <div class="sm-login">
     <h1 class="sm-h1">加入团队</h1>
 
     <el-alert
@@ -116,5 +116,5 @@ onMounted(load)
         <el-button class="sm-mt-8">去团队页</el-button>
       </router-link>
     </template>
-  </el-card>
+  </div>
 </template>

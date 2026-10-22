@@ -71,10 +71,58 @@ async function request<T>(
 }
 
 export function searchSkills(q: string, token?: string): Promise<SkillPage> {
-  const params = new URLSearchParams()
+  // limit 给到服务端上限（100）：默认 20 会把结果静默截断，页面显示的个数就成了假话。
+  const params = new URLSearchParams({ limit: '100' })
   if (q) params.set('q', q)
-  const suffix = params.toString() ? `?${params}` : ''
-  return request<SkillPage>(`/skills${suffix}`, 'GET', undefined, token)
+  return request<SkillPage>(`/skills?${params}`, 'GET', undefined, token)
+}
+
+/**
+ * 我名下的 Skill（个人空间 + 我建的团队 Skill）。
+ * 服务端按属主过滤，可见性条件对它不生效——属主本来就看得见自己的东西。
+ *
+ * limit 显式给到服务端的上限（100）：默认只有 20，多出来的被服务端静默截断，
+ * 页面会假装「你只有 20 个 Skill」。
+ */
+export function searchMySkills(q: string, token?: string): Promise<SkillPage> {
+  const params = new URLSearchParams({ mine: 'true', limit: '100' })
+  if (q) params.set('q', q)
+  return request<SkillPage>(`/skills?${params}`, 'GET', undefined, token)
+}
+
+/**
+ * 新建 Skill 的元数据。
+ * 可见性只有 private / public：带组织的 Skill 要 publisher 及以上，
+ * 那种由 CLI publish 负责（它顺带建元数据），网页端不重复一套归属选择。
+ */
+export function createSkill(body: {
+  slug: string
+  name: string
+  description: string
+  visibility: 'private' | 'public'
+  tags?: string[]
+}): Promise<Skill> {
+  return request<Skill>('/skills', 'POST', body)
+}
+
+/**
+ * 改展示性元数据。slug 与可见性改不了（服务端不收那两项），
+ * 改了会影响别人已经装的东西。
+ */
+export function updateSkill(
+  id: string,
+  body: { name?: string; description?: string; tags?: string[] },
+): Promise<Skill> {
+  return request<Skill>(`/skills/${id}`, 'PATCH', body)
+}
+
+/** 撤回一个版本。只有属主能撤，撤了不可逆：恢复得发新版本。 */
+export function revokeVersion(skillId: string, version: string, reason = ''): Promise<unknown> {
+  return request<unknown>(
+    `/skills/${skillId}/versions/${encodeURIComponent(version)}/revoke`,
+    'POST',
+    { reason },
+  )
 }
 
 export function getSkill(id: string, token?: string): Promise<Skill> {

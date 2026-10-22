@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, approveVersion, getReviewDetail, rejectVersion } from '../api'
 import type { ReviewDetail } from '../types'
+import EmptyState from '../components/EmptyState.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -61,7 +62,7 @@ onMounted(load)
       type="error"
       :closable="false"
       show-icon
-      class="sm-mb-12"
+      class="sm-mb-16"
     />
     <el-alert
       v-if="notice"
@@ -70,33 +71,37 @@ onMounted(load)
       type="success"
       :closable="false"
       show-icon
-      class="sm-mb-12"
+      class="sm-mb-16"
     />
 
     <template v-if="detail">
-      <h1 class="sm-h1">
-        {{ detail.item.skill_name ?? '—' }}
-        <el-tag size="small" class="sm-ml-4">{{ detail.item.version }}</el-tag>
-        <el-tag size="small" type="info" class="sm-ml-4" data-test="version-status">
-          {{ detail.item.status }}
-        </el-tag>
-      </h1>
-      <p class="sm-muted">
-        提交人 {{ detail.item.submitted_by ?? '—' }}
-        <template v-if="detail.item.source.repository">
-          · {{ detail.item.source.repository }}
-        </template>
-        <template v-if="detail.item.source.ref">
-          · {{ detail.item.source.ref }}
-        </template>
-        <template v-if="detail.item.source.commit">
-          · {{ detail.item.source.commit.slice(0, 12) }}
-        </template>
-      </p>
+      <div class="sm-title-row">
+        <div>
+          <h1 class="sm-h1">{{ detail.item.skill_name ?? '—' }}</h1>
+          <p class="sm-sub">
+            提交人 {{ detail.item.submitted_by ?? '—' }}
+            <template v-if="detail.item.source.repository">
+              · {{ detail.item.source.repository }}
+            </template>
+            <template v-if="detail.item.source.ref">
+              · {{ detail.item.source.ref }}
+            </template>
+            <template v-if="detail.item.source.commit">
+              · {{ detail.item.source.commit.slice(0, 12) }}
+            </template>
+          </p>
+        </div>
+        <div class="sm-row">
+          <span class="sm-pill">{{ detail.item.version }}</span>
+          <span class="sm-pill" data-test="version-status">{{ detail.item.status }}</span>
+        </div>
+      </div>
 
-      <el-card shadow="never" class="sm-mb-16">
-        <h2 class="sm-h2">扫描结论</h2>
-        <p class="sm-muted">状态：{{ detail.item.scan.status }}</p>
+      <div class="sm-panel sm-mb-16">
+        <div class="sm-panel-head">
+          <h2 class="sm-h2">扫描结论</h2>
+          <span class="sm-meta">{{ detail.item.scan.status }}</span>
+        </div>
         <pre class="sm-pre">{{ detail.item.scan.summary || '无' }}</pre>
         <ul v-if="detail.findings.length" class="sm-list sm-mt-12">
           <li v-for="(finding, index) in detail.findings" :key="index" class="sm-text-sm">
@@ -104,15 +109,15 @@ onMounted(load)
             — {{ finding.detail }}
           </li>
         </ul>
-      </el-card>
+      </div>
 
-      <el-card shadow="never" class="sm-mb-16">
-        <h2 class="sm-h2">
-          文件差异
-          <el-tag size="small" type="info" class="sm-ml-4">
+      <div class="sm-panel sm-mb-16">
+        <div class="sm-panel-head">
+          <h2 class="sm-h2">文件差异</h2>
+          <span class="sm-meta">
             {{ detail.diff.base_version ? `对比 ${detail.diff.base_version}` : '首个版本' }}
-          </el-tag>
-        </h2>
+          </span>
+        </div>
         <!--
           表格只在有数据时渲染：下面已经有一个「没有文件差异」的空态了，
           再挂一个 Element Plus 自带的「No Data」就是两个空态并排。
@@ -134,15 +139,17 @@ onMounted(load)
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!detail.diff.files.length" description="没有文件差异" :image-size="60" />
-      </el-card>
+        <EmptyState v-if="!detail.diff.files.length" text="没有文件差异" />
+      </div>
 
-      <el-card shadow="never" class="sm-mb-16">
-        <h2 class="sm-h2">SKILL.md</h2>
+      <div class="sm-panel sm-mb-16">
+        <div class="sm-panel-head">
+          <h2 class="sm-h2">SKILL.md</h2>
+        </div>
         <pre class="sm-pre" data-test="skill-md">{{ detail.skill_md }}</pre>
-      </el-card>
+      </div>
 
-      <div v-if="canDecide" class="sm-search">
+      <div v-if="canDecide" class="sm-row">
         <el-button type="primary" data-test="approve" :disabled="busy" @click="decide(true)">
           通过
         </el-button>

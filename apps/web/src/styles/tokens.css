@@ -1,0 +1,63 @@
+/* 设计令牌。值来自 design-taste-frontend 抽到的 framed-sheet 方向：
+   一个染色的 L 形外框，内容坐在白色工作表上，页面上只有一处彩色（--accent）。 */
+
+:root {
+  /* 表面与底色 */
+  --ground: #f9fbfc;      /* 侧栏与顶栏共用的染色底 */
+  --surface: #ffffff;     /* 工作表（白纸）与面板 */
+  --raised: #f4f6f8;      /* 填充的内井、hover 行 */
+  --active: #ebedee;      /* 选中项的灰药丸 */
+  --border: #e8eaec;      /* 面板 1px 边 */
+  --rule: #f0f1f2;        /* 行分隔线 */
+  --control: #cdced1;     /* 输入框描边：比面板边强一档 */
+
+  /* 文字 */
+  --text: #131416;
+  --muted: #5d5f60;
+  --faint: #6b6b6b;
+
+  /* 彩色：只有一处强调 + 三个语义色 */
+  --accent: #1b6c80;      /* 工作台蓝绿：焦点环、选中态、数据上的那点彩 */
+  --primary: #1d1f20;     /* 主按钮：近黑，不是品牌色 */
+  --primary-ink: #ffffff;
+  --positive: #1e7b4f;
+  --negative: #c4242a;
+  --warning: #92400e;
+
+  /* 状态药丸：淡底 + 同色深字 */
+  --pill-positive-bg: #dcfae5; --pill-positive-ink: #04250e;
+  --pill-negative-bg: #ffedea; --pill-negative-ink: #831c1e;
+  --pill-warning-bg: #fffbeb; --pill-warning-ink: #92400e;
+  --pill-neutral-bg: #ebedee; --pill-neutral-ink: #353736;
+  --pill-accent-bg: #e3f0f3; --pill-accent-ink: #0f4451;
+
+  /* 字体：系统栈，不外链字体服务。页面正文是中文，
+     拉丁字体只覆盖数字与少量英文，多引一份字体只会多一层网络依赖。 */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas,
+    "Liberation Mono", monospace;
+  --fs-title: 22px;
+  --fs-section: 16px;
+  --fs-kpi: 28px;
+  --fs-body: 14px;
+  --fs-small: 12px;
+
+  /* 尺寸 */
+  --sidebar-width: 228px;
+  --topbar-height: 48px;
+  --gap: 24px;
+  --pad: 24px;
+  --card-pad: 20px;
+  --radius-card: 8px;
+  --radius-control: 6px;
+  --radius-sheet: 16px;
+  --sheet-inset: 8px;
+  --control-height: 32px;
+  --row-height: 48px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-press: 120ms;
+  --t-hover: 150ms;
+  --t-ui: 200ms;
+}

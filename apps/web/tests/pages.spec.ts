@@ -89,7 +89,7 @@ describe('MarketPage', () => {
     await wrapper.find('[data-test="search"]').trigger('click')
     await flushPromises()
 
-    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/skills?q=rust')
+    expect(String(fetchMock.mock.calls[0][0])).toContain('q=rust')
   })
 
   it('失败时展示错误码而不是静默失败', async () => {

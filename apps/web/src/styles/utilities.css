@@ -1,0 +1,31 @@
+/* 原子类：单属性、高频复用。语义类去 components.css。 */
+
+/* 间距 */
+.sm-mt-8 { margin-top: 8px; }
+.sm-mt-12 { margin-top: 12px; }
+.sm-mt-16 { margin-top: 16px; }
+.sm-mt-24 { margin-top: 24px; }
+.sm-mb-8 { margin-bottom: 8px; }
+.sm-mb-12 { margin-bottom: 12px; }
+.sm-mb-16 { margin-bottom: 16px; }
+.sm-mb-24 { margin-bottom: 24px; }
+.sm-ml-4 { margin-left: 4px; }
+.sm-ml-8 { margin-left: 8px; }
+.sm-mr-8 { margin-right: 8px; }
+
+/* 弹性与网格 */
+.sm-grow { flex: 1; min-width: 0; }
+.sm-row { display: flex; align-items: center; gap: 8px; }
+.sm-row-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sm-col { display: flex; flex-direction: column; gap: 8px; }
+
+/* 排版 */
+.sm-h1 { font-size: var(--fs-title); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.sm-h2 { font-size: var(--fs-section); line-height: 1.3; font-weight: 600; margin: 0; }
+.sm-muted { color: var(--muted); margin: 0; }
+.sm-faint { color: var(--faint); margin: 0; }
+.sm-text-sm { font-size: var(--fs-small); }
+.sm-mono { font-family: var(--font-mono); font-size: 0.92em; }
+.sm-num { font-variant-numeric: tabular-nums; }
+.sm-break { overflow-wrap: anywhere; word-break: break-all; }
+.sm-truncate { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

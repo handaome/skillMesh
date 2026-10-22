@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ApiError, listReviews } from '../api'
 import type { PendingReview } from '../types'
+import EmptyState from '../components/EmptyState.vue'
 
 const router = useRouter()
 const reviews = ref<PendingReview[]>([])
@@ -30,7 +31,13 @@ onMounted(load)
 
 <template>
   <section>
-    <h1 class="sm-h1">待审版本</h1>
+    <div class="sm-title-row">
+      <div>
+        <h1 class="sm-h1">待审版本</h1>
+        <p class="sm-sub">团队与组织可见的版本不会直接发布，要在这里有人放行。</p>
+      </div>
+      <span class="sm-muted sm-text-sm sm-num">{{ reviews.length }} 个待审</span>
+    </div>
 
     <el-alert
       v-if="error"
@@ -39,38 +46,39 @@ onMounted(load)
       type="error"
       :closable="false"
       show-icon
-      class="sm-mb-12"
+      class="sm-mb-16"
     />
-    <el-empty
+    <EmptyState
       v-else-if="!loading && !reviews.length"
-      description="没有待审的版本"
+      text="没有待审的版本"
     />
 
     <div v-else class="sm-list">
-      <el-card
+      <button
         v-for="review in reviews"
         :key="`${review.skill_id}-${review.version}`"
-        shadow="hover"
-        class="sm-item"
+        class="sm-item sm-item-btn"
         data-test="review-item"
         @click="open(review)"
       >
-        <div class="sm-item-head">
-          <strong>{{ review.skill_name ?? '—' }}</strong>
-          <code class="sm-mono sm-muted">{{ review.skill_slug ?? '—' }}</code>
-          <el-tag size="small">{{ review.version }}</el-tag>
-          <el-tag
-            size="small"
-            :type="review.scan.status === 'passed' ? 'success' : 'warning'"
-          >扫描 {{ review.scan.status }}</el-tag>
+        <div class="sm-grow">
+          <div class="sm-item-head">
+            <strong class="sm-truncate">{{ review.skill_name ?? '—' }}</strong>
+            <code class="sm-mono sm-muted">{{ review.skill_slug ?? '—' }}</code>
+            <span class="sm-pill">{{ review.version }}</span>
+          </div>
+          <p class="sm-muted sm-text-sm sm-truncate">
+            提交人 {{ review.submitted_by ?? '—' }}
+            <template v-if="review.source.repository">
+              · {{ review.source.repository }}
+            </template>
+          </p>
         </div>
-        <p class="sm-muted">
-          提交人 {{ review.submitted_by ?? '—' }}
-          <template v-if="review.source.repository">
-            · {{ review.source.repository }}
-          </template>
-        </p>
-      </el-card>
+        <span
+          class="sm-pill"
+          :class="review.scan.status === 'passed' ? 'sm-pill-pos' : 'sm-pill-warn'"
+        >扫描 {{ review.scan.status }}</span>
+      </button>
     </div>
   </section>
 </template>

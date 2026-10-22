@@ -1,0 +1,102 @@
+/* 布局：左侧栏 + 右侧白色工作表。
+   侧栏与顶栏共用同一块染色底（--ground），中间没有分隔线；内容坐在白纸上，
+   右边与下边各留 8px 露出底色。 */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--ground);
+}
+
+/* 侧栏 */
+.side {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 12px;
+  overflow: auto;
+}
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 14px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.side-brand .sm-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 5px;
+  background: var(--accent);
+}
+/* 工作空间切换器：侧栏顶端，说清当前在看哪个组织 */
+.sm-side-org { margin: 0 4px 14px; width: calc(100% - 8px); }
+.side-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-group {
+  margin: 18px 8px 6px;
+  font-size: var(--fs-small);
+  color: var(--faint);
+}
+.side-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  transition: background-color var(--t-hover) ease, color var(--t-hover) ease;
+}
+.side-item:hover { background: var(--raised); color: var(--text); }
+.side-item.router-link-active { background: var(--active); color: var(--text); }
+.side-item .el-icon { width: 16px; height: 16px; flex: none; }
+/* 账号行：侧栏底部 */
+.side-foot { margin-top: auto; padding-top: 16px; }
+.sm-side-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+}
+
+/* 窄屏才出现的菜单条 */
+.sm-mobilebar { display: none; }
+
+/* 工作表：白纸，边框 + 圆角，没有阴影 */
+.sheet {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sheet);
+  margin: 0 var(--sheet-inset) var(--sheet-inset) 0;
+  padding: var(--pad);
+  min-height: calc(100vh - var(--sheet-inset));
+  min-width: 0;
+}
+.sheet-wide { max-width: none; }
+
+/* 右列：菜单条 + 工作表 */
+.sm-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 未登录时的裸页面（登录页、邀请页） */
+.sm-bare {
+  min-height: 100vh;
+  display: grid;
+  place-items: start center;
+  padding: 24px;
+}
+
+
+
+/* 窄屏的折叠规则在 responsive.css 里，不散落在布局文件里。 */

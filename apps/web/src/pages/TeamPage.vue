@@ -16,16 +16,18 @@ import {
 import { currentOrg } from '../auth/currentOrg'
 import { loadMe, meError } from '../auth/session'
 import type { Invitation, Member, Team } from '../types'
+import EmptyState from '../components/EmptyState.vue'
 
 const org = currentOrg
 const teams = ref<Team[]>([])
-const members = ref<Member[]>([])
 /** 成员表正在读。切范围时旧行已经清空，这时更不能显示「还没有成员」。 */
-const membersLoading = ref(false)
+const membersLoading = ref(true)
 /** 当前表格里的行属于哪个范围（组织/团队）。切范围时旧行得先清掉。 */
 const membersScope = ref('')
+const members = ref<Member[]>([])
 const invitations = ref<Invitation[]>([])
-const loading = ref(false)
+/** 邀请区正在读。 */
+const invitationsLoading = ref(true)
 /** 成员区的错（改角色、读成员、读团队） */
 const memberError = ref('')
 /** 邀请区的错（生成、撤销、读邀请） */
@@ -98,35 +100,63 @@ async function refreshMembers() {
   }
 }
 
+/**
+ * 读组织的三块数据：团队、成员、邀请。
+ *
+ * 三块并行而不是串行：邀请表在这个环境的远程 PG 上要 3 秒多，串着等的话
+ * 成员表早回来了却要陪着一起空着——「列表在转圈」看起来像没数据。
+ *
+ * 每块自己管自己的 loading 与错误：一块挂了不该把另外两块也拉下水。
+ */
 async function load() {
   // 记下发起时的组织：响应回来时组织已经变了就丢弃，否则旧组织那轮慢响应
   // 会盖掉新组织的数据（页面顶上写着组织 B，列表里却是组织 A 的）。
   const orgId = org.value?.id
   if (!orgId) {
-    loading.value = false
+    membersLoading.value = false
+    invitationsLoading.value = false
     return
   }
-  loading.value = true
   memberError.value = ''
   inviteError.value = ''
-  try {
-    const list = await listTeams(orgId)
-    if (org.value?.id !== orgId) return
-    teams.value = list
-    await loadMembers(orgId, selectedTeam.value)
-  } catch (e) {
-    if (org.value?.id !== orgId) return
-    memberError.value = errorText(e)
-  }
-  try {
-    const list = await listInvitations(orgId)
-    if (org.value?.id !== orgId) return
-    invitations.value = list
-  } catch (e) {
-    if (org.value?.id !== orgId) return
-    inviteError.value = errorText(e)
-  }
-  if (org.value?.id === orgId) loading.value = false
+
+  await Promise.all([
+    (async () => {
+      try {
+        const list = await listTeams(orgId)
+        if (org.value?.id !== orgId) return
+        teams.value = list
+      } catch (e) {
+        if (org.value?.id !== orgId) return
+        memberError.value = errorText(e)
+      }
+    })(),
+    (async () => {
+      membersLoading.value = true
+      try {
+        await loadMembers(orgId, selectedTeam.value)
+      } catch (e) {
+        if (org.value?.id !== orgId) return
+        members.value = []
+        memberError.value = errorText(e)
+      } finally {
+        membersLoading.value = false
+      }
+    })(),
+    (async () => {
+      invitationsLoading.value = true
+      try {
+        const list = await listInvitations(orgId)
+        if (org.value?.id !== orgId) return
+        invitations.value = list
+      } catch (e) {
+        if (org.value?.id !== orgId) return
+        inviteError.value = errorText(e)
+      } finally {
+        invitationsLoading.value = false
+      }
+    })(),
+  ])
 }
 
 async function invite() {
@@ -224,7 +254,7 @@ async function createTeamNow() {
 }
 
 // 换组织：团队、成员、邀请都是按组织拉的，得重取一遍。
-watch(() => org.value?.id, async () => {  selectedTeam.value = ''
+watch(() => org.value?.id, async () => { selectedTeam.value = ''
   teams.value = []
   members.value = []
   invitations.value = []
@@ -239,20 +269,27 @@ onMounted(load)
 
 <template>
   <section>
-    <h1 class="sm-h1">团队</h1>
+    <div class="sm-title-row">
+      <div>
+        <h1 class="sm-h1">团队</h1>
+        <p class="sm-sub">组织是团队与 Skill 的归属地。这里管成员、角色与邀请。</p>
+      </div>
+    </div>
 
-    <el-empty
+    <EmptyState
       v-if="!org"
-      :description="meError ? '加载用户信息失败，还不知道你有没有组织。' : '你还没有加入任何组织。'"
+      :text="meError ? '加载用户信息失败，还不知道你有没有组织。' : '你还没有加入任何组织。'"
     />
 
     <!-- 还没有组织时先建一个：组织只能被邀请进，但自己也能建。 -->
-    <el-card shadow="never" class="sm-mb-16">
-      <h2 class="sm-h2">新建组织</h2>
-      <p class="sm-muted">组织是团队与 Skill 归属的地方。建好后邀请同事进来。</p>
-      <div class="sm-search">
-        <el-input v-model="newOrgSlug" placeholder="组织 slug（如 acme）" data-test="org-slug" />
-        <el-input v-model="newOrgName" placeholder="组织名称（如 Acme）" data-test="org-name" />
+    <div v-if="!org" class="sm-panel">
+      <div class="sm-panel-head">
+        <h2 class="sm-h2">新建组织</h2>
+      </div>
+      <p class="sm-muted sm-mb-16">组织是团队与 Skill 归属的地方。建好后邀请同事进来。</p>
+      <div class="sm-toolbar">
+        <el-input v-model="newOrgSlug" placeholder="组织 slug（如 my-company）" data-test="org-slug" />
+        <el-input v-model="newOrgName" placeholder="组织名称（如 某某科技）" data-test="org-name" />
         <el-button
           type="primary"
           data-test="create-org"
@@ -267,23 +304,23 @@ onMounted(load)
         type="error"
         :closable="false"
         show-icon
-        class="sm-mb-12"
+        class="sm-mt-12"
       />
-    </el-card>
+    </div>
 
     <template v-if="org">
-      <p class="sm-muted">
+      <p class="sm-muted sm-mb-16">
         组织 {{ org.name }} · 我的角色 {{ org.role }}
       </p>
 
-      <el-card shadow="never" class="sm-mb-16">
-        <div class="sm-search">
+      <div class="sm-panel sm-mb-16">
+        <div class="sm-panel-head">
           <h2 class="sm-h2">团队</h2>
           <el-button data-test="create-team-toggle" @click="showNewTeam = !showNewTeam">
             新建团队
           </el-button>
         </div>
-        <div class="sm-search">
+        <div class="sm-toolbar">
           <el-select
             v-model="selectedTeam"
             placeholder="（不指定团队）"
@@ -295,7 +332,7 @@ onMounted(load)
             <el-option v-for="team in teams" :key="team.id" :label="team.name" :value="team.id" />
           </el-select>
         </div>
-        <div v-if="showNewTeam" class="sm-search sm-mb-12">
+        <div v-if="showNewTeam" class="sm-toolbar">
           <el-input v-model="newTeamSlug" placeholder="团队 slug（如 platform）" data-test="team-slug" />
           <el-input v-model="newTeamName" placeholder="团队名称（如 Platform）" data-test="team-name" />
           <el-button
@@ -330,7 +367,7 @@ onMounted(load)
           表格只在有数据时渲染：Element Plus 自带的「No Data」也是一句谎话
           （读失败不是没有成员）。改角色失败时列表仍然有效，表格照常显示。
         -->
-        <el-table v-if="!loading && members.length > 0" :data="members" size="small">
+        <el-table v-if="members.length > 0" :data="members" size="small">
           <el-table-column label="成员" min-width="140">
             <template #default="scope">
               <span data-test="member-row">{{ scope.row.display_name }}</span>
@@ -357,16 +394,18 @@ onMounted(load)
             </template>
           </el-table-column>
         </el-table>
-        <el-empty
-          v-if="!loading && !membersLoading && !memberError && !members.length"
-          description="还没有成员"
-          :image-size="60"
+        <div v-if="membersLoading && !members.length" class="sm-empty">加载中…</div>
+        <EmptyState
+          v-if="!membersLoading && !memberError && !members.length"
+          text="还没有成员"
         />
-      </el-card>
+      </div>
 
-      <el-card shadow="never" class="sm-mb-16">
-        <h2 class="sm-h2">邀请</h2>
-        <div class="sm-search">
+      <div class="sm-panel">
+        <div class="sm-panel-head">
+          <h2 class="sm-h2">邀请</h2>
+        </div>
+        <div class="sm-toolbar">
           <el-select v-model="inviteOrgRole" data-test="org-role-select" class="sm-grow">
             <el-option label="组织角色 member" value="member" />
             <el-option label="组织角色 publisher" value="publisher" />
@@ -426,7 +465,7 @@ onMounted(load)
         />
 
         <!-- 邀请区同理：读失败不是「没有发出过邀请」。 -->
-        <el-table v-if="!loading && invitations.length > 0" :data="invitations" size="small">
+        <el-table v-if="invitations.length > 0" :data="invitations" size="small">
           <el-table-column label="团队" min-width="120">
             <template #default="scope">
               <span data-test="invitation-row">{{ scope.row.team_name ?? '—' }}</span>
@@ -466,12 +505,12 @@ onMounted(load)
             </template>
           </el-table-column>
         </el-table>
-        <el-empty
-          v-if="!loading && !inviteError && !invitations.length"
-          description="还没有发出过邀请"
-          :image-size="60"
+        <div v-if="invitationsLoading && !invitations.length" class="sm-empty">加载中…</div>
+        <EmptyState
+          v-if="!invitationsLoading && !inviteError && !invitations.length"
+          text="还没有发出过邀请"
         />
-      </el-card>
+      </div>
     </template>
   </section>
 </template>
