@@ -279,6 +279,50 @@ describe('FileBrowser', () => {
     expect(JSON.parse(String(put?.body)).executable).toBeUndefined()
   })
 
+  /**
+   * 上传文件：二进制内容编码成 base64 传过去，产出新版本。
+   *
+   * 图片、字体这类文件塞不进文本框，只能这么传。
+   */
+  it('上传文件产出新版本', async () => {
+    const calls: { method?: string; body?: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method, body: init?.body })
+      if (init?.method === 'PUT') {
+        return jsonResponse({
+          skill_id: 's1', version: '1.0.1', file_count: 4,
+          sha256: 'd'.repeat(64), status: 'published',
+        })
+      }
+      return jsonResponse(FILES)
+    }))
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    const input = wrapper.find('[data-test="file-input"]')
+    const file = new File([new Uint8Array([1, 2, 3])], 'logo.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { value: [file] })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="upload-file-name"]').text()).toContain('logo.png')
+
+    await wrapper.find('[data-test="upload-submit"]').trigger('click')
+    // FileReader 是宏任务：读完文件才发请求，得等它。
+    await vi.waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true))
+    await flushPromises()
+
+    const put = calls.find((c) => c.method === 'PUT')
+    const body = JSON.parse(String(put?.body))
+    expect(body.operation).toBe('create')
+    expect(body.path).toBe('logo.png')
+    expect(body.content_base64).toBe(btoa(String.fromCharCode(1, 2, 3)))
+    expect(wrapper.find('[data-test="save-notice"]').text()).toContain('1.0.1')
+  })
+
   it('点文件读出正文', async () => {
     const fetchMock = stubFiles()
     vi.stubGlobal('fetch', fetchMock)

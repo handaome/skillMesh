@@ -172,6 +172,8 @@ export function editVersionFile(
   body: {
     path: string
     content?: string
+    /** 二进制内容（base64）。上传图片这类文件时用它，content 只能装文本。 */
+    content_base64?: string
     /** replace（改内容，默认）/ create（新建）/ delete（删除）。 */
     operation?: 'replace' | 'create' | 'delete'
     /** 要不要可执行位。不给就沿用原来的。 */

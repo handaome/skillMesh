@@ -9,6 +9,7 @@ import {
   updateSkill,
 } from '../api'
 import type { Skill, SkillVersion } from '../types'
+import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
 
@@ -421,6 +422,12 @@ onMounted(load)
                   </div>
                   <p class="sm-muted sm-text-sm sm-mono sm-break">
                     {{ version.artifact?.sha256.slice(0, 16) ?? '—' }}
+                  </p>
+                  <p class="sm-muted sm-text-sm" data-test="version-time">
+                    创建于 {{ formatDateTime(version.created_at) }}
+                    <template v-if="version.published_at">
+                      · 发布于 {{ formatDateTime(version.published_at) }}
+                    </template>
                   </p>
                 </div>
                 <div class="sm-row">

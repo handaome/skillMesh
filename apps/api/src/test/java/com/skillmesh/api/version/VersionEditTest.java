@@ -18,6 +18,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -134,7 +135,7 @@ class VersionEditTest {
         ApiException err = catchThrowableOfType(
             () -> edits.edit(stranger, skillId, "1.0.0",
                 new com.skillmesh.api.version.dto.EditFileRequest(
-                    "SKILL.md", "# 改了\n", null, null, null, null, null)),
+                    "SKILL.md", "# 改了\n", null, null, null, null, null, null)),
             ApiException.class);
         assertThat(err).as("别人的私有 Skill 不该能编辑").isNotNull();
         assertThat(err.status()).isEqualTo(404);
@@ -164,7 +165,7 @@ class VersionEditTest {
         ApiException err = catchThrowableOfType(
             () -> edits.edit(member, skillId, "1.0.0",
                 new com.skillmesh.api.version.dto.EditFileRequest(
-                    "SKILL.md", "# 改了\n", null, null, null, null, null)),
+                    "SKILL.md", "# 改了\n", null, null, null, null, null, null)),
             ApiException.class);
         assertThat(err).as("不是团队成员的编辑不了团队可见的 Skill").isNotNull();
         assertThat(err.status()).isEqualTo(404);
@@ -258,6 +259,48 @@ class VersionEditTest {
 
         byte[] zip = downloadArtifact(skillId, "1.0.1");
         assertThat(modeOf(zip, "scripts/run.sh") & 0111).as("要变成可执行").isNotZero();
+    }
+
+    /**
+     * 上传二进制文件：内容走 base64，产出的新版本里就是那些字节。
+     *
+     * 图片、字体这类文件塞不进 UTF-8 文本，只能这么传。
+     */
+    @Test
+    void 能上传二进制文件() throws Exception {
+        UUID skillId = createSkill("uploader");
+        publishVersion(skillId, "1.0.0", TestArtifacts.zipOf(Map.of("SKILL.md", "# 标题\n")));
+
+        byte[] image = new byte[] {0, 1, 2, (byte) 0xFF, 65, 66, 0};
+        mockMvc.perform(put("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.0")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "path", "assets/logo.png",
+                    "content_base64", Base64.getEncoder().encodeToString(image),
+                    "operation", "create"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.version").value("1.0.1"))
+            .andExpect(jsonPath("$.file_count").value(2));
+
+        assertThat(entryOf(downloadArtifact(skillId, "1.0.1"), "assets/logo.png"))
+            .as("上传的字节要原样进包").isEqualTo(image);
+    }
+
+    /** 读某个 entry 的字节。 */
+    private static byte[] entryOf(byte[] zip, String path) throws Exception {
+        try (var channel = new org.apache.commons.compress.utils.SeekableInMemoryByteChannel(zip);
+             var zf = new org.apache.commons.compress.archivers.zip.ZipFile(channel, "UTF-8")) {
+            var all = zf.getEntries();
+            while (all.hasMoreElements()) {
+                var entry = all.nextElement();
+                if (path.equals(entry.getName())) {
+                    try (var in = zf.getInputStream(entry)) {
+                        return in.readAllBytes();
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /**

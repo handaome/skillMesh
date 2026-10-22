@@ -29,3 +29,7 @@
 .sm-num { font-variant-numeric: tabular-nums; }
 .sm-break { overflow-wrap: anywhere; word-break: break-all; }
 .sm-truncate { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 视觉上藏起来，但还在 DOM 里——文件选择框就该这样：不能 display:none，
+   那样点不开（display:none 的表单控件浏览器不会响应 click）。 */
+.sm-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

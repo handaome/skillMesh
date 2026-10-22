@@ -73,4 +73,22 @@ describe('MySkillsPage', () => {
     expect(JSON.parse(String(patch?.body)).name).toBe('新名字')
     expect(wrapper.text()).toContain('新名字')
   })
+
+  /** 版本要能看到时间——不然不知道哪个版本是后发的。 */
+  it('版本列表显示时间', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/versions')) {
+        return jsonResponse({ items: [VERSION], next_cursor: null, has_more: false })
+      }
+      return jsonResponse({ items: [SKILL], next_cursor: null, has_more: false })
+    }))
+    const wrapper = await mountMine()
+
+    await wrapper.find('[data-test="mine-item"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="version-time"]').text()).toMatch(
+      /创建于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/,
+    )
+  })
 })

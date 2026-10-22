@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, getSkill, getVersions, searchSkills } from '../api'
 import type { Skill, SkillVersion } from '../types'
+import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
 
@@ -162,6 +163,13 @@ watch(
         <el-table-column label="摘要" min-width="140">
           <template #default="scope">
             <span class="sm-mono">{{ scope.row.artifact?.sha256.slice(0, 12) ?? '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="时间" min-width="150">
+          <template #default="scope">
+            <span class="sm-text-sm" data-test="version-time">
+              {{ formatDateTime(scope.row.created_at) }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column label="" width="100">

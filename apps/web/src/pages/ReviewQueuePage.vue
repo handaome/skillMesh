@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ApiError, listReviews } from '../api'
 import type { PendingReview } from '../types'
+import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 
 const router = useRouter()
@@ -69,6 +70,9 @@ onMounted(load)
           </div>
           <p class="sm-muted sm-text-sm sm-truncate">
             提交人 {{ review.submitted_by ?? '—' }}
+            <template v-if="review.submitted_at">
+              · 提交于 {{ formatDateTime(review.submitted_at) }}
+            </template>
             <template v-if="review.source.repository">
               · {{ review.source.repository }}
             </template>

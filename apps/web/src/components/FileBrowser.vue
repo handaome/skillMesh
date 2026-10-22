@@ -30,6 +30,14 @@ const creating = ref(false)
 const newPath = ref('')
 const newContent = ref('')
 
+/** 上传：从本机挑一个文件进来（二进制走这条路）。 */
+const uploading = ref(false)
+const uploadError = ref('')
+const uploadPath = ref('')
+const uploadExecutable = ref(false)
+const picked = ref<File | null>(null)
+const fileInput = ref<HTMLInputElement | null>(null)
+
 /** 收起的目录（按完整路径）。默认全展开——Skill 的目录一般只有一两层。 */
 const collapsed = ref(new Set<string>())
 
@@ -236,6 +244,82 @@ async function createFile() {
   }
 }
 
+/**
+ * 上传：从本机挑一个文件进包里。
+ *
+ * 走 base64——图片、字体这类二进制塞不进文本框。
+ */
+async function upload() {
+  const file = picked.value
+  if (!file) return
+  const path = uploadPath.value.trim()
+  if (!path) {
+    uploadError.value = '文件路径不能为空'
+    return
+  }
+  saving.value = true
+  uploadError.value = ''
+  saveNotice.value = ''
+  try {
+    const result = await editVersionFile(props.skillId, props.version, {
+      path,
+      content_base64: await readBase64(file),
+      operation: 'create',
+      executable: uploadExecutable.value,
+      changelog: `在控制台上传 ${path}`,
+    })
+    uploading.value = false
+    picked.value = null
+    uploadPath.value = ''
+    uploadExecutable.value = false
+    saveNotice.value = `已上传 ${path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
+    emit('edited')
+  } catch (e) {
+    uploadError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 打开系统文件选择器。 */
+function pickFile() {
+  uploadError.value = ''
+  fileInput.value?.click()
+}
+
+/** 选好了：路径默认用文件名，用户可以改。 */
+function onPicked(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  // 先把文件取出来，再清空选择：给 file 类型的 input 置空会连带清掉已选文件。
+  // 清空是为了让同一个文件再选一次也能触发 change。
+  input.value = ''
+  if (!file) return
+  picked.value = file
+  uploadPath.value = file.name
+  uploadExecutable.value = false
+  uploadError.value = ''
+  uploading.value = true
+  creating.value = false
+}
+
+function cancelUpload() {
+  uploading.value = false
+  picked.value = null
+  uploadPath.value = ''
+  uploadError.value = ''
+}
+
+/** 文件 → base64。 */
+function readBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+    reader.onerror = () => reject(new Error('读取文件失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
 /** 删除文件。删了要出新版本——版本不可变，删不掉「这一版里的它」。 */
 async function deleteFile() {
   const file = current.value
@@ -315,13 +399,25 @@ function onDialogClosed() {
         <el-button
           text
           data-test="new-file"
-          @click="creating = !creating; saveError = ''"
+          @click="creating = !creating; creating && (uploading = false); saveError = ''"
         >新建文件</el-button>
+        <el-button text data-test="upload-file" @click="pickFile">上传文件</el-button>
         <button class="sm-files-close" data-test="files-close" aria-label="关闭" @click="close">
           ✕
         </button>
       </div>
     </header>
+
+    <!--
+      文件选择框藏在视觉外但留在 DOM 里：display:none 的控件浏览器不响应 click。
+    -->
+    <input
+      ref="fileInput"
+      type="file"
+      class="sm-hidden"
+      data-test="file-input"
+      @change="onPicked"
+    />
 
     <div class="sm-files-body" :class="{ 'sm-files-narrow': narrow }">
       <div class="sm-browser-side">
@@ -442,6 +538,53 @@ function onDialogClosed() {
             <el-button text data-test="cancel-new" @click="creating = false">取消</el-button>
             <span class="sm-muted sm-text-sm">
               版本不可变：新建会产出新版本，不会改掉 {{ version }}。
+            </span>
+          </div>
+        </div>
+
+        <!-- 上传文件（二进制走这条路） -->
+        <div v-else-if="uploading" class="sm-newfile">
+          <el-alert
+            v-if="uploadError"
+            data-test="upload-error"
+            :title="uploadError"
+            type="error"
+            :closable="false"
+            show-icon
+            class="sm-mb-12"
+          />
+          <div class="sm-field sm-mb-12">
+            <label>文件</label>
+            <span class="sm-mono sm-text-sm" data-test="upload-file-name">
+              {{ picked?.name }}（{{ formatSize(picked?.size ?? 0) }}）
+            </span>
+          </div>
+          <div class="sm-field sm-mb-12">
+            <label for="upload-path">路径</label>
+            <el-input
+              id="upload-path"
+              v-model="uploadPath"
+              class="sm-mono"
+              placeholder="如 assets/logo.png"
+              data-test="upload-path"
+            />
+            <span class="sm-hint">制品内的相对路径，正斜杠分隔。路径已存在会被覆盖。</span>
+          </div>
+          <div class="sm-row">
+            <el-button
+              type="primary"
+              data-test="upload-submit"
+              :loading="saving"
+              @click="upload"
+            >上传</el-button>
+            <el-button text data-test="cancel-upload" @click="cancelUpload">取消</el-button>
+            <el-checkbox
+              :model-value="uploadExecutable"
+              data-test="upload-executable"
+              @change="(v: boolean | string | number) => { uploadExecutable = Boolean(v) }"
+            >可执行</el-checkbox>
+            <span class="sm-muted sm-text-sm">
+              版本不可变：上传会产出新版本，不会改掉 {{ version }}。
             </span>
           </div>
         </div>

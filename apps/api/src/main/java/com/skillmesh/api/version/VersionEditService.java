@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -101,8 +102,7 @@ public class VersionEditService {
 
         byte[] content = null;
         if (!delete) {
-            content = request.content() == null
-                ? new byte[0] : request.content().getBytes(StandardCharsets.UTF_8);
+            content = decodeContent(request);
             if (content.length > MAX_FILE_BYTES) {
                 throw new ApiException(413, ErrorCodes.VALIDATION_FAILED,
                     "文件超过 " + (MAX_FILE_BYTES >> 10) + " KB 上限");
@@ -144,6 +144,26 @@ public class VersionEditService {
         var completed = uploadService.complete(user, session.getId());
         return new EditFileResponse(skillId, version, manifest.size(), sha256,
             completed.versionStatus());
+    }
+
+    /**
+     * 文件内容。
+     *
+     * 文本走 {@code content}，二进制走 {@code content_base64}——图片、字体这些
+     * 塞不进 UTF-8 文本，上传时由前端编码成 base64。
+     */
+    private byte[] decodeContent(EditFileRequest request) {
+        String base64 = request.contentBase64();
+        if (base64 != null && !base64.isBlank()) {
+            try {
+                return Base64.getDecoder().decode(base64);
+            } catch (IllegalArgumentException e) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                    "content_base64 不是合法的 base64");
+            }
+        }
+        return request.content() == null
+            ? new byte[0] : request.content().getBytes(StandardCharsets.UTF_8);
     }
 
     /**

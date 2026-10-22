@@ -1,5 +1,6 @@
 package com.skillmesh.api.version.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -14,6 +15,13 @@ public record EditFileRequest(
         @NotBlank @Size(max = 1024) String path,
         /** 文件的新内容。空串表示把文件清空。删除文件时不用给。 */
         @Size(max = 1048576) String content,
+        /**
+         * 二进制内容（base64）。
+         *
+         * 上传图片、字体这类文件时用这个：{@code content} 只能装 UTF-8 文本，
+         * 而 Skill 的包里什么文件都可能有。
+         */
+        @JsonProperty("content_base64") @Size(max = 1398104) String contentBase64,
         /**
          * 做什么：replace（默认，改内容）/ create（新建）/ delete（删除）。
          */
