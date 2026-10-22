@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ApiError, getSkill, getVersions, searchSkills } from '../api'
 import type { Skill, SkillVersion } from '../types'
 import EmptyState from '../components/EmptyState.vue'
+import FileBrowser from '../components/FileBrowser.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +20,8 @@ const detail = ref<Skill | null>(null)
 const versions = ref<SkillVersion[]>([])
 /** 版本表正在读。读失败不是「这个 Skill 没有版本」。 */
 const versionsLoading = ref(false)
+/** 正在浏览哪个版本的文件。空串表示没展开。 */
+const browseVersion = ref('')
 
 function errorText(e: unknown): string {
   return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
@@ -67,6 +70,8 @@ async function open(id: string) {
   detail.value = null
   versions.value = []
   versionsLoading.value = false
+  // 换 Skill 就收起文件浏览：展开的是上一个 Skill 的文件。
+  browseVersion.value = ''
   error.value = ''
   if (route.query.skill !== id) {
     await router.replace({ query: { ...route.query, skill: id } })
@@ -94,6 +99,7 @@ function back() {
   detail.value = null
   versions.value = []
   versionsLoading.value = false
+  browseVersion.value = ''
   error.value = ''
   const next = { ...route.query }
   delete next.skill
@@ -157,11 +163,28 @@ watch(
             <span class="sm-mono">{{ scope.row.artifact?.sha256.slice(0, 12) ?? '—' }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="" width="100">
+          <template #default="scope">
+            <el-button
+              v-if="scope.row.artifact"
+              text
+              data-test="browse-files"
+              @click="browseVersion = browseVersion === scope.row.version ? '' : scope.row.version"
+            >
+              {{ browseVersion === scope.row.version ? '收起' : '浏览文件' }}
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <EmptyState
         v-if="!versionsLoading && !error && !versions.length"
         text="还没有版本"
       />
+
+      <!-- 在线浏览这个版本里的文件。 -->
+      <div v-if="browseVersion" class="sm-mt-16">
+        <FileBrowser :skill-id="detail.id" :version="browseVersion" />
+      </div>
     </template>
   </div>
 

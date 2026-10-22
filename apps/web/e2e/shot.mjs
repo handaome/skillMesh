@@ -74,6 +74,30 @@ try {
   await page.realClick('[data-test="mine-item"]')
   await sleep(1500)
   await shot(page, 'mine-detail')
+
+  // 展开文件浏览，点开一个文件
+  await page.realClick('[data-test="browse-files"]')
+  await sleep(2000)
+  await shot(page, 'mine-files')
+  const file = await page.eval(`(() => {
+    const el = [...document.querySelectorAll('[data-test="tree-file"]')]
+      .find((e) => e.innerText.includes('SKILL.md'));
+    if (!el) return null;
+    el.click();
+    return el.innerText.trim();
+  })()`)
+  console.log('点了文件:', file)
+  await sleep(2000)
+  await shot(page, 'mine-file-content')
+
+  // 滚到文件浏览器那一段
+  await page.eval(`(() => {
+    const el = document.querySelector('[data-test="file-tree"]');
+    if (el) el.scrollIntoView({ block: 'center' });
+    return true;
+  })()`)
+  await sleep(800)
+  await shot(page, 'mine-files-scrolled')
 } finally {
   proc.kill()
 }

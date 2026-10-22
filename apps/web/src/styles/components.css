@@ -87,6 +87,61 @@
 .sm-mine-meta { align-items: flex-end; gap: 4px; }
 .sm-mine-detail { min-width: 0; }
 
+/* 文件浏览器：左树右内容 */
+.sm-browser {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+}
+.sm-browser-side {
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-control);
+  padding: 6px;
+  max-height: 420px;
+  overflow: auto;
+}
+.sm-browser-main { min-width: 0; }
+.sm-browser-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+/* 文件树：一行一个文件，按层级缩进 */
+.sm-tree { display: grid; }
+.sm-tree-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sm-tree-row:hover { background: var(--active); }
+.sm-tree-on { background: var(--active); color: var(--text); font-weight: 500; }
+.sm-tree-dir {
+  color: var(--muted);
+  font-weight: 500;
+}
+.sm-tree-caret {
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  color: var(--faint);
+}
+.sm-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sm-tree-row .sm-mono { font-size: 12px; }
+
 
 /* 状态药丸：淡底 + 同色深字 */
 .sm-pill {

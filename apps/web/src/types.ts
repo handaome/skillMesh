@@ -43,6 +43,27 @@ export interface VersionPage {
   has_more: boolean
 }
 
+/** 某版本里的文件清单。服务端从真 zip 算出来的那份。 */
+export interface VersionFiles {
+  version: string
+  file_count: number
+  files: {
+    path: string
+    size_bytes: number
+    sha256: string
+  }[]
+}
+
+/** 某个文件的正文。二进制文件 content 为 null。 */
+export interface VersionFileContent {
+  version: string
+  path: string
+  size_bytes: number
+  sha256: string
+  binary: boolean
+  content: string | null
+}
+
 export interface Team {
   id: string
   organization_id: string

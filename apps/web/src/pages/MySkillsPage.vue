@@ -10,6 +10,7 @@ import {
 } from '../api'
 import type { Skill, SkillVersion } from '../types'
 import EmptyState from '../components/EmptyState.vue'
+import FileBrowser from '../components/FileBrowser.vue'
 
 /** 服务端收 slug 的规则：小写字母数字开头，后跟小写字母数字或连字符，总长 2–64。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/
@@ -26,6 +27,9 @@ const versionsLoading = ref(false)
 const versionsError = ref('')
 const actionError = ref('')
 const notice = ref('')
+
+/** 正在浏览哪个版本的文件。空串表示没展开。 */
+const browseVersion = ref('')
 
 /** 编辑表单。改的是展示性元数据：slug 与可见性服务端不收。 */
 const editName = ref('')
@@ -122,6 +126,8 @@ async function select(skill: Skill) {
   editTags.value = [...skill.tags]
   notice.value = ''
   actionError.value = ''
+  // 换 Skill 就收起文件浏览：展开的是上一个 Skill 的文件。
+  browseVersion.value = ''
   versions.value = []
   versionsLoading.value = true
   versionsError.value = ''
@@ -143,6 +149,7 @@ function clearSelection() {
   versionsError.value = ''
   actionError.value = ''
   notice.value = ''
+  browseVersion.value = ''
 }
 
 /** 保存展示性元数据。 */
@@ -398,13 +405,23 @@ onMounted(load)
                     {{ version.artifact?.sha256.slice(0, 16) ?? '—' }}
                   </p>
                 </div>
-                <el-button
-                  v-if="version.status !== 'revoked'"
-                  text
-                  type="danger"
-                  data-test="revoke"
-                  @click="revoke(version)"
-                >撤回</el-button>
+                <div class="sm-row">
+                  <el-button
+                    v-if="version.artifact"
+                    text
+                    data-test="browse-files"
+                    @click="browseVersion = browseVersion === version.version ? '' : version.version"
+                  >
+                    {{ browseVersion === version.version ? '收起文件' : '浏览文件' }}
+                  </el-button>
+                  <el-button
+                    v-if="version.status !== 'revoked'"
+                    text
+                    type="danger"
+                    data-test="revoke"
+                    @click="revoke(version)"
+                  >撤回</el-button>
+                </div>
               </li>
             </ul>
           </div>
@@ -413,6 +430,20 @@ onMounted(load)
         <div v-else class="sm-panel">
           <div class="sm-empty">左边选一个 Skill，看它的元数据与版本。</div>
         </div>
+      </div>
+    </div>
+
+    <!--
+      文件浏览占整行：塞在右栏里的话，树与正文都只剩几百像素，
+      看不清路径也读不了代码。
+    -->
+    <div v-if="browseVersion && selected" class="sm-mt-16">
+      <div class="sm-panel">
+        <div class="sm-panel-head">
+          <h2 class="sm-h2">文件</h2>
+          <span class="sm-meta">{{ selected.slug }} · {{ browseVersion }}</span>
+        </div>
+        <FileBrowser :skill-id="selected.id" :version="browseVersion" />
       </div>
     </div>
 

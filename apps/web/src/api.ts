@@ -1,7 +1,7 @@
 import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
 
 const BASE = '/api/v1'
 
@@ -131,6 +131,33 @@ export function getSkill(id: string, token?: string): Promise<Skill> {
 
 export function getVersions(id: string, token?: string): Promise<VersionPage> {
   return request<VersionPage>(`/skills/${id}/versions`, 'GET', undefined, token)
+}
+
+/** 某版本里的文件清单。服务端从真 zip 算出来的那份，不是发布方自填的。 */
+export function listVersionFiles(
+  skillId: string,
+  version: string,
+): Promise<VersionFiles> {
+  return request<VersionFiles>(
+    `/skills/${skillId}/versions/${encodeURIComponent(version)}/files`,
+  )
+}
+
+/**
+ * 读某个文件的正文。
+ *
+ * 二进制文件服务端不返回正文（content 为 null，binary 为 true）——把乱码塞给
+ * 浏览器既没意义，也可能被当成脚本渲染。
+ */
+export function readVersionFile(
+  skillId: string,
+  version: string,
+  path: string,
+): Promise<VersionFileContent> {
+  const params = new URLSearchParams({ path })
+  return request<VersionFileContent>(
+    `/skills/${skillId}/versions/${encodeURIComponent(version)}/file?${params}`,
+  )
 }
 
 export function listTeams(organizationId: string): Promise<Team[]> {

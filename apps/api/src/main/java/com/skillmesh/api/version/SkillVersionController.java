@@ -5,6 +5,8 @@ import com.skillmesh.api.version.dto.RevokeVersionRequest;
 import com.skillmesh.api.version.dto.SkillVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
+import com.skillmesh.api.version.dto.VersionFileContentResponse;
+import com.skillmesh.api.version.dto.VersionFilesResponse;
 import com.skillmesh.api.version.dto.VersionPage;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -25,11 +28,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class SkillVersionController {
 
     private final SkillVersionService versions;
+    private final VersionFileService versionFiles;
     private final CurrentUserService currentUserService;
 
     public SkillVersionController(SkillVersionService versions,
+                                  VersionFileService versionFiles,
                                   CurrentUserService currentUserService) {
         this.versions = versions;
+        this.versionFiles = versionFiles;
         this.currentUserService = currentUserService;
     }
 
@@ -68,5 +74,26 @@ public class SkillVersionController {
             @RequestBody(required = false) RevokeVersionRequest req) {
         return ResponseEntity.ok(versions.revoke(currentUserService.current(jwt), skillId,
             version, req == null ? "" : req.reason()));
+    }
+
+    /**
+     * 浏览版本里的文件（在线看 Skill 的内部结构）。
+     *
+     * 清单取服务端从真 zip 算出来的那份，不是发布方自填的。
+     */
+    @GetMapping("/skills/{skillId}/versions/{version}/files")
+    public VersionFilesResponse files(@AuthenticationPrincipal Jwt jwt,
+                                      @PathVariable UUID skillId,
+                                      @PathVariable String version) {
+        return versionFiles.list(currentUserService.current(jwt), skillId, version);
+    }
+
+    /** 读某个文件的正文。路径用查询参数：制品内的路径带斜杠，走路径段会被拆开。 */
+    @GetMapping("/skills/{skillId}/versions/{version}/file")
+    public VersionFileContentResponse file(@AuthenticationPrincipal Jwt jwt,
+                                           @PathVariable UUID skillId,
+                                           @PathVariable String version,
+                                           @RequestParam String path) {
+        return versionFiles.read(currentUserService.current(jwt), skillId, version, path);
     }
 }

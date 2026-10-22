@@ -33,6 +33,8 @@
   .sm-title-row { flex-wrap: wrap; align-items: flex-start; }
   /* 左右两栏在窄屏叠起来 */
   .sm-mine { grid-template-columns: minmax(0, 1fr); }
+  .sm-browser { grid-template-columns: minmax(0, 1fr); }
+  .sm-browser-side { max-height: 240px; }
 }
 
 @media (max-width: 480px) {
