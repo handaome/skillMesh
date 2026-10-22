@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { currentOrg, selectOrganization } from './auth/currentOrg'
-import { ensureFresh, loadMe, logout, meError, session } from './auth/session'
+import { ensureFresh, loadMe, logoutEndingSession, meError, session } from './auth/session'
 
 const router = useRouter()
 
@@ -44,8 +44,9 @@ onMounted(async () => {
 })
 
 function signOut() {
-  logout()
-  router.push('/login')
+  // 主动登出要连 Keycloak 的 SSO 会话一起结束：只清本地的话，
+  // 浏览器里的 SSO cookie 还在，再点「登录」会免密进成刚才那个人。
+  logoutEndingSession()
 }
 </script>
 

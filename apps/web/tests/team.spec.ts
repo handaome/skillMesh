@@ -319,7 +319,8 @@ describe('TeamPage', () => {
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountTeam()
 
-    const subjectSelect = wrapper.findComponent('[data-test="invite-subject"]')
+    const subjectSelect = wrapper.findComponent<{ $emit: (event: string, value: string) => void }>(
+      '[data-test="invite-subject"]')
     subjectSelect.vm.$emit('update:modelValue', 'sub-u1')
     await flushPromises()
 

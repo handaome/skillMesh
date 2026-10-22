@@ -350,6 +350,35 @@ try {
   await a.waitFor(`!!document.querySelector('[data-test="error"]')`, { label: '页面报错提示', timeout: 20000 })
   const errText = await a.text('[data-test="error"]')
   step('14. 负例：唯一 owner 改自己的角色，页面报错', errText.length > 0, errText)
+
+  // ---- 登出：SSO 会话也要一起结束 ----
+  // 只清 localStorage 不算登出：浏览器里 Keycloak 的 SSO cookie 还在，
+  // 下一个人点「登录」会被免密放行，权限就落到他头上了。
+  await a.goto(`${CFG.web}/`)
+  await a.waitFor(`!!document.querySelector('[data-test="logout"]')`, { label: '登出按钮' })
+  await a.realClick('[data-test="logout"]')
+  try {
+    await a.waitFor(`location.pathname === '/login'`, { label: '登出后回到登录页', timeout: 30000 })
+  } catch (e) {
+    console.log('  诊断 url =', await a.url())
+    console.log('  诊断 body =', JSON.stringify((await a.eval('document.body.innerText')).slice(0, 200)))
+    throw e
+  }
+  step('15. 登出后回到登录页（Keycloak 的 SSO 会话一起结束）', true)
+
+  // 判据不是「跳走了」，而是「再登录时 Keycloak 仍要密码」：
+  // SSO cookie 还在的话会被直接放行，那等于没登出。
+  await a.waitApp()
+  await a.realClick('[data-test="login"]')
+  await a.waitFor(
+    `location.href.startsWith('${CFG.issuer.split('/realms')[0]}') || location.href.includes('code=')`,
+    { label: '跳到 Keycloak 或被免密放行', timeout: 30000 },
+  )
+  await sleep(1500) // Keycloak 渲染登录页要一会儿
+  const askedPassword = await a.eval(`!!document.querySelector('#username')`)
+  const ssoKept = (await a.url()).includes('code=')
+  step('16. 登出后再登录仍要求输入密码（SSO 已结束）', askedPassword && !ssoKept,
+    ssoKept ? '被免密放行了——SSO 还在' : '')
 } finally {
   proc.kill()
 }

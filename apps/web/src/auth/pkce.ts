@@ -10,6 +10,14 @@ export interface TokenResponse {
   /** RFC 6749 §6：refresh 响应可以不带这个字段。 */
   refresh_token?: string
   expires_in: number
+  /**
+   * id_token：登出时用。
+   *
+   * Keycloak 的 logout 端点带上 id_token_hint 才知道「登出的是谁」，
+   * 不带就只显示一个「要登出吗」的确认页——SSO 会话其实没结束，
+   * 别人点「确认」就等于替他登出了。
+   */
+  id_token?: string
 }
 
 function base64Url(bytes: Uint8Array): string {

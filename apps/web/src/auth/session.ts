@@ -1,5 +1,5 @@
 import { reactive, ref } from 'vue'
-import { exchangeCode, refreshToken } from './pkce'
+import { CLIENT_ID, ISSUER, exchangeCode, refreshToken } from './pkce'
 
 const STORAGE_KEY = 'skillmesh_session'
 /** 提前 30 秒续期，别让请求卡在过期上。 */
@@ -25,12 +25,14 @@ export interface Session {
   accessToken: string
   refreshToken: string
   expiresAt: number
+  /** id_token：登出时给 Keycloak 当 id_token_hint，让它直接结束 SSO 会话。 */
+  idToken: string
   user: Me | null
   organizations: OrgMembership[]
 }
 
 function empty(): Session {
-  return { accessToken: '', refreshToken: '', expiresAt: 0, user: null, organizations: [] }
+  return { accessToken: '', refreshToken: '', expiresAt: 0, idToken: '', user: null, organizations: [] }
 }
 
 function load(): Session {
@@ -62,15 +64,25 @@ function persist() {
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     expiresAt: session.expiresAt,
+    // id_token 也要存：登出时拿它当 id_token_hint，
+    // 否则 Keycloak 只显示「要登出吗」的确认页，SSO 会话其实没结束。
+    idToken: session.idToken,
     user: session.user,
     organizations: session.organizations,
   }))
 }
 
-export function setTokens(tokens: { access_token: string; refresh_token?: string; expires_in: number }) {
+export function setTokens(tokens: {
+  access_token: string
+  refresh_token?: string
+  expires_in: number
+  id_token?: string
+}) {
   session.accessToken = tokens.access_token
   // RFC 6749 §6：refresh 响应可以不带 refresh_token，这时保留旧的。
   session.refreshToken = tokens.refresh_token ?? session.refreshToken
+  // id_token 同理：refresh 响应不一定带，带了就更新，不带就留着旧的。
+  if (tokens.id_token) session.idToken = tokens.id_token
   session.expiresAt = Date.now() + tokens.expires_in * 1000
   persist()
 }
@@ -91,6 +103,30 @@ export function logout() {
   // （看着像还登录着，其实每个 API 都 401）。
   meApplied = meSeq
   localStorage.removeItem(STORAGE_KEY)
+}
+
+/**
+ * 主动登出：清本地会话，并结束 Keycloak 的 SSO 会话。
+ *
+ * 只清 localStorage 不够——浏览器里 Keycloak 的 SSO cookie 还在，
+ * 再点「登录」会被 Keycloak 直接放行（不输密码），登出等于没登出：
+ * 共享机器上别人接手键盘，就成了你，权限也跟着过去。
+ *
+ * 会话失效（401、续期失败）走的是 logout()，不跳这里：
+ * 那时正要送回登录页，再多一次跳转只会让人以为登录坏了。
+ */
+export function logoutEndingSession() {
+  const idToken = session.idToken
+  logout()
+  const redirect = `${window.location.origin}/login`
+  const url = `${ISSUER}/protocol/openid-connect/logout`
+    + `?client_id=${encodeURIComponent(CLIENT_ID)}`
+    + `&post_logout_redirect_uri=${encodeURIComponent(redirect)}`
+    // 带 id_token_hint：Keycloak 才知道要结束谁的 SSO 会话。
+    // 不带就只显示一个「要登出吗」的确认页——SSO 会话其实没结束，
+    // 共享机器上等于给下一个人留了免密登录。
+    + (idToken ? `&id_token_hint=${encodeURIComponent(idToken)}` : '')
+  window.location.assign(url)
 }
 
 /**
