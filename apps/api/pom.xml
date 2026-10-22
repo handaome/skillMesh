@@ -70,6 +70,17 @@
       <version>${minio.version}</version>
     </dependency>
 
+    <!--
+      重打包 zip 时要保留 Unix 可执行位：java.util.zip 的 ZipEntry 没有 unix mode，
+      写出来的 entry 在 Go 那边权限是 0，装的时候被当成 0644，脚本就此丢掉可执行位。
+      它原先只是 bouncycastle 的传递依赖——直接用到的依赖要写明版本。
+    -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-compress</artifactId>
+      <version>1.27.1</version>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

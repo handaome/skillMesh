@@ -5,6 +5,8 @@ import com.skillmesh.api.version.dto.RevokeVersionRequest;
 import com.skillmesh.api.version.dto.SkillVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
+import com.skillmesh.api.version.dto.EditFileRequest;
+import com.skillmesh.api.version.dto.EditFileResponse;
 import com.skillmesh.api.version.dto.VersionFileContentResponse;
 import com.skillmesh.api.version.dto.VersionFilesResponse;
 import com.skillmesh.api.version.dto.VersionPage;
@@ -18,6 +20,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -29,13 +32,16 @@ public class SkillVersionController {
 
     private final SkillVersionService versions;
     private final VersionFileService versionFiles;
+    private final VersionEditService versionEdits;
     private final CurrentUserService currentUserService;
 
     public SkillVersionController(SkillVersionService versions,
                                   VersionFileService versionFiles,
+                                  VersionEditService versionEdits,
                                   CurrentUserService currentUserService) {
         this.versions = versions;
         this.versionFiles = versionFiles;
+        this.versionEdits = versionEdits;
         this.currentUserService = currentUserService;
     }
 
@@ -95,5 +101,19 @@ public class SkillVersionController {
                                            @PathVariable String version,
                                            @RequestParam String path) {
         return versionFiles.read(currentUserService.current(jwt), skillId, version, path);
+    }
+
+    /**
+     * 改一个文件，产出新版本。
+     *
+     * 版本不可变，所以这不是就地改：服务端基于源版本重打包出一个新版本，
+     * 再走一遍正常的发布流程（扫描 → 发布或送审）。
+     */
+    @PutMapping("/skills/{skillId}/versions/{version}/file")
+    public EditFileResponse editFile(@AuthenticationPrincipal Jwt jwt,
+                                     @PathVariable UUID skillId,
+                                     @PathVariable String version,
+                                     @Valid @RequestBody EditFileRequest req) {
+        return versionEdits.edit(currentUserService.current(jwt), skillId, version, req);
     }
 }

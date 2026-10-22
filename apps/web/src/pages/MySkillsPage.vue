@@ -152,6 +152,24 @@ function clearSelection() {
   browseVersion.value = ''
 }
 
+/**
+ * 编辑文件产出了新版本：把版本列表刷新。
+ *
+ * 抽屉里显示的还是源版本（那才是被改的），列表里多出来的那一版才是结果——
+ * 两边都得对上，不能只刷一半。
+ */
+async function onEdited() {
+  if (!selected.value) return
+  const skill = selected.value
+  try {
+    const page = await getVersions(skill.id)
+    if (selected.value?.id !== skill.id) return
+    versions.value = page.items
+  } catch (e) {
+    versionsError.value = errorText(e)
+  }
+}
+
 /** 保存展示性元数据。 */
 async function save() {
   const skill = selected.value
@@ -443,6 +461,7 @@ onMounted(load)
       :version="browseVersion"
       :label="`${selected.slug} · ${browseVersion}`"
       @close="browseVersion = ''"
+      @edited="onEdited"
     />
 
     <el-dialog

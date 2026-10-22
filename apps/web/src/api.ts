@@ -1,7 +1,7 @@
 import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
 
 const BASE = '/api/v1'
 
@@ -157,6 +157,24 @@ export function readVersionFile(
   const params = new URLSearchParams({ path })
   return request<VersionFileContent>(
     `/skills/${skillId}/versions/${encodeURIComponent(version)}/file?${params}`,
+  )
+}
+
+/**
+ * 改一个文件，产出新版本。
+ *
+ * 版本不可变：这不是就地改，而是服务端基于源版本重打包出一个新版本，
+ * 再走一遍正常的发布流程（扫描 → 发布或送审）。
+ */
+export function editVersionFile(
+  skillId: string,
+  version: string,
+  body: { path: string; content: string; changelog?: string },
+): Promise<EditFileResult> {
+  return request<EditFileResult>(
+    `/skills/${skillId}/versions/${encodeURIComponent(version)}/file`,
+    'PUT',
+    body,
   )
 }
 

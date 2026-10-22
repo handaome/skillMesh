@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { ApiError, listVersionFiles, readVersionFile } from '../api'
+import { ApiError, editVersionFile, listVersionFiles, readVersionFile } from '../api'
 import EmptyState from './EmptyState.vue'
 import type { VersionFileContent, VersionFiles } from '../types'
 
 const props = defineProps<{ skillId: string; version: string; label?: string }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; edited: [] }>()
 
 const dialog = ref<HTMLDialogElement | null>(null)
 const files = ref<VersionFiles | null>(null)
@@ -15,6 +15,13 @@ const error = ref('')
 const current = ref<VersionFileContent | null>(null)
 const contentLoading = ref(false)
 const contentError = ref('')
+
+/** 编辑中：正在改的文件与改后的内容。 */
+const editing = ref(false)
+const draft = ref('')
+const saving = ref(false)
+const saveError = ref('')
+const saveNotice = ref('')
 
 /** 收起的目录（按完整路径）。默认全展开——Skill 的目录一般只有一两层。 */
 const collapsed = ref(new Set<string>())
@@ -123,6 +130,9 @@ async function load() {
 async function open(path: string) {
   contentLoading.value = true
   contentError.value = ''
+  editing.value = false
+  saveError.value = ''
+  saveNotice.value = ''
   try {
     current.value = await readVersionFile(props.skillId, props.version, path)
   } catch (e) {
@@ -130,6 +140,56 @@ async function open(path: string) {
     contentError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
   } finally {
     contentLoading.value = false
+  }
+}
+
+/** 进入编辑：把正文放进编辑框。 */
+function startEdit() {
+  if (!current.value || current.value.binary) return
+  draft.value = current.value.content ?? ''
+  editing.value = true
+  saveError.value = ''
+  saveNotice.value = ''
+}
+
+/** 放弃编辑，回到只读。 */
+function cancelEdit() {
+  editing.value = false
+  draft.value = ''
+  saveError.value = ''
+}
+
+/**
+ * 保存。
+ *
+ * 版本不可变：保存不改这个版本，而是产出新版本。服务端重打包后要走一遍
+ * 正常的发布流程（扫描 → 发布或送审），所以结果可能是「已发布」也可能是
+ * 「已提交审核」——团队可见的 Skill 会停在待审队列。
+ */
+async function save() {
+  const file = current.value
+  if (!file) return
+  saving.value = true
+  saveError.value = ''
+  saveNotice.value = ''
+  try {
+    const result = await editVersionFile(props.skillId, props.version, {
+      path: file.path,
+      content: draft.value,
+      changelog: `在控制台修改 ${file.path}`,
+    })
+    editing.value = false
+    const statusText: Record<string, string> = {
+      published: '已发布',
+      pending_review: '已提交审核',
+      rejected: '被服务端的制品扫描拦下',
+    }
+    saveNotice.value = `已保存为新版本 ${result.version}（${statusText[result.status] ?? result.status}）。`
+    emit('edited')
+  } catch (e) {
+    saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+  } finally {
+    saving.value = false
   }
 }
 
@@ -238,9 +298,58 @@ function onDialogClosed() {
         <template v-else-if="current">
           <div class="sm-browser-head">
             <span class="sm-mono sm-break">{{ current.path }}</span>
-            <span class="sm-muted sm-text-sm sm-num">{{ formatSize(current.size_bytes) }}</span>
+            <div class="sm-row">
+              <span class="sm-muted sm-text-sm sm-num">{{ formatSize(current.size_bytes) }}</span>
+              <el-button
+                v-if="!current.binary && !editing"
+                text
+                data-test="start-edit"
+                @click="startEdit"
+              >编辑</el-button>
+            </div>
           </div>
-          <pre v-if="!current.binary" class="sm-pre" data-test="file-content">{{ current.content }}</pre>
+
+          <el-alert
+            v-if="saveError"
+            data-test="save-error"
+            :title="saveError"
+            type="error"
+            :closable="false"
+            show-icon
+            class="sm-mb-12"
+          />
+          <el-alert
+            v-if="saveNotice"
+            data-test="save-notice"
+            :title="saveNotice"
+            type="success"
+            :closable="false"
+            show-icon
+            class="sm-mb-12"
+          />
+
+          <template v-if="editing">
+            <textarea
+              v-model="draft"
+              class="sm-editor sm-mono"
+              aria-label="文件内容"
+              spellcheck="false"
+              data-test="file-editor"
+            />
+            <div class="sm-row sm-mt-12">
+              <el-button
+                type="primary"
+                data-test="save-file"
+                :loading="saving"
+                @click="save"
+              >保存为新版本</el-button>
+              <el-button text data-test="cancel-edit" @click="cancelEdit">取消</el-button>
+              <span class="sm-muted sm-text-sm">
+                版本不可变：保存会产出新版本，不会改掉 {{ version }}。
+              </span>
+            </div>
+          </template>
+          <pre v-else-if="!current.binary" class="sm-pre" data-test="file-content">{{ current.content }}</pre>
           <EmptyState
             v-else
             :text="`二进制文件，${formatSize(current.size_bytes)}，不显示内容`"

@@ -132,6 +132,50 @@ describe('FileBrowser', () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/file?'))).toBe(true)
   })
 
+  /**
+   * 编辑：改完保存 → 产出新版本。
+   *
+   * 版本不可变，所以保存不是 PUT 那个版本，而是 PUT 源版本并带上新内容，
+   * 服务端重打包出下一个版本。
+   */
+  it('编辑文件保存为新版本', async () => {
+    const calls: { url: string; method?: string; body?: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method, body: init?.body })
+      if (init?.method === 'PUT') {
+        return jsonResponse({
+          skill_id: 's1', version: '1.0.1', file_count: 3,
+          sha256: 'd'.repeat(64), status: 'published',
+        })
+      }
+      if (url.includes('/file?')) {
+        return jsonResponse({
+          version: '1.0.0', path: 'SKILL.md', size_bytes: 120,
+          sha256: 'a'.repeat(64), binary: false, content: '# 旧内容\n',
+        })
+      }
+      return jsonResponse(FILES)
+    }))
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="start-edit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="file-editor"]').setValue('# 新内容\n')
+    await wrapper.find('[data-test="save-file"]').trigger('click')
+    await flushPromises()
+
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(put?.url).toBe('/api/v1/skills/s1/versions/1.0.0/file')
+    expect(JSON.parse(String(put?.body)).content).toBe('# 新内容\n')
+    // 提示里要说清是哪个新版本——版本不可变，别让人以为改的是原来那个
+    expect(wrapper.find('[data-test="save-notice"]').text()).toContain('1.0.1')
+    expect(wrapper.emitted('edited')).toBeTruthy()
+  })
+
   it('点文件读出正文', async () => {
     const fetchMock = stubFiles()
     vi.stubGlobal('fetch', fetchMock)

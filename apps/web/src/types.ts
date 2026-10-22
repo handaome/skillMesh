@@ -64,6 +64,17 @@ export interface VersionFileContent {
   content: string | null
 }
 
+/** 编辑文件的结果：新版本的信息与状态。 */
+export interface EditFileResult {
+  skill_id: string
+  /** 新版本号。编辑不改旧版本。 */
+  version: string
+  file_count: number
+  sha256: string
+  /** published / pending_review / rejected。 */
+  status: string
+}
+
 export interface Team {
   id: string
   organization_id: string

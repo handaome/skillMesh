@@ -90,6 +90,26 @@ try {
   await sleep(2000)
   await shot(page, 'mine-file-content')
 
+  // 编辑：点「编辑」→ 改内容 → 保存
+  const canEdit = await page.eval(`!!document.querySelector('[data-test="start-edit"]')`)
+  console.log('有编辑按钮:', canEdit)
+  if (canEdit) {
+    await page.realClick('[data-test="start-edit"]')
+    await sleep(600)
+    await shot(page, 'mine-editing')
+    await page.eval(`(() => {
+      const el = document.querySelector('[data-test="file-editor"]');
+      el.value = '# 在控制台改的内容\\n';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`)
+    await sleep(300)
+    await page.realClick('[data-test="save-file"]')
+    await sleep(5000)
+    await shot(page, 'mine-saved')
+    console.log('保存提示:', await page.text('[data-test="save-notice"]'))
+  }
+
   // 市场页的浏览入口
   await page.goto(`${CFG.web}/`)
   await sleep(1000)

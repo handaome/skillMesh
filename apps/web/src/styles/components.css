@@ -151,6 +151,29 @@
 .sm-files-body .sm-browser-side { max-height: none; height: 100%; }
 .sm-browser-main { min-width: 0; }
 .sm-files-body .sm-browser-main { height: 100%; overflow: auto; }
+
+/* 编辑框：等宽字体，占满内容区，能改 */
+.sm-editor {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  padding: 14px 16px;
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+.sm-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
 .sm-browser-head {
   display: flex;
   align-items: baseline;
