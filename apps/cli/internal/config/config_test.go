@@ -78,3 +78,30 @@ func Test配置文件覆盖默认值(t *testing.T) {
 		t.Fatalf("配置文件未覆盖 client_id: %s", cfg.ClientID)
 	}
 }
+
+func Test配置文件里的钉住公钥要读进来(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	t.Setenv("LOCALAPPDATA", dir)
+	cfgDir := filepath.Join(dir, "SkillMesh")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := "verify:\n  pinned_key_id: local-dev\n  pinned_public_key: cHVibGlja2V5\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 漏读这一段，cfg.Verify 恒为空，Pinned() 恒为 false——
+	// 注册中心换把钥匙照样验签通过，信任根就没了。
+	if !cfg.Verify.Pinned() {
+		t.Fatal("配置文件里的钉住公钥没读进来")
+	}
+	if cfg.Verify.PinnedKeyID != "local-dev" || cfg.Verify.PinnedPublicKey != "cHVibGlja2V5" {
+		t.Fatalf("钉住公钥内容不对: %+v", cfg.Verify)
+	}
+}

@@ -475,6 +475,10 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
+		// 装完本地就是云端那份了：基线按新内容重算。
+		// 不重算的话，基线还是下载前那份摘要，下一轮就误报冲突，
+		// 逐文件合并也永远合不了（没有基线可比）。
+		saveBaseline(target, local, &entry)
 		return syncResult{Name: target.Name, Path: target.Path, Outcome: fetched,
 			Detail: version}, entry, nil
 
@@ -614,6 +618,13 @@ func downloadInto(ctx context.Context, client *apiclient.Client, target syncTarg
 	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
 		return "", err
 	}
+	// 装之前先验签并核对摘要：下载回来的字节未必是云端那一份。
+	// install 那条路有这道闸，同步这条不能没有——不然换个源就能把别的东西装进 Agent 目录。
+	verdict, err := verifyArtifact(ctx, client, selected, skillDir)
+	if err != nil {
+		return "", err
+	}
+	fmt.Printf("%s 验签：%s\n", selected.Version, verdict)
 	if err := installer.InstallAtomic(skillDir, target.Path, true); err != nil {
 		return "", err
 	}

@@ -225,7 +225,11 @@ func planInstalls(root string, candidates []skillscan.Candidate, base string, re
 			plan.Fail = append(plan.Fail, failItem{Path: rel, Why: err.Error()})
 			continue
 		}
-		name := skillscan.SkillName(candidate.Dir)
+		name, err := skillDirName(candidate.Dir)
+		if err != nil {
+			plan.Fail = append(plan.Fail, failItem{Path: rel, Why: err.Error()})
+			continue
+		}
 		if previous, duplicate := used[name]; duplicate {
 			plan.Skip = append(plan.Skip, skipItem{
 				Path: rel,

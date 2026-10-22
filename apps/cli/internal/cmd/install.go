@@ -117,7 +117,10 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 	}
 	fmt.Printf("%s 验签：%s\n", req.Version.Version, verdict)
 	fmt.Println(skillscan.LicenseLine(skillDir))
-	name := skillscan.SkillName(skillDir)
+	name, err := skillDirName(skillDir)
+	if err != nil {
+		return err
+	}
 
 	for _, agentName := range req.Agents {
 		base, err := agent.Dir(cfg, agentName, req.Scope, projectRoot)
@@ -134,6 +137,9 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		if err := installer.MarkInstalled(installPath, "skillmesh:"+req.SkillID); err != nil {
 			return err
 		}
+		// 登记到注册中心：回答「我在哪些机器上装了什么」。
+		// 不登记的话 installations 永远是空的，这个功能等于没有。
+		reportInstallation(ctx, client, req, agentName, installPath)
 		fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
 	}
 	if err := recordInstall(projectRoot, name, req.SkillID, req.Version, req.Scope, req.Agents,

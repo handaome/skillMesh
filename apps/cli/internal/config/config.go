@@ -165,6 +165,10 @@ func Load() (Config, error) {
 		}
 		cfg.Agents[name] = existing
 	}
+	// 钉住的验签公钥是信任根：读进来才叫钉住。
+	// 漏了这一行，cfg.Verify 永远是零值，Pinned() 恒为 false——
+	// 注册中心换把钥匙照样验签通过，信任根形同虚设。
+	cfg.Verify = file.Verify
 	cfg.Server = strings.TrimRight(cfg.Server, "/")
 	markDetected(&cfg)
 	return cfg, nil

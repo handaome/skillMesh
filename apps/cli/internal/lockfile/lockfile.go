@@ -71,9 +71,14 @@ func (l Lock) Save(projectRoot string) error {
 	return os.WriteFile(Path(projectRoot), data, 0o644)
 }
 
+// Find 按名字或注册中心 id 找一条锁记录。
+//
+// 两种键都得认：`install <skill-id> --locked` 手里只有注册中心 id，
+// 而 `skillmesh update <name>` 手里只有名字——只按名字查，
+// --locked 就成了一空开关（找不到记录就当没锁）。
 func (l Lock) Find(name string) (LockedSkill, bool) {
 	for _, skill := range l.Skills {
-		if skill.Name == name {
+		if skill.Name == name || (skill.SourceID != "" && skill.SourceID == name) {
 			return skill, true
 		}
 	}

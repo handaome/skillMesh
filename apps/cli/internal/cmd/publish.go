@@ -241,7 +241,8 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 				SizeBytes: artifact.SizeBytes,
 			}, nil
 		}
-		skill, err = createSkill(ctx, client, slug, displayName, description, options)
+		skill, err = createSkill(ctx, client, slug, displayName, description, options,
+			sourceOf(target.Dir, skillscan.DetectLicense(target.Dir)))
 		if err != nil {
 			return publishResult{}, err
 		}
@@ -328,8 +329,10 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 }
 
 // createSkill 新建 Skill 元数据：可见性与归属按解析出来的范围填。
+// source 是来源元数据（设计文档 §7.1）：从 Git 装的 Skill 要记上仓库与 commit，
+// 服务端只拿得到这些——本机才知道自己从哪儿装的。
 func createSkill(ctx context.Context, client *apiclient.Client, slug, displayName, description string,
-	options publishOptions) (apiclient.Skill, error) {
+	options publishOptions, source *apiclient.SkillSource) (apiclient.Skill, error) {
 
 	skill, err := client.CreateSkill(ctx, apiclient.CreateSkillRequest{
 		Slug:           slug,
@@ -338,6 +341,7 @@ func createSkill(ctx context.Context, client *apiclient.Client, slug, displayNam
 		Visibility:     options.visibilityFor(),
 		OrganizationID: optionalString(options.Scope.OrganizationID),
 		OwnerTeamID:    optionalString(options.Scope.TeamID),
+		Source:         source,
 	})
 	if err != nil {
 		return apiclient.Skill{}, explainSlugTaken(err, slug, options.Scope)

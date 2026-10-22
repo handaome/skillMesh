@@ -281,7 +281,10 @@ func applyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
 		return err
 	}
-	name := skillscan.SkillName(skillDir)
+	name, err := skillDirName(skillDir)
+	if err != nil {
+		return err
+	}
 
 	for _, agentName := range update.Agents {
 		base, err := agent.Dir(cfg, agentName, scopeOf(update.Scope, projectRoot), projectRoot)
