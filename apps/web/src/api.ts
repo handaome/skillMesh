@@ -169,7 +169,15 @@ export function readVersionFile(
 export function editVersionFile(
   skillId: string,
   version: string,
-  body: { path: string; content: string; changelog?: string },
+  body: {
+    path: string
+    content?: string
+    /** replace（改内容，默认）/ create（新建）/ delete（删除）。 */
+    operation?: 'replace' | 'create' | 'delete'
+    /** 要不要可执行位。不给就沿用原来的。 */
+    executable?: boolean
+    changelog?: string
+  },
 ): Promise<EditFileResult> {
   return request<EditFileResult>(
     `/skills/${skillId}/versions/${encodeURIComponent(version)}/file`,

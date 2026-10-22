@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ApiError, editVersionFile, listVersionFiles, readVersionFile } from '../api'
+import { highlight, languageOf } from '../utils/highlight'
 import EmptyState from './EmptyState.vue'
 import type { VersionFileContent, VersionFiles } from '../types'
 
@@ -22,6 +23,12 @@ const draft = ref('')
 const saving = ref(false)
 const saveError = ref('')
 const saveNotice = ref('')
+/** 这个文件要不要可执行位。null 表示沿用原来的。 */
+const executable = ref<boolean | null>(null)
+/** 新建文件：填路径与内容。 */
+const creating = ref(false)
+const newPath = ref('')
+const newContent = ref('')
 
 /** 收起的目录（按完整路径）。默认全展开——Skill 的目录一般只有一两层。 */
 const collapsed = ref(new Set<string>())
@@ -88,6 +95,13 @@ const tree = computed<TreeRow[]>(() => {
 /** 文件少的时候树不用占那么宽——有的 Skill 就一个 SKILL.md。 */
 const narrow = computed(() => (files.value?.files.length ?? 0) <= 3)
 
+/** 当前文件的高亮 HTML。正文是不可信输入，高亮器内部先转义了。 */
+const highlighted = computed(() => {
+  const file = current.value
+  if (!file || file.binary || !file.path) return ''
+  return highlight(file.content ?? '', languageOf(file.path))
+})
+
 /** 文件大小：给人看的，不是给人算的。 */
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -150,6 +164,8 @@ function startEdit() {
   editing.value = true
   saveError.value = ''
   saveNotice.value = ''
+  // 权限位默认沿用原来的：改内容不该顺手改权限。
+  executable.value = null
 }
 
 /** 放弃编辑，回到只读。 */
@@ -157,6 +173,7 @@ function cancelEdit() {
   editing.value = false
   draft.value = ''
   saveError.value = ''
+  executable.value = null
 }
 
 /**
@@ -176,21 +193,81 @@ async function save() {
     const result = await editVersionFile(props.skillId, props.version, {
       path: file.path,
       content: draft.value,
+      operation: 'replace',
+      executable: executable.value ?? undefined,
       changelog: `在控制台修改 ${file.path}`,
     })
     editing.value = false
-    const statusText: Record<string, string> = {
-      published: '已发布',
-      pending_review: '已提交审核',
-      rejected: '被服务端的制品扫描拦下',
-    }
-    saveNotice.value = `已保存为新版本 ${result.version}（${statusText[result.status] ?? result.status}）。`
+    saveNotice.value = `已保存为新版本 ${result.version}（${statusText(result.status)}）。`
     emit('edited')
   } catch (e) {
     saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
   } finally {
     saving.value = false
   }
+}
+
+/** 新建文件。 */
+async function createFile() {
+  const path = newPath.value.trim()
+  if (!path) {
+    saveError.value = '文件路径不能为空'
+    return
+  }
+  saving.value = true
+  saveError.value = ''
+  saveNotice.value = ''
+  try {
+    const result = await editVersionFile(props.skillId, props.version, {
+      path,
+      content: newContent.value,
+      operation: 'create',
+      changelog: `在控制台新建 ${path}`,
+    })
+    creating.value = false
+    newPath.value = ''
+    newContent.value = ''
+    saveNotice.value = `已新建 ${path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
+    emit('edited')
+  } catch (e) {
+    saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 删除文件。删了要出新版本——版本不可变，删不掉「这一版里的它」。 */
+async function deleteFile() {
+  const file = current.value
+  if (!file) return
+  if (!window.confirm(`删除 ${file.path}？删除会产出新版本，删不掉原来那一版里的它。`)) return
+  saving.value = true
+  saveError.value = ''
+  saveNotice.value = ''
+  try {
+    const result = await editVersionFile(props.skillId, props.version, {
+      path: file.path,
+      operation: 'delete',
+      changelog: `在控制台删除 ${file.path}`,
+    })
+    saveNotice.value = `已删除 ${file.path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
+    current.value = null
+    emit('edited')
+  } catch (e) {
+    saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 版本状态的读法。 */
+function statusText(status: string): string {
+  const map: Record<string, string> = {
+    published: '已发布',
+    pending_review: '已提交审核',
+    rejected: '被服务端的制品扫描拦下',
+  }
+  return map[status] ?? status
 }
 
 // 切到别的版本就重新拉清单——上一个版本的文件留着是骗人的。
@@ -234,9 +311,16 @@ function onDialogClosed() {
   >
     <header class="sm-files-head">
       <span class="sm-files-title">{{ label ?? '文件' }}</span>
-      <button class="sm-files-close" data-test="files-close" aria-label="关闭" @click="close">
-        ✕
-      </button>
+      <div class="sm-row">
+        <el-button
+          text
+          data-test="new-file"
+          @click="creating = !creating; saveError = ''"
+        >新建文件</el-button>
+        <button class="sm-files-close" data-test="files-close" aria-label="关闭" @click="close">
+          ✕
+        </button>
+      </div>
     </header>
 
     <div class="sm-files-body" :class="{ 'sm-files-narrow': narrow }">
@@ -293,7 +377,74 @@ function onDialogClosed() {
           class="sm-mb-12"
         />
 
+        <!-- 提示条不挂在某个文件下：删掉文件后当前视图没了，但结果还要说。 -->
+        <el-alert
+          v-if="saveError && !creating"
+          data-test="save-error"
+          :title="saveError"
+          type="error"
+          :closable="false"
+          show-icon
+          class="sm-mb-12"
+        />
+        <el-alert
+          v-if="saveNotice"
+          data-test="save-notice"
+          :title="saveNotice"
+          type="success"
+          :closable="false"
+          show-icon
+          class="sm-mb-12"
+        />
+
         <div v-if="contentLoading" class="sm-empty">加载中…</div>
+
+        <!-- 新建文件 -->
+        <div v-else-if="creating" class="sm-newfile">
+          <el-alert
+            v-if="saveError"
+            data-test="save-error"
+            :title="saveError"
+            type="error"
+            :closable="false"
+            show-icon
+            class="sm-mb-12"
+          />
+          <div class="sm-field sm-mb-12">
+            <label for="new-path">路径</label>
+            <el-input
+              id="new-path"
+              v-model="newPath"
+              class="sm-mono"
+              placeholder="如 references/new.md"
+              data-test="new-path"
+            />
+            <span class="sm-hint">制品内的相对路径，正斜杠分隔。</span>
+          </div>
+          <div class="sm-field sm-mb-12">
+            <label for="new-content">内容</label>
+            <textarea
+              id="new-content"
+              v-model="newContent"
+              class="sm-editor sm-mono"
+              aria-label="新文件内容"
+              spellcheck="false"
+              data-test="new-content"
+            />
+          </div>
+          <div class="sm-row">
+            <el-button
+              type="primary"
+              data-test="create-file"
+              :loading="saving"
+              @click="createFile"
+            >创建</el-button>
+            <el-button text data-test="cancel-new" @click="creating = false">取消</el-button>
+            <span class="sm-muted sm-text-sm">
+              版本不可变：新建会产出新版本，不会改掉 {{ version }}。
+            </span>
+          </div>
+        </div>
 
         <template v-else-if="current">
           <div class="sm-browser-head">
@@ -306,27 +457,15 @@ function onDialogClosed() {
                 data-test="start-edit"
                 @click="startEdit"
               >编辑</el-button>
+              <el-button
+                v-if="!editing"
+                text
+                type="danger"
+                data-test="delete-file"
+                @click="deleteFile"
+              >删除</el-button>
             </div>
           </div>
-
-          <el-alert
-            v-if="saveError"
-            data-test="save-error"
-            :title="saveError"
-            type="error"
-            :closable="false"
-            show-icon
-            class="sm-mb-12"
-          />
-          <el-alert
-            v-if="saveNotice"
-            data-test="save-notice"
-            :title="saveNotice"
-            type="success"
-            :closable="false"
-            show-icon
-            class="sm-mb-12"
-          />
 
           <template v-if="editing">
             <textarea
@@ -344,12 +483,32 @@ function onDialogClosed() {
                 @click="save"
               >保存为新版本</el-button>
               <el-button text data-test="cancel-edit" @click="cancelEdit">取消</el-button>
+              <!--
+                可执行位：脚本装了要能直接跑。
+                三态：null = 沿用原来的（半选），true/false = 改成这个。
+                不用 v-model：它只认 true/false，null 会被当成 false。
+              -->
+              <el-checkbox
+                :model-value="executable === true"
+                :indeterminate="executable === null"
+                data-test="executable"
+                @change="(v: boolean | string | number) => { executable = Boolean(v) }"
+              >可执行</el-checkbox>
               <span class="sm-muted sm-text-sm">
                 版本不可变：保存会产出新版本，不会改掉 {{ version }}。
               </span>
             </div>
           </template>
-          <pre v-else-if="!current.binary" class="sm-pre" data-test="file-content">{{ current.content }}</pre>
+          <!--
+            高亮后的 HTML。正文是不可信输入，高亮器内部先转义了才上色，
+            所以这里用 v-html 是安全的。
+          -->
+          <pre
+            v-else-if="!current.binary"
+            class="sm-pre sm-code"
+            data-test="file-content"
+            v-html="highlighted"
+          />
           <EmptyState
             v-else
             :text="`二进制文件，${formatSize(current.size_bytes)}，不显示内容`"

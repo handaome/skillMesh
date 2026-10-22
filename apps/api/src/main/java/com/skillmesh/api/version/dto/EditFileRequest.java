@@ -1,6 +1,7 @@
 package com.skillmesh.api.version.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -11,8 +12,17 @@ import jakarta.validation.constraints.Size;
 public record EditFileRequest(
         /** 制品内的相对路径（正斜杠分隔）。 */
         @NotBlank @Size(max = 1024) String path,
-        /** 文件的新内容。空串表示把文件清空。 */
+        /** 文件的新内容。空串表示把文件清空。删除文件时不用给。 */
         @Size(max = 1048576) String content,
+        /**
+         * 做什么：replace（默认，改内容）/ create（新建）/ delete（删除）。
+         */
+        @Pattern(regexp = "replace|create|delete") String operation,
+        /**
+         * 这个文件是否可执行。不填就沿用原来的权限位。
+         * 脚本的「可执行」在 zip 的外部属性里，删了它脚本就装成不可执行。
+         */
+        Boolean executable,
         /** 新版本号。不填就按已有的最大版本号加一个 patch。 */
         @Size(max = 128) String version,
         /** 发布通道。默认 stable。 */

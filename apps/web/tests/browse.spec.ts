@@ -176,6 +176,109 @@ describe('FileBrowser', () => {
     expect(wrapper.emitted('edited')).toBeTruthy()
   })
 
+  /** 新建文件：产出新版本。 */
+  it('新建文件产出新版本', async () => {
+    const calls: { url: string; method?: string; body?: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method, body: init?.body })
+      if (init?.method === 'PUT') {
+        return jsonResponse({
+          skill_id: 's1', version: '1.0.1', file_count: 4,
+          sha256: 'd'.repeat(64), status: 'published',
+        })
+      }
+      return jsonResponse(FILES)
+    }))
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="new-file"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="new-path"]').setValue('references/new.md')
+    await wrapper.find('[data-test="new-content"]').setValue('# 新文件\n')
+    await wrapper.find('[data-test="create-file"]').trigger('click')
+    await flushPromises()
+
+    const put = calls.find((c) => c.method === 'PUT')
+    const body = JSON.parse(String(put?.body))
+    expect(body.operation).toBe('create')
+    expect(body.path).toBe('references/new.md')
+    expect(wrapper.find('[data-test="save-notice"]').text()).toContain('1.0.1')
+  })
+
+  /** 删除文件：也是产出新版本。 */
+  it('删除文件产出新版本', async () => {
+    const calls: { method?: string; body?: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method, body: init?.body })
+      if (init?.method === 'PUT') {
+        return jsonResponse({
+          skill_id: 's1', version: '1.0.1', file_count: 2,
+          sha256: 'd'.repeat(64), status: 'published',
+        })
+      }
+      if (url.includes('/file?')) {
+        return jsonResponse({
+          version: '1.0.0', path: 'SKILL.md', size_bytes: 120,
+          sha256: 'a'.repeat(64), binary: false, content: '# 旧内容\n',
+        })
+      }
+      return jsonResponse(FILES)
+    }))
+    // 删除要确认：window.confirm 在 jsdom 里默认返回 false，替掉它。
+    vi.stubGlobal('confirm', () => true)
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="delete-file"]').trigger('click')
+    await flushPromises()
+
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(JSON.parse(String(put?.body)).operation).toBe('delete')
+    expect(wrapper.find('[data-test="save-notice"]').text()).toContain('1.0.1')
+  })
+
+  /** 可执行位：默认沿用原来的，勾了才改。 */
+  it('可执行位默认沿用原值', async () => {
+    const calls: { method?: string; body?: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method, body: init?.body })
+      if (init?.method === 'PUT') {
+        return jsonResponse({
+          skill_id: 's1', version: '1.0.1', file_count: 3,
+          sha256: 'd'.repeat(64), status: 'published',
+        })
+      }
+      if (url.includes('/file?')) {
+        return jsonResponse({
+          version: '1.0.0', path: 'run.sh', size_bytes: 120,
+          sha256: 'a'.repeat(64), binary: false, content: '#!/bin/bash\n',
+        })
+      }
+      return jsonResponse(FILES)
+    }))
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="start-edit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="save-file"]').trigger('click')
+    await flushPromises()
+
+    const put = calls.find((c) => c.method === 'PUT')
+    // 不给就是沿用原来的，服务端知道原值
+    expect(JSON.parse(String(put?.body)).executable).toBeUndefined()
+  })
+
   it('点文件读出正文', async () => {
     const fetchMock = stubFiles()
     vi.stubGlobal('fetch', fetchMock)

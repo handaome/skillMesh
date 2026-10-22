@@ -134,7 +134,7 @@ class VersionEditTest {
         ApiException err = catchThrowableOfType(
             () -> edits.edit(stranger, skillId, "1.0.0",
                 new com.skillmesh.api.version.dto.EditFileRequest(
-                    "SKILL.md", "# 改了\n", null, null, null)),
+                    "SKILL.md", "# 改了\n", null, null, null, null, null)),
             ApiException.class);
         assertThat(err).as("别人的私有 Skill 不该能编辑").isNotNull();
         assertThat(err.status()).isEqualTo(404);
@@ -164,10 +164,138 @@ class VersionEditTest {
         ApiException err = catchThrowableOfType(
             () -> edits.edit(member, skillId, "1.0.0",
                 new com.skillmesh.api.version.dto.EditFileRequest(
-                    "SKILL.md", "# 改了\n", null, null, null)),
+                    "SKILL.md", "# 改了\n", null, null, null, null, null)),
             ApiException.class);
         assertThat(err).as("不是团队成员的编辑不了团队可见的 Skill").isNotNull();
         assertThat(err.status()).isEqualTo(404);
+    }
+
+    /**
+     * 没被改的脚本要保住可执行位。
+     *
+     * 重打包时按 0644 写，脚本就此丢掉可执行位——装到 Linux 上跑不了。
+     */
+    @Test
+    void 改文件后别的脚本仍可执行() throws Exception {
+        UUID skillId = createSkill("exec-bit");
+        publishVersion(skillId, "1.0.0", TestArtifacts.zipWithExecutable(Map.of(
+            "SKILL.md", "# 标题\n",
+            "scripts/run.sh", "#!/bin/bash\necho hi\n"), "scripts/run.sh"));
+
+        mockMvc.perform(put("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.0")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "path", "SKILL.md", "content", "# 改过了\n"))))
+            .andExpect(status().isOk());
+
+        // 新版本里的脚本还是可执行的
+        byte[] zip = downloadArtifact(skillId, "1.0.1");
+        assertThat(modeOf(zip, "scripts/run.sh") & 0111)
+            .as("脚本的可执行位要保住").isNotZero();
+    }
+
+    /** 新建文件：产出新版本。 */
+    @Test
+    void 新建文件产出新版本() throws Exception {
+        UUID skillId = createSkill("creator");
+        publishVersion(skillId, "1.0.0", TestArtifacts.zipOf(Map.of("SKILL.md", "# 标题\n")));
+
+        mockMvc.perform(put("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.0")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "path", "references/new.md", "content", "# 新文件\n",
+                    "operation", "create"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.version").value("1.0.1"))
+            .andExpect(jsonPath("$.file_count").value(2));
+
+        mockMvc.perform(get("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.1")
+                .header("Authorization", auth).param("path", "references/new.md"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content").value("# 新文件\n"));
+    }
+
+    /** 删除文件：产出新版本，源版本不变。 */
+    @Test
+    void 删除文件产出新版本() throws Exception {
+        UUID skillId = createSkill("remover");
+        publishVersion(skillId, "1.0.0", TestArtifacts.zipOf(Map.of(
+            "SKILL.md", "# 标题\n",
+            "references/old.md", "旧的\n")));
+
+        mockMvc.perform(put("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.0")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "path", "references/old.md", "operation", "delete"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.file_count").value(1));
+
+        // 新版本里没了
+        mockMvc.perform(get("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.1")
+                .header("Authorization", auth).param("path", "references/old.md"))
+            .andExpect(status().isNotFound());
+        // 源版本里还在——版本不可变
+        mockMvc.perform(get("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.0")
+                .header("Authorization", auth).param("path", "references/old.md"))
+            .andExpect(status().isOk());
+    }
+
+    /** 改权限位：脚本从不可执行改成可执行。 */
+    @Test
+    void 能改文件的可执行位() throws Exception {
+        UUID skillId = createSkill("chmod");
+        // 源包里这个脚本不可执行（没有可执行路径就是 0644）
+        publishVersion(skillId, "1.0.0", TestArtifacts.zipWithExecutable(Map.of(
+            "SKILL.md", "# 标题\n",
+            "scripts/run.sh", "#!/bin/bash\n"), "SKILL.md"));
+
+        mockMvc.perform(put("/api/v1/skills/{id}/versions/{v}/file", skillId, "1.0.0")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of(
+                    "path", "scripts/run.sh", "content", "#!/bin/bash\n",
+                    "executable", true))))
+            .andExpect(status().isOk());
+
+        byte[] zip = downloadArtifact(skillId, "1.0.1");
+        assertThat(modeOf(zip, "scripts/run.sh") & 0111).as("要变成可执行").isNotZero();
+    }
+
+    /**
+     * 读某个 entry 的 Unix 权限位。
+     *
+     * 从 central directory 的 external attributes 取（高 16 位），
+     * 用 {@code ZipFile} 读——{@code ZipArchiveInputStream} 不解析那儿的属性。
+     */
+    private static int modeOf(byte[] zip, String path) throws Exception {
+        try (var channel = new org.apache.commons.compress.utils.SeekableInMemoryByteChannel(zip);
+             var zf = new org.apache.commons.compress.archivers.zip.ZipFile(channel, "UTF-8")) {
+            var all = zf.getEntries();
+            while (all.hasMoreElements()) {
+                var entry = all.nextElement();
+                if (path.equals(entry.getName())) {
+                    return (int) ((entry.getExternalAttributes() >> 16) & 0xFFFF);
+                }
+            }
+        }
+        return 0;
+    }
+
+    /** 下载某版本的制品字节。 */
+    private byte[] downloadArtifact(UUID skillId, String version) throws Exception {
+        String listJson = mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
+                .header("Authorization", auth))
+            .andReturn().getResponse().getContentAsString();
+        String artifactId = null;
+        for (var item : json.readTree(listJson).path("items")) {
+            if (item.path("version").asText().equals(version)) {
+                artifactId = item.path("artifact").path("id").asText();
+            }
+        }
+        assertThat(artifactId).as("版本 " + version + " 的制品").isNotNull();
+        return mockMvc.perform(get("/api/v1/artifacts/{id}/download", artifactId)
+                .header("Authorization", auth).param("disposition", "stream"))
+            .andExpect(status().isOk())
+            .andReturn().getResponse().getContentAsByteArray();
     }
 
     private UUID createSkill(String slug) throws Exception {

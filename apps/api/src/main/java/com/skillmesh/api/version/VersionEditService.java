@@ -42,7 +42,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class VersionEditService {
 
-    /** 一次编辑最多改这么多字节的文件。 */
+    /**
+     * 一次编辑最多改这么多字节的文件。
+     *
+     * 1MB：真实的 Skill 文件最大也就几十 KB（整个 Skill 常见的量级是百 KB），
+     * 1MB 已经很宽裕。真正的天花板是请求体通道（Tomcat 默认只收 2MB 的 POST），
+     * 那个限制改不动也不该改——文本内容走 JSON 请求体，1MB 够用了。
+     * 真要传大文件，那是制品上传的活（直传对象存储），不走这条路。
+     */
     public static final int MAX_FILE_BYTES = 1 << 20;
 
     private final SkillRepository skills;
@@ -89,20 +96,34 @@ public class VersionEditService {
         ArtifactEntity sourceArtifact = artifactOf(source);
 
         String path = normalizePath(request.path());
-        byte[] content = request.content() == null
-            ? new byte[0] : request.content().getBytes(StandardCharsets.UTF_8);
-        if (content.length > MAX_FILE_BYTES) {
-            throw new ApiException(413, ErrorCodes.VALIDATION_FAILED,
-                "文件超过 " + (MAX_FILE_BYTES >> 10) + " KB 上限");
+        String operation = request.operation() == null ? "replace" : request.operation();
+        boolean delete = "delete".equals(operation);
+
+        byte[] content = null;
+        if (!delete) {
+            content = request.content() == null
+                ? new byte[0] : request.content().getBytes(StandardCharsets.UTF_8);
+            if (content.length > MAX_FILE_BYTES) {
+                throw new ApiException(413, ErrorCodes.VALIDATION_FAILED,
+                    "文件超过 " + (MAX_FILE_BYTES >> 10) + " KB 上限");
+            }
         }
 
-        // 重打包：换掉这一个 entry，其余原样带过去。
+        // 重打包：换掉/新增/删除这一个 entry，其余原样带过去（含它们的权限位）。
         byte[] original = readArtifact(sourceArtifact);
-        byte[] repacked = ZipRewriter.replace(original, path, content,
-            isExecutable(sourceArtifact, path));
+        boolean executable = request.executable() == null
+            ? ZipRewriter.isExecutable(original, path)
+            : request.executable();
+        byte[] repacked = delete
+            ? ZipRewriter.apply(original, List.of(new ZipRewriter.Change(path, null, false)))
+            : ZipRewriter.replace(original, path, content, executable);
 
         // 清单与摘要由服务端算——不是发布方自填的那份。
         List<Map<String, Object>> manifest = ZipManifest.of(repacked);
+        if (manifest.isEmpty()) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "改完之后这个 Skill 里一个文件都没有了");
+        }
         String sha256 = ArtifactService.sha256(repacked);
         String version = nextVersion(skillId, request.version());
 
@@ -144,16 +165,6 @@ public class VersionEditService {
                 "文件路径不能包含 ..");
         }
         return path;
-    }
-
-    /** 目标文件原来的可执行位。改内容不该顺手改权限。 */
-    private boolean isExecutable(ArtifactEntity artifact, String path) {
-        for (Map<String, Object> item : artifact.getManifestJson()) {
-            if (path.equals(String.valueOf(item.get("path")))) {
-                return Boolean.TRUE.equals(item.get("executable"));
-            }
-        }
-        return false;
     }
 
     /**

@@ -7,6 +7,8 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 
 /** 测试里造 zip 制品用的小工具。 */
 public final class TestArtifacts {
@@ -83,6 +85,28 @@ public final class TestArtifacts {
             for (int i = 0; i < count; i++) {
                 zos.putNextEntry(new ZipEntry("f" + i + ".txt"));
                 zos.closeEntry();
+            }
+        }
+        return out.toByteArray();
+    }
+
+    /**
+     * 造一个带 Unix 可执行位的包：entry 名 → 正文，标记哪些可执行。
+     *
+     * java 的 ZipOutputStream 不设 unix mode，Go 的 archive/zip 读出来权限是 0——
+     * 要测「可执行位在重打包后保住」，得先造一个真的带可执行位的包。
+     */
+    public static byte[] zipWithExecutable(Map<String, String> files, String executablePath)
+            throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (ZipArchiveOutputStream zos = new ZipArchiveOutputStream(out)) {
+            for (Map.Entry<String, String> file : files.entrySet()) {
+                ZipArchiveEntry entry = new ZipArchiveEntry(file.getKey());
+                entry.setUnixMode(file.getKey().equals(executablePath) ? 0755 : 0644);
+                entry.setSize(file.getValue().getBytes(StandardCharsets.UTF_8).length);
+                zos.putArchiveEntry(entry);
+                zos.write(file.getValue().getBytes(StandardCharsets.UTF_8));
+                zos.closeArchiveEntry();
             }
         }
         return out.toByteArray();
