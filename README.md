@@ -10,9 +10,9 @@ Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本�
 | [团队治理与安全](docs/团队治理.md) | 组织与团队、角色与可见性、发布审核、安装登记、审计、制品签名与可疑内容扫描 |
 | [团队控制台使用手册](docs/团队控制台.md) | 浏览器登录、邀请入组、发布到团队、审核放行、安装与排错 |
 | [部署、备份与排障](docs/部署与排障.md) | 备份与恢复验证、身份源、生产前清单、受限网络下访问 GitHub、端口 |
-| [设计文档](docs/设计文档.md) | 产品目标、用户场景、功能范围、同步引擎设计、安全治理 |
+| [设计文档](docs/设计文档.md) | 产品目标、用户场景、功能范围、同步引擎设计、安全治理、实施计划与验收标准 |
 | [详细设计](docs/详细设计.md) | 数据库 DDL、API 契约、CLI 命令与配置、部署说明 |
-| [实现对照表](docs/superpowers/specs/2026-10-19-design-doc-coverage.md) | 设计文档逐节对照实现位置与明确未做项 |
+| [审计与修复报告](docs/审计与修复报告.md) | 两轮审计的发现、处置与仍未做的项 |
 
 ## 目录结构
 
@@ -20,7 +20,7 @@ Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本�
 apps/api/     Spring Boot 3.5 · Java 21 · JPA · Flyway · PostgreSQL · MinIO SDK · Keycloak OIDC
 apps/cli/     Go · cobra · OIDC 授权码+PKCE · 调系统 git
 apps/web/     Vue 3 · Vite · TypeScript
-db/migrations/ V1__init.sql、V2__normalize_version_manifest.sql、V3__team_console.sql（20 张表）
+db/migrations/ V1__init.sql … V6__version_submitted_at.sql（20 张表）
 infra/        本机 MinIO / Keycloak 启动脚本与 realm 定义
 docs/        设计文档、详细设计与使用手册
 ```
@@ -128,11 +128,11 @@ cd apps/web && pnpm test          # 前端组件
 
 **v1 已交付**：本地基础设施、数据库迁移、OIDC 鉴权、Skill 元数据与搜索、MinIO 制品存储与不可变版本、授权下载、CLI 全套命令、前端搜索与详情两页。
 
-**v1.1 已交付**（[对照表](docs/superpowers/specs/2026-10-19-design-doc-coverage.md)）：
+**v1.1 已交付**（对照见 [设计文档 §4 功能范围与 §15 实施计划](docs/设计文档.md)）：
 
 - 本地同步引擎——`scan` / `sync` / `watch` / `daemon`，三方对账、按文件合并与行级三方文本合并、断网退避重试、同步变更集接口
 - 团队治理——组织、团队、角色、四档可见性、发布审核流、安装实例登记
 - 安全——服务端密钥扫描（命中即阻断）与可疑内容扫描（提示）、制品签名与钉住公钥验签、撤回、审计八类动作
 - 运维——接口限流、Git 主机白名单与并发上限、备份与恢复验证、回收站
 
-**明确未做**（对照表里有逐条说明）：文件系统监听只覆盖 Agent 根目录与每个 Skill 目录，更深层级靠所在 Skill 的摘要变化体现；多设备冲突可视化、制品签名策略与供应链证明（证书链）、SSO/LDAP、组织与团队之间的同步。
+**明确未做**（[设计文档 §4](docs/设计文档.md) 有逐条说明）：文件系统监听只覆盖 Agent 根目录与每个 Skill 目录，更深层级靠所在 Skill 的摘要变化体现；多设备冲突可视化、制品签名策略与供应链证明（证书链）、SSO/LDAP、组织与团队之间的同步。
