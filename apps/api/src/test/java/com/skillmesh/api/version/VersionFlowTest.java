@@ -81,9 +81,11 @@ class VersionFlowTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.items[0].version").value("1.0.0"))
             .andExpect(jsonPath("$.items[0].status").value("published"))
-            // manifest 要透出来：客户端靠它判断内容是否真的变了
+            // manifest 要透出来：客户端靠它判断内容是否真的变了。
+            // 而且透出来的得是**服务端从真包算的**那份——发布方自填的只是他的说法。
             .andExpect(jsonPath("$.items[0].manifest[0].path").value("SKILL.md"))
-            .andExpect(jsonPath("$.items[0].manifest[0].sha256").value(sha256(zip)))
+            .andExpect(jsonPath("$.items[0].manifest[0].sha256")
+                .value(sha256("# Demo Skill\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))))
             .andReturn().getResponse().getContentAsString();
         var version = json.readTree(versionsJson).path("items").get(0);
         String artifactId = version.path("artifact").path("id").asText();
