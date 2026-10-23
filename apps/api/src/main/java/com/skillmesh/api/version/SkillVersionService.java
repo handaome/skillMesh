@@ -1,5 +1,6 @@
 package com.skillmesh.api.version;
 
+import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.artifact.ArtifactStorage;
 import com.skillmesh.api.auth.CurrentUser;
@@ -14,8 +15,6 @@ import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionResponse.UploadTarget;
 import com.skillmesh.api.audit.AuditService;
-import com.skillmesh.api.common.ApiException;
-import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.scan.ScanEntity;
 import com.skillmesh.api.scan.ScanRepository;
@@ -27,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -109,21 +109,18 @@ public class SkillVersionService {
     @Transactional(readOnly = true)
     public VersionPage list(CurrentUser user, UUID skillId) {
         requireVisibleSkill(user, skillId);
-        List<SkillVersionResponse> items = new ArrayList<>();
-        for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
-            SkillVersionResponse.ArtifactSummary summary = null;
-            if (version.getArtifactId() != null) {
-                var artifact = artifacts.require(version.getArtifactId());
-                summary = new SkillVersionResponse.ArtifactSummary(artifact.getId(),
-                    artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType(),
-                    artifact.getSignature(), artifact.getSignatureKeyId(),
-                    version.getManifestJson() == null || version.getManifestJson().isEmpty()
-                        ? "" : ContentDigest.of(version.getManifestJson()));
-            }
-            items.add(new SkillVersionResponse(version.getId(), version.getSkillId(),
-                version.getVersion(), version.getChannel(), version.getStatus(),
-                version.getSourceCommit(), summary, manifestOf(version), scanOf(version),
-                version.getPublishedAt(), version.getCreatedAt()));
+        List<SkillVersionEntity> rows = versions.findBySkillIdOrderByCreatedAtDesc(skillId);
+        // 制品与扫描一次批量拿齐：逐个版本查一次，在远程库上就是 2N 次往返
+        // （本机到库的往返几十毫秒，一个版本多的 Skill 光这一页就要等好几秒）。
+        Map<UUID, ArtifactEntity> artifactById = artifacts.byIds(rows.stream()
+            .map(SkillVersionEntity::getArtifactId).filter(Objects::nonNull).toList());
+        Map<UUID, ScanEntity> scanByVersionId =
+            scans.findLatestByVersionIds(rows.stream().map(SkillVersionEntity::getId).toList());
+        List<SkillVersionResponse> items = new ArrayList<>(rows.size());
+        for (SkillVersionEntity version : rows) {
+            items.add(toResponse(version,
+                artifactOf(version, artifactById),
+                scanByVersionId.get(version.getId())));
         }
         return new VersionPage(items, null, false);
     }
@@ -147,28 +144,54 @@ public class SkillVersionService {
     /** 单个版本详情（契约里 GET /skills/{id}/versions/{version}）。 */
     @Transactional(readOnly = true)
     public SkillVersionResponse detail(CurrentUser user, UUID skillId, String version) {
-        list(user, skillId); // 顺带做可见性校验：看不见就 404
+        // 可见性自己判：原来借 list() 做，顺手把该 Skill 的全部版本都查了一遍
+        // （每个版本还要再查一次制品与扫描），看一个版本变成 2N+2 次查询。
+        requireVisibleSkill(user, skillId);
         SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
+        ArtifactEntity artifact = entity.getArtifactId() == null
+            ? null : artifacts.require(entity.getArtifactId());
+        return toResponse(entity, artifact, latestScan(entity));
+    }
+
+    /** 拼一条版本响应。制品与扫描由调用方给——列表页是批量查齐的。 */
+    private SkillVersionResponse toResponse(SkillVersionEntity version, ArtifactEntity artifact,
+                                            ScanEntity scan) {
         SkillVersionResponse.ArtifactSummary summary = null;
-        if (entity.getArtifactId() != null) {
-            var artifact = artifacts.require(entity.getArtifactId());
+        if (artifact != null) {
             summary = new SkillVersionResponse.ArtifactSummary(artifact.getId(),
                 artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType(),
                 artifact.getSignature(), artifact.getSignatureKeyId(),
-                entity.getManifestJson() == null || entity.getManifestJson().isEmpty()
-                    ? "" : ContentDigest.of(entity.getManifestJson()));
+                version.getManifestJson() == null || version.getManifestJson().isEmpty()
+                    ? "" : ContentDigest.of(version.getManifestJson()));
         }
-        return new SkillVersionResponse(entity.getId(), entity.getSkillId(), entity.getVersion(),
-            entity.getChannel(), entity.getStatus(), entity.getSourceCommit(), summary,
-            manifestOf(entity), scanOf(entity), entity.getPublishedAt(), entity.getCreatedAt());
+        return new SkillVersionResponse(version.getId(), version.getSkillId(), version.getVersion(),
+            version.getChannel(), version.getStatus(), version.getSourceCommit(), summary,
+            manifestOf(version), scan == null ? null : scan.toSummary(),
+            version.getPublishedAt(), version.getCreatedAt());
+    }
+
+    /**
+     * 版本对应的制品。查不到就报 404——跟逐个查时的 require() 一个口径。
+     *
+     * 正常不会走到这里：skill_versions.artifact_id 有外键指着 artifacts，
+     * 制品被引用着就删不掉。
+     */
+    private ArtifactEntity artifactOf(SkillVersionEntity version,
+                                      Map<UUID, ArtifactEntity> artifactById) {
+        if (version.getArtifactId() == null) {
+            return null;
+        }
+        ArtifactEntity artifact = artifactById.get(version.getArtifactId());
+        if (artifact == null) {
+            throw ApiException.notFound("Artifact");
+        }
+        return artifact;
     }
 
     /** 最近一次扫描结论，没有就返回 null——没扫过和扫过是两回事，不能混。 */
-    private SkillVersionResponse.ScanSummary scanOf(SkillVersionEntity version) {
-        return scans.findFirstBySkillVersionIdOrderByStartedAtDesc(version.getId())
-            .map(ScanEntity::toSummary)
-            .orElse(null);
+    private ScanEntity latestScan(SkillVersionEntity version) {
+        return scans.findFirstBySkillVersionIdOrderByStartedAtDesc(version.getId()).orElse(null);
     }
 
     /** 请求里的 manifest 是 record，转成能存进 jsonb 的 Map 列表。 */

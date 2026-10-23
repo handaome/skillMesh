@@ -6,14 +6,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.Filter;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import com.skillmesh.api.common.RateLimitFilter;
 import com.skillmesh.api.support.DatabaseCleaner;
 
 @SpringBootTest
@@ -26,6 +32,7 @@ class MeControllerTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private DatabaseCleaner cleaner;
     @Autowired private ObjectMapper json;
+    @Autowired private SecurityFilterChain filterChain;
 
     @BeforeEach
     void 准备() {
@@ -81,5 +88,47 @@ class MeControllerTest {
 
         assertThat(json.readTree(body).path("user").path("subject").asText())
             .isEqualTo(jdbc.queryForObject("select oidc_subject from users", String.class));
+    }
+
+    /**
+     * /me 回显 users 表里真实的 status，不是写死的 active。
+     *
+     * 写死的话这列就没人读——账号被禁用，客户端看到的还是 active。
+     */
+    @Test
+    void me回显库里的真实状态() throws Exception {
+        String token = tokens.accessToken();
+        mockMvc.perform(get("/api/v1/me").header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk());
+        jdbc.update("update users set status = 'disabled'");
+
+        mockMvc.perform(get("/api/v1/me").header("Authorization", "Bearer " + token))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.user.status").value("disabled"));
+    }
+
+    /**
+     * 限流必须排在鉴权之后、授权之前。
+     *
+     * 挂在链外的话，未鉴权的请求被 401 挡在限流之前，刷量完全不消耗额度，
+     * 「没登录的按来源 IP 限」就成了死代码。
+     */
+    @Test
+    void 限流挂在鉴权之后授权之前() {
+        List<Filter> filters = filterChain.getFilters();
+
+        assertThat(indexOf(filters, BearerTokenAuthenticationFilter.class))
+            .isLessThan(indexOf(filters, RateLimitFilter.class));
+        assertThat(indexOf(filters, RateLimitFilter.class))
+            .isLessThan(indexOf(filters, AuthorizationFilter.class));
+    }
+
+    private static int indexOf(List<Filter> filters, Class<? extends Filter> type) {
+        for (int i = 0; i < filters.size(); i++) {
+            if (type.isInstance(filters.get(i))) {
+                return i;
+            }
+        }
+        return -1;
     }
 }

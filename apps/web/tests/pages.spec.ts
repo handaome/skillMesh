@@ -199,4 +199,37 @@ describe('MarketPage', () => {
     expect(wrapper.text()).toContain('python-lint')
     expect(wrapper.text()).not.toContain('java-debug')
   })
+
+  /**
+   * 超过一页时得能接着往下取。
+   *
+   * 只拉一页就把条数当总数显示，页面说的就是假话——所以 next_cursor 得接上，
+   * 条数说明也得说清「还有更多」。
+   */
+  it('有更多时能加载下一页，条数不装成总数', async () => {
+    const OTHER = { ...SKILL, id: 'b', slug: 'python-lint', name: 'Python Lint' }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('cursor=cur1')) {
+        return jsonResponse({ items: [OTHER], next_cursor: null, has_more: false })
+      }
+      return jsonResponse({ items: [SKILL], next_cursor: 'cur1', has_more: true })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountMarket()
+    await flushPromises()
+
+    // 还有下一页就不能说「1 个」
+    expect(wrapper.find('[data-test="count"]').text()).toContain('还有更多')
+
+    await wrapper.find('[data-test="load-more"]').trigger('click')
+    await flushPromises()
+
+    // 第二页带着游标去取
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('cursor=cur1')
+    // 两页都摆在列表里
+    expect(wrapper.text()).toContain('java-debug')
+    expect(wrapper.text()).toContain('python-lint')
+    // 取完了才说总数
+    expect(wrapper.find('[data-test="count"]').text()).toContain('2 个')
+  })
 })

@@ -15,7 +15,9 @@ import com.skillmesh.api.review.dto.PendingReviewItem;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.support.DatabaseCleaner;
+import com.skillmesh.api.support.QueryCounter;
 import com.skillmesh.api.support.TestArtifacts;
+import jakarta.persistence.EntityManagerFactory;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -55,6 +57,7 @@ class ReviewQueueTest {
     @Autowired private SkillService skills;
     @Autowired private ReviewQueueService queue;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private EntityManagerFactory entityManagerFactory;
 
     private String auth;
     private CurrentUser owner;
@@ -172,6 +175,53 @@ class ReviewQueueTest {
 
         assertThat(submitted).as("送审时间应是进队列这一刻")
             .isAfter(OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(5));
+    }
+
+    /**
+     * 审核队列一页的关联数据一次查齐。
+     *
+     * 原来每条待审版本都要再查技能、扫描、来源、人四次——一页 50 条就是 200 次往返，
+     * 本机到远程库一次往返几十毫秒，这个页面直接卡住。
+     */
+    @Test
+    void 审核队列一次查齐关联数据() throws Exception {
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = skills.create(owner, new CreateSkillRequest("runbook", "Runbook", "",
+            "team", orgId, teamId, List.of(), Map.of(), null)).id();
+        insertPendingVersions(skillId, 4);
+
+        QueryCounter counter = new QueryCounter(entityManagerFactory);
+        long queries = counter.count(() -> {
+            List<PendingReviewItem> items = queue.pending(owner, "pending_review", 50);
+            assertThat(items).as("待审队列该有这 4 条").hasSize(4);
+        });
+
+        assertThat(queries).as("队列页的查询条数不该随条目数增长")
+            .isLessThanOrEqualTo(8);
+    }
+
+    /**
+     * 造 count 个待审版本（带制品与扫描）。
+     *
+     * 直接写库，不走对象存储——这里只关心队列页的查询条数。
+     */
+    private void insertPendingVersions(UUID skillId, int count) {
+        for (int i = 1; i <= count; i++) {
+            UUID artifactId = UUID.randomUUID();
+            jdbc.update("insert into artifacts (id, sha256, storage_key, size_bytes, file_count, "
+                + "manifest_json, created_at) values (?, ?, ?, 10, 1, '[]'::jsonb, now())",
+                artifactId, "%064d".formatted(i), "test/" + artifactId);
+            UUID versionId = UUID.randomUUID();
+            jdbc.update("insert into skill_versions (id, skill_id, version, channel, artifact_id, "
+                + "manifest_json, status, created_by, created_at, submitted_at) "
+                + "values (?, ?, ?, 'stable', ?, '[]'::jsonb, 'pending_review', ?, now(), now())",
+                versionId, skillId, "1.0." + i, artifactId, owner.id());
+            jdbc.update("insert into skill_scans (id, skill_version_id, scanner_name, "
+                + "scanner_version, status, findings_json, summary, started_at) "
+                + "values (?, ?, 'skillmesh-server-scan', '1', 'passed', '[]'::jsonb, 'ok', now())",
+                UUID.randomUUID(), versionId);
+        }
     }
 
     /**

@@ -13,8 +13,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
+import com.skillmesh.api.support.QueryCounter;
+import jakarta.persistence.EntityManagerFactory;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.util.HashMap;
@@ -52,6 +55,7 @@ class InvitationFlowTest {
     @Autowired private OrgService orgs;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private DataSource dataSource;
+    @Autowired private EntityManagerFactory entityManagerFactory;
 
     private String auth;
     private CurrentUser owner;
@@ -418,6 +422,32 @@ class InvitationFlowTest {
         assertThat(ex).as("团队角色非法要 400，不是 500").isNotNull();
         assertThat(ex.status()).isEqualTo(400);
         assertThat(ex.code()).isEqualTo("VALIDATION_FAILED");
+    }
+
+    /**
+     * 邀请列表一次查齐组织与团队。
+     *
+     * 原来每条邀请都要再查一次组织、一次团队——一个组织攒下几十份邀请
+     * （邀请只撤销不删，越攒越多）就是几十次往返，本机到远程库一次几十毫秒，
+     * 这个页面直接卡住。
+     */
+    @Test
+    void 邀请列表一次查齐组织与团队() throws Exception {
+        UUID orgId = createOrganization("acme");
+        UUID teamId = createTeam(orgId, "platform");
+        createInvitation(orgId, teamId);
+        createInvitation(orgId, teamId);
+        createInvitation(orgId, teamId);
+        createInvitation(orgId, null);
+
+        QueryCounter counter = new QueryCounter(entityManagerFactory);
+        long queries = counter.count(() -> {
+            List<InvitationSummary> summaries = invitations.listSummaries(orgId);
+            assertThat(summaries).as("四条邀请都在列表里").hasSize(4);
+        });
+
+        assertThat(queries).as("列表页的查询条数不该随邀请条数增长")
+            .isLessThanOrEqualTo(5);
     }
 
     /**

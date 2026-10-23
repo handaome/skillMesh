@@ -50,6 +50,23 @@ class RateLimitFilterTest {
         assertThat(blocked.getStatus()).isEqualTo(429);
     }
 
+    /**
+     * 键表只增不减就是慢速内存泄漏——键由来源 IP 决定，攻击者换着 IP 就能把它撑大。
+     *
+     * 窗口设成 0 秒：每个窗口一建立就过期，下一次清扫就该收走，
+     * 键表不该跟着请求数一直涨。
+     */
+    @Test
+    void 过期窗口会被回收键表不一直涨() throws Exception {
+        RateLimitFilter filter = new RateLimitFilter(100, 100, 0);
+        for (int i = 0; i < 5; i++) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/skills");
+            request.setRemoteAddr("10.0.0." + i);
+            filter.doFilter(request, new MockHttpServletResponse(), new NoopChain());
+        }
+        assertThat(filter.trackedKeys()).isEqualTo(1);
+    }
+
     private static final class NoopChain implements FilterChain {
         @Override
         public void doFilter(jakarta.servlet.ServletRequest request,

@@ -1,17 +1,29 @@
 package com.skillmesh.api.artifact;
 
 import io.minio.BucketExistsArgs;
+import io.minio.GetBucketLifecycleArgs;
 import io.minio.GetObjectArgs;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.SetBucketLifecycleArgs;
 import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
+import io.minio.messages.Expiration;
+import io.minio.messages.LifecycleConfiguration;
+import io.minio.messages.LifecycleRule;
+import io.minio.messages.ResponseDate;
+import io.minio.messages.RuleFilter;
+import io.minio.messages.Status;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -19,13 +31,18 @@ import org.springframework.stereotype.Component;
 @Component
 public class ArtifactStorage {
 
+    private static final Logger log = LoggerFactory.getLogger(ArtifactStorage.class);
+
     private final MinioClient client;
     private final String bucket;
+    private final int tempExpireDays;
 
     public ArtifactStorage(MinioClient client,
-                           @Value("${skillmesh.minio.bucket}") String bucket) {
+                           @Value("${skillmesh.minio.bucket}") String bucket,
+                           @Value("${skillmesh.minio.temp-expire-days:1}") int tempExpireDays) {
         this.client = client;
         this.bucket = bucket;
+        this.tempExpireDays = tempExpireDays;
     }
 
     public String bucket() {
@@ -40,6 +57,55 @@ public class ArtifactStorage {
         } catch (Exception e) {
             throw new IllegalStateException("对象存储 bucket 不可用: " + bucket, e);
         }
+        ensureTempLifecycle();
+    }
+
+    /**
+     * 给 bucket 挂一条生命周期规则：{@code tmp/} 下的对象几天后自动清掉。
+     *
+     * 上传会话 30 分钟就过期，但**对象不会自己消失**——没人来收的话，
+     * 对象存储里的 tmp/ 一直涨。
+     *
+     * bucket 上已经有生命周期规则就不动它：部署方自己配的规则优先，
+     * 别用我们的覆盖人家的。
+     */
+    private void ensureTempLifecycle() {
+        try {
+            LifecycleConfiguration current = client.getBucketLifecycle(
+                GetBucketLifecycleArgs.builder().bucket(bucket).build());
+            if (current != null && !current.rules().isEmpty()) {
+                return;
+            }
+        } catch (Exception e) {
+            // bucket 上还没有生命周期配置——那正是要挂规则的情况，接着往下走。
+            if (!isNoLifecycle(e)) {
+                log.warn("读 bucket 生命周期规则失败: {}", e.getMessage());
+                return;
+            }
+        }
+        try {
+            client.setBucketLifecycle(SetBucketLifecycleArgs.builder()
+                .bucket(bucket)
+                .config(new LifecycleConfiguration(List.of(new LifecycleRule(
+                    Status.ENABLED,
+                    null,
+                    new Expiration((ResponseDate) null, tempExpireDays, null),
+                    new RuleFilter("tmp/"),
+                    "expire-temp-objects",
+                    null, null, null))))
+                .build());
+        } catch (Exception e) {
+            // 挂不上不影响主流程：只是临时对象清得没那么及时。
+            log.warn("给 bucket 挂临时对象生命周期规则失败: {}", e.getMessage());
+        }
+    }
+
+    /** bucket 上还没有生命周期配置时，对象存储是这么说的。 */
+    private boolean isNoLifecycle(Exception e) {
+        if (e instanceof ErrorResponseException response) {
+            return "NoSuchLifecycleConfiguration".equals(response.errorResponse().code());
+        }
+        return false;
     }
 
     public String presignedPut(String key, Duration ttl) {

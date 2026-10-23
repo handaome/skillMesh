@@ -1,5 +1,7 @@
 package com.skillmesh.api.config;
 
+import com.skillmesh.api.common.RateLimitFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.security.oauth2.resource.OAuth2ResourceServerProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -9,13 +11,18 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtDecoders;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 
 @Configuration
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain filterChain(HttpSecurity http,
+                                    @Value("${skillmesh.rate-limit.read-per-minute:600}") int readLimit,
+                                    @Value("${skillmesh.rate-limit.write-per-minute:60}") int writeLimit,
+                                    @Value("${skillmesh.rate-limit.window-seconds:60}") long windowSeconds)
+            throws Exception {
         return http
             .csrf(csrf -> csrf.disable())
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -24,8 +31,16 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 // 邀请摘要页要给还没登录的人看。* 不跨 /，所以 /invitations/{token}/accept 仍需登录。
                 .requestMatchers(HttpMethod.GET, "/api/v1/invitations/*").permitAll()
+                // 网页控制台登录前要知道 issuer 与 client_id，不放行就 401。
+                .requestMatchers(HttpMethod.GET, "/api/v1/config/public").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> {}))
+            // 限流挂在令牌解析之后、授权之前：认得出人的按人计数，认不出的按来源 IP 计数。
+            // 挂在链外当普通 servlet 过滤器的话，未鉴权的请求被 401 挡在限流之前，刷量不消耗额度。
+            // 这里 new 而不是注入 bean：任何 Filter bean 都会被 Spring Boot 自动注册成
+            // servlet 过滤器，那样同一个请求会被数两遍。
+            .addFilterAfter(new RateLimitFilter(readLimit, writeLimit, windowSeconds),
+                BearerTokenAuthenticationFilter.class)
             .build();
     }
 

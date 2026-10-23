@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
@@ -25,18 +26,25 @@ const (
 	actionMergeLocal fileAction = "三方合并"
 	// actionConflict 同一文件两边改到同一处且合不了 → 冲突。
 	actionConflict fileAction = "冲突"
+	// actionDeleted 本机删掉了、云端还在 → 删除待确认，不自动拉回。
+	actionDeleted fileAction = "本机已删除"
 )
 
 // mergePlan 逐文件决定怎么合。这是纯函数：只看三份摘要，不碰磁盘和网络。
 //
 // base 是上次同步时的摘要，local 是本机现状，cloud 是云端现状。
-// 本机删掉、云端还在的文件不在结果里——删除传播要人确认（§6.3 最后一行）。
+// 本机删掉、云端还在的文件不进合并结果——删除传播要人确认（§6.3 最后一行），
+// 它们被标成「本机已删除」，由人来定夺。
 func mergePlan(base, local, cloud map[string]string) map[string]fileAction {
 	plan := map[string]fileAction{}
 	for path, cloudSum := range cloud {
 		localSum, inLocal := local[path]
 		baseSum, hadBase := base[path]
 		switch {
+		case !inLocal && hadBase:
+			// 本机删掉的文件：不从云端拉回来。删除要不要传到云端得人确认
+			// （设计文档 §6.3：本地删除 → 删除待确认/回收流程）。
+			plan[path] = actionDeleted
 		case !inLocal:
 			// 云端新增的文件：拉下来
 			plan[path] = actionTakeCloud
@@ -91,7 +99,7 @@ func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTar
 	}
 	defer cleanup()
 
-	var merged, conflicted []string
+	var merged, conflicted, deleted []string
 	for path, action := range plan {
 		switch action {
 		case actionTakeCloud:
@@ -110,11 +118,22 @@ func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTar
 			} else {
 				conflicted = append(conflicted, path)
 			}
+		case actionDeleted:
+			// 本机删掉的：不拉回来，交给人确认删除要不要传上去。
+			deleted = append(deleted, path)
 		}
 	}
-	if len(conflicted) > 0 {
-		return false, fmt.Sprintf("%d 个文件两边改到同一处合不了：%v",
-			len(conflicted), conflicted), nil
+	if len(conflicted) > 0 || len(deleted) > 0 {
+		var notes []string
+		if len(conflicted) > 0 {
+			notes = append(notes, fmt.Sprintf("%d 个文件两边改到同一处合不了：%v",
+				len(conflicted), conflicted))
+		}
+		if len(deleted) > 0 {
+			notes = append(notes, fmt.Sprintf("%d 个文件本机已删除、云端还在，"+
+				"删除要不要传到云端得你确认：%v", len(deleted), deleted))
+		}
+		return false, strings.Join(notes, "；"), nil
 	}
 	return true, fmt.Sprintf("按文件合并完成（云端 %d 个文件参与）", len(merged)), nil
 }

@@ -11,7 +11,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.support.QueryCounter;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
+import jakarta.persistence.EntityManagerFactory;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -45,6 +47,7 @@ class VersionFlowTest {
     @Autowired private OrgService orgs;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private SkillVersionService versions;
+    @Autowired private EntityManagerFactory entityManagerFactory;
 
     private String auth;
 
@@ -270,6 +273,67 @@ class VersionFlowTest {
         UUID skillId = createSkill("personal");
         assertThat(versions.create(owner(), skillId, versionRequest("1.0.0")).versionId())
             .as("个人 Skill 属主发新版本").isNotNull();
+    }
+
+    /**
+     * 版本详情只查这一个版本。
+     *
+     * 原来 detail() 借 list() 做可见性校验，顺手把该 Skill 的全部版本
+     * 连同每个版本的制品与扫描都查了一遍——版本一多，看一个版本要等几十次往返。
+     */
+    @Test
+    void 版本详情不查该技能的全部版本() throws Exception {
+        UUID skillId = createSkill("detail-queries");
+        insertPublishedVersions(skillId, 5);
+
+        QueryCounter counter = new QueryCounter(entityManagerFactory);
+        long queries = counter.count(() -> mockMvc
+            .perform(get("/api/v1/skills/{id}/versions/{v}", skillId, "1.0.3")
+                .header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.version").value("1.0.3")));
+
+        assertThat(queries).as("看一个版本不该把该 Skill 的所有版本都查一遍")
+            .isLessThanOrEqualTo(7);
+    }
+
+    /** 版本列表里的制品与扫描一次批量查齐，不逐个版本查。 */
+    @Test
+    void 版本列表批量取制品与扫描() throws Exception {
+        UUID skillId = createSkill("list-queries");
+        insertPublishedVersions(skillId, 5);
+
+        QueryCounter counter = new QueryCounter(entityManagerFactory);
+        long queries = counter.count(() -> mockMvc
+            .perform(get("/api/v1/skills/{id}/versions", skillId).header("Authorization", auth))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items.length()").value(5)));
+
+        assertThat(queries).as("查询条数不该随版本数增长")
+            .isLessThanOrEqualTo(7);
+    }
+
+    /**
+     * 造 count 个已发布版本（带制品与扫描）。
+     *
+     * 直接写库，不走对象存储——这里只关心查询条数，不关心包里的内容。
+     */
+    private void insertPublishedVersions(UUID skillId, int count) {
+        for (int i = 1; i <= count; i++) {
+            UUID artifactId = UUID.randomUUID();
+            jdbc.update("insert into artifacts (id, sha256, storage_key, size_bytes, file_count, "
+                + "manifest_json, created_at) values (?, ?, ?, 10, 1, '[]'::jsonb, now())",
+                artifactId, "%064d".formatted(i), "test/" + artifactId);
+            UUID versionId = UUID.randomUUID();
+            jdbc.update("insert into skill_versions (id, skill_id, version, channel, artifact_id, "
+                + "manifest_json, status, created_at, published_at) "
+                + "values (?, ?, ?, 'stable', ?, '[]'::jsonb, 'published', now(), now())",
+                versionId, skillId, "1.0." + i, artifactId);
+            jdbc.update("insert into skill_scans (id, skill_version_id, scanner_name, "
+                + "scanner_version, status, findings_json, summary, started_at) "
+                + "values (?, ?, 'skillmesh-server-scan', '1', 'passed', '[]'::jsonb, 'ok', now())",
+                UUID.randomUUID(), versionId);
+        }
     }
 
     /** 发布一个版本并完成上传，返回版本列表里该版本那一项的 JSON。 */

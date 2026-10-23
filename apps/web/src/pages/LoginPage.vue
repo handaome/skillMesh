@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { buildAuthorizeUrl, codeChallenge, randomVerifier } from '../auth/pkce'
+import { buildAuthorizeUrl, codeChallenge, loadPublicConfig, randomVerifier } from '../auth/pkce'
 import { completeLogin } from '../auth/session'
 
 const route = useRoute()
@@ -22,6 +22,9 @@ async function startLogin() {
   busy.value = true
   error.value = ''
   try {
+    // 先取服务端的 OIDC 配置（issuer 与 client_id）。取不到就报错——
+    // 拿写死的默认值凑，登录只会连到一个够不着的地址。
+    await loadPublicConfig()
     const verifier = randomVerifier()
     const state = randomVerifier()
     sessionStorage.setItem(VERIFIER_KEY, verifier)

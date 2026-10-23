@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -269,6 +270,10 @@ type syncTarget struct {
 	Path     string
 	BaseHash string
 	SkillID  string
+	// BaseFiles / BaseSnapshot 是上次同步时的逐文件摘要与内容副本。
+	// 这次同步没达成新共识时要原样带回去：基线只能前进，不能被写成本地当前内容。
+	BaseFiles    map[string]string
+	BaseSnapshot string
 }
 
 // syncTargets 列出所有要处理的 Skill，并带上各自的基线。
@@ -299,6 +304,7 @@ func syncTargets(options syncOptions) ([]syncTarget, error) {
 			targets = append(targets, syncTarget{
 				Name: name, Agent: agentName, Path: path,
 				BaseHash: entry.BaseHash, SkillID: entry.SkillID,
+				BaseFiles: entry.BaseFiles, BaseSnapshot: entry.BaseSnapshot,
 			})
 		}
 	}
@@ -380,8 +386,9 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 		var err error
 		changeset, err = confirmWithCloud(ctx, client, target, local, localHash, decision, options.DryRun)
 		if err != nil {
-			return syncResult{Name: target.Name, Path: target.Path, Outcome: conflicted,
-				Detail: err.Error()}, syncstate.Entry{}, nil
+			// 只有服务端明确判了冲突才算冲突。服务端自己出错（500/404/403）
+			// 是失败：失败才进重试队列，报成冲突会让用户去 --resolve 白折腾。
+			return outcomeForError(target, err), syncstate.Entry{}, nil
 		}
 	}
 	result, entry, err := applyDecision(ctx, client, target, decision, local, localHash,
@@ -431,9 +438,22 @@ func confirmWithCloud(ctx context.Context, client *apiclient.Client, target sync
 		return "", err
 	}
 	if response.Status == "conflict" {
-		return "", fmt.Errorf("云端已判冲突（%s），不自动覆盖", response.Message)
+		return "", fmt.Errorf("%w（%s），不自动覆盖", errConflict, response.Message)
 	}
 	return response.ChangesetID, nil
+}
+
+// errConflict 标记「服务端明确判了冲突」。
+// 服务端出错与「服务端说冲突」是两回事：前者要重试，后者要人来定夺。
+var errConflict = errors.New("云端已判冲突")
+
+// outcomeForError 把提交变更集时的错误归成同步结果。
+func outcomeForError(target syncTarget, err error) syncResult {
+	if errors.Is(err, errConflict) {
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: conflicted,
+			Detail: err.Error()}
+	}
+	return failedResult(target, err.Error())
 }
 
 // ensureDevice 拿本机在注册中心的设备 ID，没有就注册一个。
@@ -450,8 +470,13 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 	decision syncstate.Decision, local packager.Artifact, localHash string,
 	skill apiclient.Skill, found bool, options syncOptions) (syncResult, syncstate.Entry, error) {
 
+	// 基线先按上次的状态带过来。这次同步没达成新共识时（方向过滤、冲突挡住），
+	// 基线必须原样保留——写成本地当前内容的话，下一轮会把「本地领先」
+	// 误判成「本地落后」，把用户本地的改动下载掉。
 	entry := syncstate.Entry{
-		Name: target.Name, Agent: target.Agent, BaseHash: localHash, SkillID: target.SkillID,
+		Name: target.Name, Agent: target.Agent,
+		BaseHash: target.BaseHash, SkillID: target.SkillID,
+		BaseFiles: target.BaseFiles, BaseSnapshot: target.BaseSnapshot,
 	}
 
 	switch decision {
@@ -459,11 +484,16 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		if found {
 			entry.SkillID = skill.ID
 		}
+		// 两边一致：以当前内容作为新的共同基线。
+		// 不重算的话，一次「无变化」的同步就把逐文件摘要和内容副本清空，
+		// 下一次真冲突时就合不了了（设计文档 §6.3 的按文件合并）。
+		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path,
 			Outcome: skipped, Detail: localHash[:12]}, entry, nil
 
 	case syncstate.Download:
 		if options.Direction == "upload" {
+			// 本次不拉取：云端领先这个事实没变，基线也不动。
 			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
 				Detail: "云端有更新，本次只上传；要拉取用 --direction download"}, entry, nil
 		}
@@ -478,7 +508,7 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		// 装完本地就是云端那份了：基线按新内容重算。
 		// 不重算的话，基线还是下载前那份摘要，下一轮就误报冲突，
 		// 逐文件合并也永远合不了（没有基线可比）。
-		saveBaseline(target, local, &entry)
+		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path, Outcome: fetched,
 			Detail: version}, entry, nil
 
@@ -487,6 +517,7 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 
 	default: // Upload
 		if options.Direction == "download" {
+			// 本次不上传：本地领先这个事实没变，基线也不动。
 			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
 				Detail: "本地有更新，本次只下载"}, entry, nil
 		}
@@ -506,7 +537,8 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		}
 		entry.SkillID = result.SkillID
 		entry.LastVersion = result.Version
-		saveBaseline(target, local, &entry)
+		entry.BaseHash = localHash
+		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path,
 			Outcome: uploaded, Detail: detail}, entry, nil
 	}
@@ -519,7 +551,8 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 	options syncOptions) (syncResult, syncstate.Entry, error) {
 
 	entry := syncstate.Entry{Name: target.Name, Agent: target.Agent,
-		BaseHash: localHash, SkillID: target.SkillID}
+		BaseHash: target.BaseHash, SkillID: target.SkillID,
+		BaseFiles: target.BaseFiles, BaseSnapshot: target.BaseSnapshot}
 	hint := fmt.Sprintf("本地 %s vs 云端 %s，用 --resolve keep-local/keep-cloud/keep-both 处理",
 		localHash[:8], "已变")
 
@@ -533,6 +566,8 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 		}
 		entry.SkillID = result.SkillID
 		entry.LastVersion = result.Version
+		// 本地这份已经上传了：它就是新的共同基线。
+		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
 			Detail: "保留本地，已上传 " + result.Version}, entry, nil
 
@@ -541,6 +576,9 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
+		// 装完本地就是云端那份了：基线按新内容重算，
+		// 不能留着「被换掉之前」的本地摘要——那会让下一轮误判成云端变了。
+		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path, Outcome: fetched,
 			Detail: "保留云端，已拉取 " + version}, entry, nil
 
@@ -559,6 +597,7 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 		}
 		entry.SkillID = result.SkillID
 		entry.LastVersion = result.Version
+		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
 			Detail: fmt.Sprintf("本地版本备份到 %s，云端上传 %s", backup, result.Version)}, entry, nil
 
@@ -573,7 +612,9 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 				publishOptions{Visibility: syncVisibility}); err == nil {
 				entry.SkillID = result.SkillID
 				entry.LastVersion = result.Version
-				entry.BaseHash = localHash
+				// 合并改过本地文件：基线按合并后的内容重算，
+				// 不能记合并前那份摘要。
+				saveBaseline(target, &entry)
 				return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
 					Detail: note + "，已上传 " + result.Version}, entry, nil
 			}
@@ -640,7 +681,11 @@ func lockfileEntry(target syncTarget) lockfile.LockedSkill {
 
 // saveBaseline 记下这次同步出去的逐文件摘要和内容副本。
 // 下次两边都改时，三方合并要靠它当基准（设计文档 §6.3）。
-func saveBaseline(target syncTarget, local packager.Artifact, entry *syncstate.Entry) {
+//
+// 逐文件摘要与副本从磁盘现算——它们描述的是「双方认可的那份内容」，
+// 不是某个人以为的内容。读不出清单就什么也不改：基线宁可旧着，
+// 下次合并会老实说「合不了」，总比拿一份对不上的基线去合强。
+func saveBaseline(target syncTarget, entry *syncstate.Entry) {
 	files, err := skillscan.DirHashes(target.Path)
 	if err != nil {
 		return

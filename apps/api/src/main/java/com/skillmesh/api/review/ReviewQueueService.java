@@ -3,6 +3,7 @@ package com.skillmesh.api.review;
 import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.ArtifactRepository;
 import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.auth.UserEntity;
 import com.skillmesh.api.auth.UserRepository;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.diff.ArtifactDiffService;
@@ -23,7 +24,9 @@ import com.skillmesh.api.version.SkillVersionRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -76,10 +79,12 @@ public class ReviewQueueService {
     public List<PendingReviewItem> pending(CurrentUser user, String status, int limit) {
         String wanted = status == null || status.isBlank() ? "pending_review" : status;
         int capped = Math.clamp(limit, 1, 200);
-        return versions.findReviewable(user.id(), wanted, REVIEWER_ROLES,
-                PageRequest.of(0, capped)).stream()
-            .map(version -> toItem(version))
-            .toList();
+        List<SkillVersionEntity> rows = versions.findReviewable(user.id(), wanted, REVIEWER_ROLES,
+                PageRequest.of(0, capped));
+        // 一页里的技能、扫描、来源、人各查一次：逐条查就是 4N 次往返，
+        // 本机到远程库一次往返几十毫秒，一页 50 条就是 200 次。
+        Lookups lookups = lookupsOf(rows);
+        return rows.stream().map(version -> toItem(version, lookups)).toList();
     }
 
     /**
@@ -101,8 +106,9 @@ public class ReviewQueueService {
         if (!canReview(user, entity)) {
             throw ApiException.notFound("版本");
         }
-        List<Map<String, Object>> findings = findingsOf(entity);
-        return new ReviewDetailResponse(toItem(entity),
+        Lookups lookups = lookupsOf(List.of(entity));
+        List<Map<String, Object>> findings = findingsOf(entity, lookups);
+        return new ReviewDetailResponse(toItem(entity, lookups),
             diffs.readSkillMarkdown(artifactOf(entity)),
             entity.getChangelog(),
             findings,
@@ -114,31 +120,54 @@ public class ReviewQueueService {
      *
      * 团队范围的看我在该团队的角色，没有团队成员行就回落到组织角色
      * ——roleIn 的语义，全站统一（ReviewService.requireRole 也用它）。
+     *
+     * 团队范围才看团队角色：组织范围的版本只有组织角色这一层，
+     * 别让一个挂在组织可见 Skill 上的 owner_team_id 把审核作用域带偏。
      */
     private boolean canReview(CurrentUser user, SkillVersionEntity version) {
         SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
         if (skill == null) {
             return false;
         }
-        String role = orgs.roleIn(skill.getOrganizationId(), skill.getOwnerTeamId(), user.id());
+        UUID scopeTeamId = "team".equals(skill.getVisibility()) ? skill.getOwnerTeamId() : null;
+        String role = orgs.roleIn(skill.getOrganizationId(), scopeTeamId, user.id());
         return OrgService.roleAtLeast(role, "reviewer");
     }
 
     // ponytail: 逐条查 skills/scans/sources/users（N+1），一页 50 条就是 200 次查询。
-    // 待审队列量级不大，先这样；量大时改成按 id 批量查再拼。
-    private PendingReviewItem toItem(SkillVersionEntity version) {
-        SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
+    // 已改：整页的关联数据一次批量查齐（见 lookupsOf），逐条拼装时只查表不查库。
+    private PendingReviewItem toItem(SkillVersionEntity version, Lookups lookups) {
+        SkillEntity skill = lookups.skills().get(version.getSkillId());
         return new PendingReviewItem(
             version.getSkillId(),
             skill == null ? null : skill.getSlug(),
             skill == null ? null : skill.getName(),
             version.getVersion(),
             version.getChannel(),
-            displayName(version.getCreatedBy()),
+            displayName(version.getCreatedBy(), lookups.users()),
             submittedAt(version),
-            scanSummary(version),
-            sourceSummary(version),
+            scanSummary(version, lookups.scans()),
+            sourceSummary(version, lookups.sources()),
             version.getStatus());
+    }
+
+    /**
+     * 一批版本要用的关联数据：一次批量查齐。
+     *
+     * 逐条查就是每条 4 次往返（技能、扫描、来源、人），一页 50 条 200 次；
+     * 本机到远程库一次往返几十毫秒，这个队列页就直接卡住了。
+     */
+    private Lookups lookupsOf(List<SkillVersionEntity> rows) {
+        return new Lookups(
+            skills.findAllById(rows.stream().map(SkillVersionEntity::getSkillId).toList())
+                .stream().collect(Collectors.toMap(SkillEntity::getId, skill -> skill)),
+            scans.findLatestByVersionIds(rows.stream().map(SkillVersionEntity::getId).toList()),
+            sources.findAllById(rows.stream().map(SkillVersionEntity::getSourceId)
+                    .filter(Objects::nonNull).toList())
+                .stream().collect(Collectors.toMap(SourceEntity::getId, source -> source)),
+            users.findAllById(rows.stream().map(SkillVersionEntity::getCreatedBy)
+                    .filter(Objects::nonNull).toList())
+                .stream().collect(Collectors.toMap(UserEntity::getId, user -> user)));
     }
 
     /**
@@ -152,33 +181,35 @@ public class ReviewQueueService {
         return at == null ? null : at.toString();
     }
 
-    private ReviewScanSummary scanSummary(SkillVersionEntity version) {
-        return scans.findFirstBySkillVersionIdOrderByStartedAtDesc(version.getId())
-            .map(scan -> new ReviewScanSummary(scan.getStatus(), scan.getSummary()))
-            .orElse(new ReviewScanSummary("unknown", "未扫描"));
+    private ReviewScanSummary scanSummary(SkillVersionEntity version, Map<UUID, ScanEntity> scans) {
+        ScanEntity scan = scans.get(version.getId());
+        return scan == null ? new ReviewScanSummary("unknown", "未扫描")
+            : new ReviewScanSummary(scan.getStatus(), scan.getSummary());
     }
 
-    private ReviewSourceSummary sourceSummary(SkillVersionEntity version) {
+    private ReviewSourceSummary sourceSummary(SkillVersionEntity version,
+                                              Map<UUID, SourceEntity> sources) {
         if (version.getSourceId() == null) {
             return new ReviewSourceSummary(null, null, null, version.getSourceCommit());
         }
-        return sources.findById(version.getSourceId())
-            .map(source -> new ReviewSourceSummary(source.getProvider(),
-                source.getRepositoryUrl(), source.getRefValue(), version.getSourceCommit()))
-            .orElse(new ReviewSourceSummary(null, null, null, version.getSourceCommit()));
+        SourceEntity source = sources.get(version.getSourceId());
+        return source == null
+            ? new ReviewSourceSummary(null, null, null, version.getSourceCommit())
+            : new ReviewSourceSummary(source.getProvider(), source.getRepositoryUrl(),
+                source.getRefValue(), version.getSourceCommit());
     }
 
-    private List<Map<String, Object>> findingsOf(SkillVersionEntity version) {
-        return scans.findFirstBySkillVersionIdOrderByStartedAtDesc(version.getId())
-            .map(ScanEntity::getFindingsJson)
-            .orElse(List.of());
+    private List<Map<String, Object>> findingsOf(SkillVersionEntity version, Lookups lookups) {
+        ScanEntity scan = lookups.scans().get(version.getId());
+        return scan == null ? List.of() : scan.getFindingsJson();
     }
 
-    private String displayName(UUID userId) {
+    private String displayName(UUID userId, Map<UUID, UserEntity> users) {
         if (userId == null) {
             return null;
         }
-        return users.findById(userId).map(user -> user.getDisplayName()).orElse(null);
+        UserEntity user = users.get(userId);
+        return user == null ? null : user.getDisplayName();
     }
 
     private ArtifactEntity artifactOf(SkillVersionEntity version) {
@@ -187,4 +218,10 @@ public class ReviewQueueService {
         }
         return artifacts.findById(version.getArtifactId()).orElse(null);
     }
+
+    /** 一批版本要用的关联数据：批量查齐的结果，逐条拼装时只查表不查库。 */
+    private record Lookups(Map<UUID, SkillEntity> skills,
+                           Map<UUID, ScanEntity> scans,
+                           Map<UUID, SourceEntity> sources,
+                           Map<UUID, UserEntity> users) {}
 }

@@ -27,12 +27,18 @@ function unauthorized() {
   }
 }
 
+/** 登录前要取的公开配置（issuer 与 client_id）。 */
+function publicConfig() {
+  return jsonResponse({ issuer: 'https://idp.example/realms/x', client_id: 'skillmesh-web' })
+}
+
 /** 令牌端点与 /me 一起打桩。 */
 function stubOidc() {
   return vi.fn(async (url: string, _init?: RequestInit) => {
     if (url.includes('/protocol/openid-connect/token')) {
       return jsonResponse({ access_token: 'a', refresh_token: 'r', expires_in: 60 })
     }
+    if (url.includes('/config/public')) return publicConfig()
     return jsonResponse({
       user: { id: 'u', display_name: 'Dev', email: null, status: 'active' },
       organizations: [],
@@ -112,7 +118,9 @@ describe('LoginPage', () => {
 
     expect(fetchMock).toHaveBeenCalled()
     // 换令牌时必须带上当初存下来的 verifier
-    const tokenBody = String(fetchMock.mock.calls[0][1]?.body)
+    const tokenCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes('/protocol/openid-connect/token'))
+    const tokenBody = String(tokenCall?.[1]?.body)
     expect(tokenBody).toContain('grant_type=authorization_code')
     expect(tokenBody).toContain('code_verifier=verifier')
     expect(session.accessToken).toBe('a')
@@ -167,6 +175,7 @@ describe('会话续期', () => {
       if (url.includes('/protocol/openid-connect/token')) {
         return jsonResponse({ access_token: 'new', refresh_token: 'r2', expires_in: 60 })
       }
+      if (url.includes('/config/public')) return publicConfig()
       if (!url.includes('/skills')) return jsonResponse({ user: null, organizations: [] })
       skillCalls += 1
       if (skillCalls === 1) return unauthorized()
@@ -207,6 +216,7 @@ describe('会话续期', () => {
       if (url.includes('/protocol/openid-connect/token')) {
         return jsonResponse({ access_token: 'new', refresh_token: 'r2', expires_in: 60 })
       }
+      if (url.includes('/config/public')) return publicConfig()
       if (!url.includes('/skills')) return jsonResponse({ user: null, organizations: [] })
       // 令牌被服务端拒了（签发方/受众不符、被吊销、时钟偏差）：续期救不了它
       return unauthorized()

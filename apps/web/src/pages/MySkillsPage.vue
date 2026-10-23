@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   ApiError,
   createSkill,
@@ -8,6 +8,7 @@ import {
   searchMySkills,
   updateSkill,
 } from '../api'
+import { useSkillList } from '../composables/useSkillList'
 import type { Skill, SkillVersion } from '../types'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
@@ -18,10 +19,22 @@ import TagInput from '../components/TagInput.vue'
 /** 服务端收 slug 的规则：小写字母数字开头，后跟小写字母数字或连字符，总长 2–64。 */
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/
 
+/** 输入防抖。击键一次发一次搜索，绝大多数结果落地时已经被下一次输入作废。 */
+const SEARCH_DEBOUNCE_MS = 300
+
 const query = ref('')
-const skills = ref<Skill[]>([])
-const loading = ref(false)
-const listError = ref('')
+
+/** 列表。服务端按游标翻页，超过一页的这里能接着往下取。 */
+const {
+  items: skills,
+  loading,
+  loadingMore,
+  error: listError,
+  hasMore,
+  countText,
+  load: loadPage,
+  loadMore,
+} = useSkillList(searchMySkills)
 
 /** 选中的 Skill。右侧详情面板显示的就是它。 */
 const selected = ref<Skill | null>(null)
@@ -100,24 +113,13 @@ const STATUS_TEXT: Record<string, string> = {
  */
 async function load() {
   const q = query.value
-  loading.value = true
-  listError.value = ''
-  try {
-    const page = await searchMySkills(q)
-    if (query.value !== q) return
-    skills.value = page.items
-    // 选中的那个可能已经不在列表里了（被改名或撤销），跟着刷新一下。
-    if (selected.value) {
-      const hit = page.items.find((s) => s.id === selected.value?.id)
-      if (hit) select(hit)
-      else clearSelection()
-    }
-  } catch (e) {
-    if (query.value !== q) return
-    skills.value = []
-    listError.value = errorText(e)
-  } finally {
-    if (query.value === q) loading.value = false
+  await loadPage(q)
+  if (query.value !== q || listError.value) return
+  // 选中的那个可能已经不在列表里了（被改名或撤销），跟着清掉。
+  // 这里不重拉版本：刷新列表是筛选，不是「换个 Skill」——每次击键都多打一次
+  // 版本列表，请求量直接翻倍。
+  if (selected.value && !skills.value.some((s) => s.id === selected.value?.id)) {
+    clearSelection()
   }
 }
 
@@ -248,9 +250,24 @@ async function create() {
   }
 }
 
-watch(() => query.value, load)
+/**
+ * 输入防抖。
+ *
+ * 原来每敲一个字符就打一次搜索：请求量跟击键速度成正比，而绝大多数响应
+ * 落地时输入框里的词已经变了，结果直接被丢弃——白花带宽也白占服务端。
+ */
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+
+watch(query, () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(load, SEARCH_DEBOUNCE_MS)
+})
 
 onMounted(load)
+
+onUnmounted(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 </script>
 
 <template>
@@ -285,7 +302,7 @@ onMounted(load)
             data-test="mine-search"
           />
           <span class="sm-spacer" />
-          <span class="sm-muted sm-sm sm-num">{{ skills.length }} 个</span>
+          <span class="sm-muted sm-sm sm-num" data-test="count">{{ countText }}</span>
         </div>
 
         <div v-if="loading" class="sm-empty">加载中…</div>
@@ -295,7 +312,7 @@ onMounted(load)
           text="你还没有 Skill。用 CLI 发布一个，或点右上角新建元数据。"
         />
 
-        <div v-else class="sm-list">
+        <div v-else-if="skills.length" class="sm-list">
           <button
             v-for="skill in skills"
             :key="skill.id"
@@ -322,6 +339,18 @@ onMounted(load)
                 <span class="sm-faint">最新</span> {{ skill.latest_version ?? '—' }}
               </span>
             </div>
+          </button>
+        </div>
+
+        <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+        <div v-if="hasMore" class="sm-row sm-mt-12">
+          <button
+            class="sm-btn sm-btn--quiet sm-btn--sm"
+            data-test="load-more"
+            :disabled="loadingMore"
+            @click="loadMore"
+          >
+            {{ loadingMore ? '加载中…' : '加载更多' }}
           </button>
         </div>
       </div>

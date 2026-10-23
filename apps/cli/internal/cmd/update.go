@@ -12,6 +12,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/handaome/skillmesh/apps/cli/internal/trash"
 	"github.com/spf13/cobra"
 )
 
@@ -27,6 +28,10 @@ type UpdateInfo struct {
 	Agents        []string
 	LocalCommit   string
 	RemoteCommit  string
+	// UpdatePolicy 与 Provider 是原锁文件里的：更新后要原样带回，
+	// 不然「自动更新」策略和来源类型更新一次就没了。
+	UpdatePolicy string
+	Provider     string
 }
 
 // lsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
@@ -91,6 +96,8 @@ func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error)
 				Agents:        skill.Agents,
 				LocalCommit:   skill.ResolvedCommit,
 				RemoteCommit:  remote,
+				UpdatePolicy:  skill.UpdatePolicy,
+				Provider:      skill.Provider,
 			})
 		}
 	}
@@ -292,7 +299,7 @@ func applyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 			return err
 		}
 		target := filepath.Join(base, name)
-		if err := installer.InstallAtomic(skillDir, target, true); err != nil {
+		if err := installOverwrite(skillDir, name, target); err != nil {
 			return err
 		}
 		if err := installer.MarkInstalled(target, update.Repository); err != nil {
@@ -314,9 +321,79 @@ func applyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 		Scope:          scopeOf(update.Scope, projectRoot),
 		InstalledHash:  installedHash,
 		Agents:         update.Agents,
+		// 策略与来源类型是原条目里的，原样带回：更新一次就把
+		// 「自动更新」和来源洗掉，等于让用户重新配一遍。
+		UpdatePolicy: update.UpdatePolicy,
+		Provider:     update.Provider,
 	})
 	fmt.Printf("已更新 %s 到 %s\n", name, short(commit))
 	return nil
+}
+
+// installOverwrite 覆盖安装。
+//
+// 同名目录不受 SkillMesh 管理时直接拒绝：update 没有 --replace 这类开关，
+// 用户自己写的同名 Skill 不该被静默覆盖掉。
+// 受管的旧版本先备份进回收站：装砸了还能找回来（skillmesh trash restore）。
+func installOverwrite(skillDir, name, target string) error {
+	if _, err := os.Stat(target); err == nil {
+		if !installer.IsManaged(target) {
+			return fmt.Errorf("目标已存在且不受 SkillMesh 管理，拒绝覆盖: %s", target)
+		}
+		item, err := backupInstalled(name, target)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("旧版本已备份到回收站 %s\n", item.Entry)
+	}
+	return installer.InstallAtomic(skillDir, target, true)
+}
+
+// backupInstalled 把旧版本备份进回收站。
+//
+// 用拷的而不是搬的：搬走会让目标目录空着，装砸了还得再搬回来；
+// 拷贝跨盘也行，装的时候由 installer 的原子替换兜底。
+func backupInstalled(name, target string) (trash.Item, error) {
+	if err := os.MkdirAll(cfg.ConfigDir, 0o755); err != nil {
+		return trash.Item{}, err
+	}
+	staging, err := os.MkdirTemp(cfg.ConfigDir, "skillmesh-backup-*")
+	if err != nil {
+		return trash.Item{}, err
+	}
+	defer os.RemoveAll(staging)
+	copied := filepath.Join(staging, name)
+	if err := copyDir(target, copied); err != nil {
+		return trash.Item{}, fmt.Errorf("备份旧版本失败: %w", err)
+	}
+	// 从同盘移进回收站：os.Rename 跨盘搬不动。
+	return trash.NewStore(cfg.ConfigDir).Move(name, copied)
+}
+
+// copyDir 整棵复制目录。隐藏文件也要拷：备份里的 .skillmesh-install 标记
+// 丢了的话，还原回来的目录就不受管，下次更新会拒绝覆盖它。
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		out := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(out, 0o755)
+		}
+		if !info.Mode().IsRegular() {
+			return nil // 符号链接之类的不拷
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(out, data, info.Mode().Perm())
+	})
 }
 
 func newLockCmd() *cobra.Command {

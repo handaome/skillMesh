@@ -90,4 +90,36 @@ describe('MySkillsPage', () => {
       /创建于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/,
     )
   })
+
+  /**
+   * 输入要防抖。
+   *
+   * 每敲一个字符打一次搜索，绝大多数响应落地时词已经变了——白花带宽。
+   * 刷新列表也不该顺带把版本列表也拉一遍。
+   */
+  it('连着敲键只发一次搜索', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/versions')) {
+        return jsonResponse({ items: [VERSION], next_cursor: null, has_more: false })
+      }
+      return jsonResponse({ items: [SKILL], next_cursor: null, has_more: false })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountMine()
+    const before = fetchMock.mock.calls.length
+
+    const input = wrapper.find('[data-test="mine-search"]')
+    await input.setValue('j')
+    await input.setValue('ja')
+    await input.setValue('jav')
+    await flushPromises()
+    // 还没到防抖的时间，一次都不该发
+    expect(fetchMock.mock.calls.length).toBe(before)
+
+    await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBe(before + 1))
+    const searched = fetchMock.mock.calls.slice(before).map(([url]) => String(url))
+    expect(searched.some((u) => u.includes('q=jav'))).toBe(true)
+    // 刷新列表不该顺带拉版本列表
+    expect(searched.some((u) => u.includes('/versions'))).toBe(false)
+  })
 })

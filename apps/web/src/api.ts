@@ -1,9 +1,8 @@
 import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
+import { API_BASE } from './constants/api'
 import router from './router'
 import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
-
-const BASE = '/api/v1'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
 export class ApiError extends Error {
@@ -24,7 +23,7 @@ async function request<T>(
   retried = false,
 ): Promise<T> {
   const bearer = token ?? session.accessToken
-  const response = await fetch(BASE + path, {
+  const response = await fetch(API_BASE + path, {
     method,
     headers: {
       ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
@@ -70,24 +69,31 @@ async function request<T>(
   return (await response.json()) as T
 }
 
-export function searchSkills(q: string, token?: string): Promise<SkillPage> {
-  // limit 给到服务端上限（100）：默认 20 会把结果静默截断，页面显示的个数就成了假话。
+/**
+ * 搜索当前用户可见的 Skill。
+ *
+ * limit 给到服务端上限（100）：默认 20 会把结果静默截断。
+ * 超过 100 条时服务端在 next_cursor 里给出下一页的起点，has_more 说清还有没有——
+ * 调用方得把它接上，只拉一页就显示「N 个」的话，那个数是假的。
+ */
+export function searchSkills(q: string, cursor?: string): Promise<SkillPage> {
   const params = new URLSearchParams({ limit: '100' })
   if (q) params.set('q', q)
-  return request<SkillPage>(`/skills?${params}`, 'GET', undefined, token)
+  if (cursor) params.set('cursor', cursor)
+  return request<SkillPage>(`/skills?${params}`, 'GET')
 }
 
 /**
  * 我名下的 Skill（个人空间 + 我建的团队 Skill）。
  * 服务端按属主过滤，可见性条件对它不生效——属主本来就看得见自己的东西。
  *
- * limit 显式给到服务端的上限（100）：默认只有 20，多出来的被服务端静默截断，
- * 页面会假装「你只有 20 个 Skill」。
+ * 分页与 searchSkills 一样：mine=true 只改属主过滤，游标照样要接。
  */
-export function searchMySkills(q: string, token?: string): Promise<SkillPage> {
+export function searchMySkills(q: string, cursor?: string): Promise<SkillPage> {
   const params = new URLSearchParams({ mine: 'true', limit: '100' })
   if (q) params.set('q', q)
-  return request<SkillPage>(`/skills?${params}`, 'GET', undefined, token)
+  if (cursor) params.set('cursor', cursor)
+  return request<SkillPage>(`/skills?${params}`, 'GET')
 }
 
 /**

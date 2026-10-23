@@ -390,4 +390,32 @@ describe('FileBrowser', () => {
     const call = fetchMock.mock.calls.find(([url]) => String(url).includes('/file?'))
     expect(String(call?.[0])).toContain('path=SKILL.md')
   })
+
+  /**
+   * 超限的文件在读进内存之前就得被拒。
+   *
+   * 服务端单文件上限 1MB：不先挡一道，浏览器得先把它读成 base64 再发过去才被拒。
+   */
+  it('超限的文件上传前就被拒，不发请求', async () => {
+    const calls: { method?: string }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method })
+      return jsonResponse(FILES)
+    }))
+    const wrapper = mount(FileBrowser, {
+      props: { skillId: 's1', version: '1.0.0' },
+      global: {},
+    })
+    await flushPromises()
+
+    const input = wrapper.find('[data-test="file-input"]')
+    const big = new File([new Uint8Array(2 * 1024 * 1024)], 'big.zip', { type: 'application/zip' })
+    Object.defineProperty(input.element, 'files', { value: [big] })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="upload-error"]').text()).toContain('文件太大')
+    // 一个字节都没传出去
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+  })
 })

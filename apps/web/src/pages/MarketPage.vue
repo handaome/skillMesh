@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError, getSkill, getVersions, searchSkills } from '../api'
+import { useSkillList } from '../composables/useSkillList'
 import type { Skill, SkillVersion } from '../types'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
@@ -11,10 +12,18 @@ const route = useRoute()
 const router = useRouter()
 
 const query = ref('')
-const skills = ref<Skill[]>([])
-const error = ref('')
-const loading = ref(false)
 const searched = ref(false)
+
+/** 列表。服务端按游标翻页，超过一页的这里能接着往下取。 */
+const {
+  items: skills,
+  loadingMore,
+  error,
+  hasMore,
+  countText,
+  load: loadPage,
+  loadMore,
+} = useSkillList(searchSkills)
 
 const openId = ref<string | null>(null)
 const detail = ref<Skill | null>(null)
@@ -44,20 +53,9 @@ const VISIBILITY_TEXT: Record<string, string> = {
  */
 async function search() {
   const q = query.value
-  loading.value = true
-  error.value = ''
-  try {
-    const page = await searchSkills(q)
-    if (query.value !== q) return
-    skills.value = page.items
-    searched.value = true
-  } catch (e) {
-    if (query.value !== q) return
-    skills.value = []
-    error.value = errorText(e)
-  } finally {
-    if (query.value === q) loading.value = false
-  }
+  await loadPage(q)
+  if (query.value !== q || error.value) return
+  searched.value = true
 }
 
 /**
@@ -244,8 +242,8 @@ onMounted(search)
         搜索
       </button>
       <span class="sm-spacer" />
-      <span v-if="searched && !error" class="sm-muted sm-sm sm-num">
-        {{ skills.length }} 个
+      <span v-if="searched" class="sm-muted sm-sm sm-num" data-test="count">
+        {{ countText }}
       </span>
     </div>
 
@@ -254,7 +252,7 @@ onMounted(search)
       :text="query ? '没有匹配的 Skill，换个词试试。' : '现在还没有你能看见的 Skill。团队里有人发布后就会出现在这里。'"
     />
 
-    <div v-else-if="!error" class="sm-list">
+    <div v-else-if="skills.length" class="sm-list">
       <button
         v-for="skill in skills"
         :key="skill.id"
@@ -280,6 +278,18 @@ onMounted(search)
             <span class="sm-faint">最新</span> {{ skill.latest_version ?? '—' }}
           </span>
         </div>
+      </button>
+    </div>
+
+    <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+    <div v-if="hasMore" class="sm-row sm-mt-16">
+      <button
+        class="sm-btn sm-btn--quiet sm-btn--sm"
+        data-test="load-more"
+        :disabled="loadingMore"
+        @click="loadMore"
+      >
+        {{ loadingMore ? '加载中…' : '加载更多' }}
       </button>
     </div>
   </section>

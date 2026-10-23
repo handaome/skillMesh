@@ -117,6 +117,32 @@ class ReviewFlowTest {
             .as("个人 Skill 扫描通过就发布").isEqualTo("published");
     }
 
+    /**
+     * 撤回不可逆：撤回了的版本不能再送回审核队列。
+     *
+     * 撤回的约定是「要恢复得发新版本」——能重新送审的话，撤回就只是个待办提示，
+     * 过审一版权限又回来了。
+     */
+    @Test
+    void 撤回后不能重新送审() throws Exception {
+        CurrentUser owner = owner();
+        UUID orgId = orgs.createOrganization(owner, "acme", "Acme").getId();
+        UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
+        UUID skillId = createTeamSkill(orgId, teamId, "runbook");
+        publish(skillId, "1.0.0");
+
+        mockMvc.perform(post("/api/v1/skills/{id}/versions/{v}/revoke", skillId, "1.0.0")
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"撤回了\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("revoked"));
+
+        assertThatThrownBy(() -> reviews.submit(owner, skillId, "1.0.0", "再审一次"))
+            .isInstanceOf(com.skillmesh.api.common.ApiException.class)
+            .hasMessageContaining("撤回");
+        assertThat(versionStatus(skillId, "1.0.0")).isEqualTo("revoked");
+    }
+
     @Test
     void 组织角色是publisher就能提交审核() throws Exception {
         CurrentUser owner = owner();

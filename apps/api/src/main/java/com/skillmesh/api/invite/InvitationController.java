@@ -68,7 +68,7 @@ public class InvitationController {
                                         @PathVariable UUID organizationId) {
         CurrentUser user = currentUserService.current(jwt);
         invitations.requireOrgMember(user, organizationId);
-        return invitations.list(organizationId).stream().map(this::toSummary).toList();
+        return invitations.listSummaries(organizationId);
     }
 
     @DeleteMapping("/organizations/{organizationId}/invitations/{invitationId}")
@@ -82,7 +82,7 @@ public class InvitationController {
     /** 公开：没登录的人也要看得懂这份邀请是什么。 */
     @GetMapping("/invitations/{token}")
     public InvitationSummary publicView(@PathVariable String token) {
-        return toSummary(invitations.summary(token));
+        return invitations.summarize(invitations.summary(token));
     }
 
     @PostMapping("/invitations/{token}/accept")
@@ -91,16 +91,5 @@ public class InvitationController {
         InvitationService.Accepted accepted = invitations.accept(currentUserService.current(jwt), token);
         return new AcceptInvitationResponse(accepted.invitationId(), accepted.organizationId(),
             accepted.teamId(), accepted.orgRole(), accepted.teamRole(), "已加入");
-    }
-
-    /** 邀请 → 摘要。列表与公开页共用一份映射，字段口径不会各说各话。 */
-    private InvitationSummary toSummary(InvitationEntity entity) {
-        OrganizationEntity org = invitations.organizationOf(entity);
-        TeamEntity team = invitations.teamOf(entity);
-        return new InvitationSummary(entity.getId(),
-            org == null ? null : org.getName(),
-            team == null ? null : team.getName(),
-            entity.getOrgRole(), entity.getTeamRole(),
-            invitations.effectiveStatus(entity), entity.getExpiresAt(), entity.getCreatedAt());
     }
 }

@@ -28,7 +28,8 @@ public class CurrentUserService {
         user.setLastLoginAt(now);
         user.setUpdatedAt(now);
         users.save(user);
-        return new CurrentUser(user.getId(), subject, user.getDisplayName(), user.getEmail());
+        return new CurrentUser(user.getId(), subject, user.getDisplayName(), user.getEmail(),
+            user.getStatus());
     }
 
     private UserEntity provision(String issuer, String subject, Jwt jwt) {

@@ -28,8 +28,8 @@ type publishTarget struct {
 func newPublishCmd() *cobra.Command {
 	var (
 		version, visibility, channel, slug, name, description string
-		orgSlug, teamSlug                                   string
-		all, dryRun, skipSecretScan                         bool
+		orgSlug, teamSlug                                     string
+		all, dryRun, skipSecretScan                           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "publish <path>",
@@ -64,15 +64,15 @@ func newPublishCmd() *cobra.Command {
 				return err
 			}
 			options := publishOptions{
-				Version:            version,
-				Visibility:         visibility,
-				Channel:            channel,
-				Slug:               slug,
-				Name:               name,
-				Description:        description,
-				DryRun:             dryRun,
-				SkipSecretScan:     skipSecretScan,
-				Scope:              scope,
+				Version:             version,
+				Visibility:          visibility,
+				Channel:             channel,
+				Slug:                slug,
+				Name:                name,
+				Description:         description,
+				DryRun:              dryRun,
+				SkipSecretScan:      skipSecretScan,
+				Scope:               scope,
 				RequestedVisibility: requested,
 			}
 			published, failed := 0, 0

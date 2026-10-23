@@ -41,6 +41,15 @@ skillmesh:
     access-key: ${SM_MINIO_ACCESS_KEY}
     secret-key: ${SM_MINIO_SECRET_KEY}
     bucket: ${SM_MINIO_BUCKET}
+    # 临时对象（上传会话的中间产物）几天后由对象存储自动清掉。
+    # 会话 30 分钟就过期，但对象不会自己消失——没人收就一直涨。
+    temp-expire-days: ${SM_MINIO_TEMP_EXPIRE_DAYS:1}
+  oidc:
+    # 网页端登录要用的公开配置：issuer 与 client_id。
+    # 写死在控制台源码里的话，换企业 IdP 就得改代码重新打包——
+    # 部署文档写的是「只认 OIDC issuer，代码不用改」。
+    issuer: ${SM_OIDC_ISSUER:${SM_KEYCLOAK_ISSUER:}}
+    client-id: ${SM_OIDC_CLIENT_ID:skillmesh-cli}
   web:
     base-url: ${SM_WEB_BASE_URL:http://127.0.0.1:5174}
 

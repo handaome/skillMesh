@@ -107,7 +107,10 @@ public class ReviewService {
         SkillEntity skill = requireSkill(user, skillId);
         // 自己发的东西自己审不合适：要求 reviewer 及以上，且不能是同一个发布人
         // 审核放行权是团队范围内的事，判团队角色（没有团队成员行才回落到组织角色）。
-        requireRole(user, skill, "reviewer", skill.getOwnerTeamId());
+        // 团队范围才看团队角色：组织范围的版本只有组织角色这一层
+        // （团队治理文档「审核这一侧先看团队角色」那条）。
+        requireRole(user, skill, "reviewer",
+            "team".equals(skill.getVisibility()) ? skill.getOwnerTeamId() : null);
         // 锁住版本行：审核决定要串行化。两个人同时点「通过」都读到 pending_review
         // 就会各写一条 approved；「通过」与「拒绝」交错还会把 published_by 写回 null。
         // 锁住之后后一个动作只能等前一个提交完，读到的已经是 published → 409。

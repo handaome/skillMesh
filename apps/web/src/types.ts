@@ -18,6 +18,18 @@ export interface SkillPage {
   has_more: boolean
 }
 
+/**
+ * 服务端给的公开配置。
+ *
+ * 登录前浏览器要知道 OIDC 的 issuer 与 client_id：写死在控制台源码里的话，
+ * 换企业 IdP 就得改代码重新打包——部署文档写的「只认 OIDC issuer，代码不用改」
+ * 对网页端并不成立。
+ */
+export interface PublicConfig {
+  issuer: string
+  client_id: string
+}
+
 export interface ArtifactSummary {
   id: string
   sha256: string

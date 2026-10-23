@@ -4,6 +4,7 @@ import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrgRepository;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.OrganizationEntity;
@@ -16,11 +17,14 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -162,8 +166,42 @@ public class InvitationService {
         return entity.getExpiresAt().isBefore(now);
     }
 
-    public List<InvitationEntity> list(UUID organizationId) {
-        return invitations.findByOrganizationIdOrderByCreatedAtDesc(organizationId);
+    /**
+     * 组织下的邀请列表（摘要）。
+     *
+     * 组织与团队一次批量查齐：逐条查就是 2N 次往返，本机到远程库一次往返几十毫秒，
+     * 一个组织攒下几十份邀请（邀请只撤销不删，越攒越多）就够这个页面卡住。
+     */
+    public List<InvitationSummary> listSummaries(UUID organizationId) {
+        List<InvitationEntity> rows =
+            invitations.findByOrganizationIdOrderByCreatedAtDesc(organizationId);
+        Map<UUID, OrganizationEntity> orgById = organizations.findAllById(
+                rows.stream().map(InvitationEntity::getOrganizationId).toList())
+            .stream().collect(Collectors.toMap(OrganizationEntity::getId, org -> org));
+        Map<UUID, TeamEntity> teamById = teams.findAllById(
+                rows.stream().map(InvitationEntity::getTeamId).filter(Objects::nonNull).toList())
+            .stream().collect(Collectors.toMap(TeamEntity::getId, team -> team));
+        List<InvitationSummary> out = new ArrayList<>(rows.size());
+        for (InvitationEntity row : rows) {
+            out.add(toSummary(row, orgById.get(row.getOrganizationId()),
+                row.getTeamId() == null ? null : teamById.get(row.getTeamId())));
+        }
+        return out;
+    }
+
+    /** 单份邀请的摘要（公开页用）。 */
+    public InvitationSummary summarize(InvitationEntity entity) {
+        return toSummary(entity, organizationOf(entity), teamOf(entity));
+    }
+
+    /** 邀请 → 摘要。列表与公开页共用一份映射，字段口径不会各说各话。 */
+    private InvitationSummary toSummary(InvitationEntity entity, OrganizationEntity org,
+                                        TeamEntity team) {
+        return new InvitationSummary(entity.getId(),
+            org == null ? null : org.getName(),
+            team == null ? null : team.getName(),
+            entity.getOrgRole(), entity.getTeamRole(),
+            effectiveStatus(entity), entity.getExpiresAt(), entity.getCreatedAt());
     }
 
     @Transactional

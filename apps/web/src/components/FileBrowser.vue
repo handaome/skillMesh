@@ -10,6 +10,13 @@ const props = defineProps<{ skillId: string; version: string; label?: string }>(
 const emit = defineEmits<{ close: []; edited: [version: string] }>()
 
 /**
+ * 服务端的单文件上限（VersionEditService.MAX_FILE_BYTES）：1MB。
+ *
+ * 前端先挡一道：超限的文件读了也白读——base64 之后还要发一遍给服务端才被拒。
+ */
+const MAX_UPLOAD_BYTES = 1 << 20
+
+/**
  * 编辑的基准版本。
  *
  * 改一个文件会产出**新版本**，下一次编辑得基于那个新版本。
@@ -272,6 +279,18 @@ async function createFile() {
 }
 
 /**
+ * 文件太大就说清楚，别把它读成 base64 再让服务端拒。
+ *
+ * 真正的闸在 upload()：那里挡下就一个字节都没读进内存。
+ */
+function tooLarge(file: File): boolean {
+  if (file.size <= MAX_UPLOAD_BYTES) return false
+  uploadError.value =
+    `文件太大：${formatSize(file.size)}，上限 ${formatSize(MAX_UPLOAD_BYTES)}。先压缩或拆小再传。`
+  return true
+}
+
+/**
  * 上传：从本机挑一个文件进包里。
  *
  * 走 base64——图片、字体这类二进制塞不进文本框。
@@ -284,6 +303,8 @@ async function upload() {
     uploadError.value = '文件路径不能为空'
     return
   }
+  // 先查大小再读：读成 base64 是一份完整的内存拷贝，白读一场。
+  if (tooLarge(file)) return
   saving.value = true
   uploadError.value = ''
   saveNotice.value = ''
@@ -322,12 +343,18 @@ function onPicked(event: Event) {
   // 清空是为了让同一个文件再选一次也能触发 change。
   input.value = ''
   if (!file) return
+  uploading.value = true
+  creating.value = false
+  // 超限的当场退回：连路径都不必填，填了也传不上去。
+  if (tooLarge(file)) {
+    picked.value = null
+    uploadPath.value = ''
+    return
+  }
   picked.value = file
   uploadPath.value = file.name
   uploadExecutable.value = false
   uploadError.value = ''
-  uploading.value = true
-  creating.value = false
 }
 
 function cancelUpload() {
@@ -553,6 +580,7 @@ function onDialogClosed() {
             <span class="sm-mono sm-sm" data-test="upload-file-name">
               {{ picked?.name }}（{{ formatSize(picked?.size ?? 0) }}）
             </span>
+            <span class="sm-hint">单个文件上限 {{ formatSize(MAX_UPLOAD_BYTES) }}。</span>
           </div>
           <div class="sm-field sm-mb-12">
             <label for="upload-path">路径</label>

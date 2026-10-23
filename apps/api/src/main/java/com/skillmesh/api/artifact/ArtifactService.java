@@ -10,8 +10,11 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -118,6 +121,25 @@ public class ArtifactService {
     @Transactional(readOnly = true)
     public ArtifactEntity require(UUID artifactId) {
         return artifacts.findById(artifactId).orElseThrow(() -> ApiException.notFound("Artifact"));
+    }
+
+    /**
+     * 批量取制品，按 id 归拢。
+     *
+     * 列表页一次拿齐：逐个版本查一次，在远程库上就是 N 次往返
+     * （本机到库的往返几十毫秒，版本一多页面就卡住）。
+     * 查不到的 id 不在这里报错——调用方按自己的口径处理。
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, ArtifactEntity> byIds(Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, ArtifactEntity> out = new LinkedHashMap<>();
+        for (ArtifactEntity artifact : artifacts.findAllById(ids)) {
+            out.put(artifact.getId(), artifact);
+        }
+        return out;
     }
 
     public String presignedDownload(ArtifactEntity artifact) {

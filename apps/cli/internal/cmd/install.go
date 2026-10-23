@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
@@ -39,7 +41,13 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, err := pickVersion(versions, version, locked, fromLock, hasLock)
+			// 不指定版本时装「注册中心口径的最新」：优先用注册中心给的
+			// latest_version，拿不到就按版本号取最大的。
+			latest := ""
+			if version == "" && !(locked && hasLock) {
+				latest = registryLatestVersion(cmd.Context(), client, args[0])
+			}
+			target, err := selectVersion(versions, version, locked, fromLock, hasLock, latest)
 			if err != nil {
 				return err
 			}
@@ -217,20 +225,25 @@ func versionStatus(versions apiclient.VersionPage, want string) (string, bool) {
 	return "", false
 }
 
-// pickVersion 选要装的版本。--locked 时必须与锁文件完全一致，
-// 否则 CI 会静默装到漂移的版本（详细设计 §3.10）。
+// pickVersion 选要装的版本。restore/sync/conflict/rollback 还在用它：
+// 它们拿不到注册中心的 latest_version，「最新」按版本号算。
 func pickVersion(versions apiclient.VersionPage, want string, locked bool,
 	fromLock lockfile.LockedSkill, hasLock bool) (apiclient.SkillVersion, error) {
+	return selectVersion(versions, want, locked, fromLock, hasLock, "")
+}
+
+// selectVersion 选要装的版本。--locked 时必须与锁文件完全一致，
+// 否则 CI 会静默装到漂移的版本（详细设计 §3.10）。
+//
+// latest 是注册中心给的 latest_version（空串表示没拿到）：「最新」优先用它，
+// 拿不到就按版本号取最大的——与注册中心同一个「最新」口径。
+func selectVersion(versions apiclient.VersionPage, want string, locked bool,
+	fromLock lockfile.LockedSkill, hasLock bool, latest string) (apiclient.SkillVersion, error) {
 	if locked && hasLock {
 		want = fromLock.Version
 	}
 	if want == "" {
-		for _, version := range versions.Items {
-			if version.Status == "published" {
-				return version, nil
-			}
-		}
-		return apiclient.SkillVersion{}, fmt.Errorf("该 Skill 没有已发布的版本")
+		return pickLatestPublished(versions, latest)
 	}
 	for _, candidate := range versions.Items {
 		if candidate.Version != want || candidate.Status != "published" {
@@ -251,4 +264,103 @@ func pickVersion(versions apiclient.VersionPage, want string, locked bool,
 		return apiclient.SkillVersion{}, fmt.Errorf("版本 %s 已被撤回，不能安装（当前状态 %s）", want, status)
 	}
 	return apiclient.SkillVersion{}, fmt.Errorf("找不到已发布的版本: %s", want)
+}
+
+// pickLatestPublished 挑「最新已发布」的那一版。
+//
+// latest 是注册中心给的 latest_version，可以是空串：非空就用它；
+// 它不在已发布列表里就当没给，退回按版本号取最大的。
+//
+// 版本列表按创建时间倒序排（服务端 findBySkillIdOrderByCreatedAtDesc），
+// 所以「列表里第一个」是刚发出来的那个——可能是旧版本号，不能当「最新」。
+func pickLatestPublished(versions apiclient.VersionPage, latest string) (apiclient.SkillVersion, error) {
+	if latest != "" {
+		for _, candidate := range versions.Items {
+			if candidate.Version == latest && candidate.Status == "published" &&
+				candidate.Artifact != nil {
+				return candidate, nil
+			}
+		}
+	}
+	best := apiclient.SkillVersion{}
+	found := false
+	for _, candidate := range versions.Items {
+		// 没有制品的版本装不了（下载会直接失败），跳过。
+		if candidate.Status != "published" || candidate.Artifact == nil {
+			continue
+		}
+		if !found || versionGreater(candidate.Version, best.Version) {
+			best, found = candidate, true
+		}
+	}
+	if !found {
+		return apiclient.SkillVersion{}, fmt.Errorf("该 Skill 没有可安装的已发布版本")
+	}
+	return best, nil
+}
+
+// registryLatestVersion 取注册中心给的 latest_version。
+//
+// 注册中心的「最新」是版本号最大的那个（skills.latest_version），
+// 跟列表顺序不是一回事。取不到就返回空串，调用方退回按版本号比。
+func registryLatestVersion(ctx context.Context, client *apiclient.Client, skillID string) string {
+	skill, err := client.Skill(ctx, skillID)
+	if err != nil || skill.LatestVersion == nil {
+		return ""
+	}
+	return *skill.LatestVersion
+}
+
+// versionGreater 版本号比大小：对齐服务端 VersionOrder.isGreater——
+// 点分字段按数字比（1.10.0 > 1.9.0），缺的字段当 0，字段不是数字就按字典序比。
+func versionGreater(candidate, current string) bool {
+	if candidate == "" {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	left, right := splitVersion(candidate), splitVersion(current)
+	for i := 0; i < len(left) || i < len(right); i++ {
+		cmp := compareSegment(versionField(left, i), versionField(right, i))
+		if cmp != 0 {
+			return cmp > 0
+		}
+	}
+	return false
+}
+
+// splitVersion 切版本号。末尾的空段不算（对齐 Java split 的语义）。
+func splitVersion(version string) []string {
+	parts := strings.Split(version, ".")
+	for len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	return parts
+}
+
+// versionField 取第 i 段，缺了当 0（1.0 与 1.0.0 一样大）。
+func versionField(parts []string, i int) string {
+	if i < len(parts) {
+		return parts[i]
+	}
+	return "0"
+}
+
+// compareSegment 数字段按数字比，不是数字就按字典序比——
+// 版本号写歪了也别把「最新」弄丢。
+func compareSegment(left, right string) int {
+	l, lErr := strconv.ParseInt(left, 10, 64)
+	r, rErr := strconv.ParseInt(right, 10, 64)
+	if lErr == nil && rErr == nil {
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return strings.Compare(left, right)
 }

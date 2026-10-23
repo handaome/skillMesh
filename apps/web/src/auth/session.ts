@@ -1,5 +1,6 @@
 import { reactive, ref } from 'vue'
-import { CLIENT_ID, ISSUER, exchangeCode, refreshToken } from './pkce'
+import { exchangeCode, loadPublicConfig, refreshToken } from './pkce'
+import type { PublicConfig } from '../types'
 
 const STORAGE_KEY = 'skillmesh_session'
 /** 提前 30 秒续期，别让请求卡在过期上。 */
@@ -114,13 +115,23 @@ export function logout() {
  *
  * 会话失效（401、续期失败）走的是 logout()，不跳这里：
  * 那时正要送回登录页，再多一次跳转只会让人以为登录坏了。
+ *
+ * issuer 与 client_id 来自服务端的公开配置：换 IdP 不用改前端代码。
  */
-export function logoutEndingSession() {
+export async function logoutEndingSession() {
   const idToken = session.idToken
   logout()
   const redirect = `${window.location.origin}/login`
-  const url = `${ISSUER}/protocol/openid-connect/logout`
-    + `?client_id=${encodeURIComponent(CLIENT_ID)}`
+  let config: PublicConfig
+  try {
+    config = await loadPublicConfig()
+  } catch {
+    // 取不到 IdP 的配置就别乱跳：本地会话已经清了，回登录页。
+    window.location.assign(redirect)
+    return
+  }
+  const url = `${config.issuer}/protocol/openid-connect/logout`
+    + `?client_id=${encodeURIComponent(config.client_id)}`
     + `&post_logout_redirect_uri=${encodeURIComponent(redirect)}`
     // 带 id_token_hint：Keycloak 才知道要结束谁的 SSO 会话。
     // 不带就只显示一个「要登出吗」的确认页——SSO 会话其实没结束，

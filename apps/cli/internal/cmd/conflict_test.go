@@ -44,6 +44,21 @@ func Test两边改成一样不进计划(t *testing.T) {
 	}
 }
 
+// 设计文档 §6.3：本地删除、云端仍存在 → 走删除待确认，不能自动拉回来。
+func Test本机删掉的文件不从云端拉回(t *testing.T) {
+	base := map[string]string{"a.md": "A", "gone.md": "G"}
+	local := map[string]string{"a.md": "A-LOCAL"}
+	cloud := map[string]string{"a.md": "A", "gone.md": "G-CLOUD"}
+
+	plan := mergePlan(base, local, cloud)
+	if plan["gone.md"] == actionTakeCloud {
+		t.Fatalf("本机删掉的文件不该从云端拉回来：%v", plan)
+	}
+	if plan["gone.md"] != actionDeleted {
+		t.Fatalf("本机删掉的文件该标成待确认，得到 %s", plan["gone.md"])
+	}
+}
+
 // 真跑一遍三方合并：同一文件、改的是不同行 → 自动合；改同一行 → 判冲突。
 func Test同一文件的三方合并(t *testing.T) {
 	root := t.TempDir()
