@@ -5,6 +5,7 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.scan.ScanEntity;
 import com.skillmesh.api.scan.ScanRepository;
 import com.skillmesh.api.skill.SkillEntity;
@@ -35,16 +36,18 @@ public class ReviewService {
     private final AuditService audit;
     private final ReviewRepository reviews;
     private final ScanRepository scans;
+    private final RecycleService recycle;
 
     public ReviewService(SkillRepository skills, SkillVersionRepository versions,
                          OrgService orgs, AuditService audit, ReviewRepository reviews,
-                         ScanRepository scans) {
+                         ScanRepository scans, RecycleService recycle) {
         this.skills = skills;
         this.versions = versions;
         this.orgs = orgs;
         this.audit = audit;
         this.reviews = reviews;
         this.scans = scans;
+        this.recycle = recycle;
     }
 
     /** 团队或组织可见的 Skill，发版要走审核。 */
@@ -141,6 +144,10 @@ public class ReviewService {
                 locked.setUpdatedAt(now);
                 skills.save(locked);
             });
+            // 这一版比上一版少的文件进回收站（设计文档 §6.4）。
+            // 团队与组织可见的版本是过审才发布的——不在这儿记，
+            // 回收站在组织/团队场景下就永远是空的，删掉的文件再也找不回来。
+            recycle.recordRemoved(skillId, entity.getVersion());
         } else {
             entity.setStatus("rejected");
         }

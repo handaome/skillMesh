@@ -254,7 +254,8 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 | `watch start` / `stop` / `pause` | 后台同步监听 |
 | `lock refresh` | 重新解析来源并刷新锁文件 |
 | `uninstall <name>` | 卸载（默认移进回收站，可找回） |
-| `trash list` / `restore` / `purge` | 回收站：找回卸载掉的 Skill、清过期 |
+| `trash list` / `restore` / `purge` | 本机回收站：找回卸载掉的 Skill、清过期 |
+| `recycle list` / `restore <path>` | 云端回收站：找回云端某个 Skill 里被删掉的文件 |
 
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。
 
@@ -300,11 +301,21 @@ skillmesh sync --allow-delete    # 确认把「本地删掉的文件」也传播
 
 **本地删了文件不会静默传到云端**：同步发现「基线里有、本地没了、云端也没变」的文件时，
 这次上传会**停下**，报「待确认」并列出是哪些文件。确认要删就加 `--allow-delete` 再跑一次。
-（设计文档 §6.4 说的「软删除 + 回收期 + 可恢复」还没做，现在是「不静默传播 + 要人确认」。）
 
 > 后台同步（`watch` / `daemon`）**永远不会传播删除**——它们不传 `--allow-delete`。
 > 删除只能手动跑 `skillmesh sync --allow-delete` 确认。这是有意的：后台任务没人盯着，
 > 不该替人做删除这种不可逆的决定。
+
+**删掉的文件能找回来**（设计文档 §6.4 的软删除 + 回收期 + 可恢复）：
+
+```bash
+skillmesh recycle list                     # 云端某个 Skill 里被删掉的文件
+skillmesh recycle restore old.md           # 把它放回去，产出一个新版本
+skillmesh recycle list --skill demo        # 不在 Skill 目录里时用 --skill 指定
+```
+
+回收期 30 天。恢复走的是**正常发版流程**——扫描、审核那道闸一样要过，
+恢复回来的内容不会被绕开审核直接上线。
 
 **首次发现不等于收编**：新出现在授权目录里的 Skill 默认会备份到个人私有空间，**不会自动公开**；`--skip-new` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
 

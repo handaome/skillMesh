@@ -2,7 +2,6 @@ package com.skillmesh.api.sync;
 
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
-import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.device.DeviceEntity;
 import com.skillmesh.api.device.DeviceService;
 import com.skillmesh.api.skill.SkillEntity;
@@ -10,6 +9,7 @@ import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.sync.dto.SyncChangesetRequest;
 import com.skillmesh.api.sync.dto.SyncChangesetResponse;
+import com.skillmesh.api.version.PublishedDigest;
 import com.skillmesh.api.version.SkillVersionRepository;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -148,24 +148,9 @@ public class SyncService {
 
     /** 云端最新已发布版本的内容摘要（对「路径 + 文件摘要」排序后哈希，与 CLI 同口径）。 */
     private String cloudHash(UUID skillId) {
-        for (var version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
-            if (!"published".equals(version.getStatus())) {
-                continue;
-            }
-            if (version.getArtifactId() == null) {
-                continue;
-            }
-            // 版本行上的 manifest 是内容清单，与 CLI 同口径。
-            // 清单为空的版本要跳过、继续往下找：更早的版本可能才有清单
-            // （V2 迁移把写成 {} 的行统一成了 []）。原来遇到第一个空的就返回 null，
-            // 而 cloudRevision / loadBase / CLI 的 cloudDigest 都是跳过继续找——
-            // 同一个 Skill，服务端一处说「云端有内容」、另一处说「云端没内容」。
-            if (version.getManifestJson() == null || version.getManifestJson().isEmpty()) {
-                continue;
-            }
-            return ContentDigest.of(version.getManifestJson());
-        }
-        return null;
+        // 口径统一在 PublishedDigest 一处：这里、版本建版本、版本转正各抄一份的话，
+        // 迟早有一处抄歪——同一个 Skill，服务端一处说「云端有内容」、另一处说「云端没内容」。
+        return PublishedDigest.of(versions.findBySkillIdOrderByCreatedAtDescThenId(skillId));
     }
 
     private void updateState(UUID deviceId, SyncChangesetRequest req, String cloud,

@@ -68,6 +68,16 @@ public class SkillVersionEntity {
     @Column(name = "revoke_reason")
     private String revokeReason;
 
+    /**
+     * 建这一版时依据的云端摘要（客户端带来的基线）。
+     *
+     * 转正时再对一次：建版本到上传完成之间云端被别人动过的话，
+     * 这次上传会把那份改动静默盖掉。
+     */
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "base_revision", length = 64)
+    private String baseRevision;
+
     public UUID getId() {
         return id;
     }
@@ -202,5 +212,13 @@ public class SkillVersionEntity {
 
     public void setRevokeReason(String revokeReason) {
         this.revokeReason = revokeReason;
+    }
+
+    public String getBaseRevision() {
+        return baseRevision;
+    }
+
+    public void setBaseRevision(String baseRevision) {
+        this.baseRevision = baseRevision;
     }
 }

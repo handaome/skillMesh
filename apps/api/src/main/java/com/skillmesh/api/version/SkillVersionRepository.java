@@ -19,6 +19,16 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
     List<SkillVersionEntity> findBySkillIdOrderByCreatedAtDesc(UUID skillId);
 
     /**
+     * 按发布时间倒序，同一秒建的用 id 兜底。
+     *
+     * created_at 只到秒：同一秒建的两版，顺序不定——
+     * 「上一版是哪一版」这种问题不能靠运气。
+     */
+    @Query("select v from SkillVersionEntity v where v.skillId = :skillId "
+        + "order by v.createdAt desc, v.id desc")
+    List<SkillVersionEntity> findBySkillIdOrderByCreatedAtDescThenId(UUID skillId);
+
+    /**
      * 按制品反查版本。同一份内容可以被多个版本引用（内容寻址，sha256 唯一），
      * 所以这里是一对多，不能用 Optional。
      */

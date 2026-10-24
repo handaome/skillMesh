@@ -33,7 +33,7 @@ class FlywayMigrationTest {
     }
 
     @Test
-    void 迁移建出全部20张表() {
+    void 迁移建出全部21张表() {
         List<String> tables = jdbc.queryForList(
             "select table_name from information_schema.tables "
                 + "where table_schema = current_schema() and table_name not like 'flyway%' "
@@ -44,8 +44,8 @@ class FlywayMigrationTest {
             "skills", "skill_sources", "artifacts", "skill_versions", "skill_scans",
             "skill_reviews", "skill_permissions", "devices", "installations",
             "sync_states", "sync_changesets", "sync_conflicts", "upload_sessions",
-            "audit_events", "org_invitations");
-        assertThat(tables).hasSize(20);
+            "audit_events", "org_invitations", "skill_recycle_files");
+        assertThat(tables).hasSize(21);
     }
 
     @Test
@@ -89,6 +89,27 @@ class FlywayMigrationTest {
             + "(sha256, storage_key, content_type, size_bytes, file_count) "
             + "values (?, 'k/2', 'application/zip', 10, 1)", digest))
             .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    /**
+     * 版本行记着「建这一版时依据的云端摘要」。
+     *
+     * 基线复检要靠它：转正时再对一次 cloud 与它对不对得上。
+     * 列没了或类型不对，复检就形同虚设。
+     */
+    @Test
+    void 版本行记着基线摘要() {
+        UUID userId = insertUser("u-base");
+        UUID skillId = insertSkill(userId, "base-demo");
+        String digest = nextDigest();
+        jdbc.update("insert into skill_versions "
+                + "(skill_id, version, channel, status, base_revision) "
+                + "values (?, '1.0.0', 'stable', 'draft', ?)",
+            skillId, digest);
+        String stored = jdbc.queryForObject(
+            "select base_revision from skill_versions where skill_id = ? and version = '1.0.0'",
+            String.class, skillId);
+        assertThat(stored).isEqualTo(digest);
     }
 
     /**

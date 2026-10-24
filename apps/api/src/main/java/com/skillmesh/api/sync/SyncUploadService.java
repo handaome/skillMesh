@@ -11,6 +11,7 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.device.DeviceService;
+import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.review.ReviewService;
 import com.skillmesh.api.scan.ArtifactScanService;
 import com.skillmesh.api.scan.ScanResult;
@@ -19,6 +20,7 @@ import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.upload.UploadSessionEntity;
 import com.skillmesh.api.upload.UploadSessionRepository;
+import com.skillmesh.api.version.PublishedDigest;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.VersionOrder;
@@ -63,6 +65,7 @@ public class SyncUploadService {
     private final SigningService signing;
     private final ArtifactScanService scanService;
     private final ReviewService review;
+    private final RecycleService recycle;
 
     public SyncUploadService(SyncChangesetRepository changesets,
                              UploadSessionRepository uploads, SkillRepository skills,
@@ -70,7 +73,8 @@ public class SyncUploadService {
                              ArtifactService artifacts,
                              ArtifactStorage storage, DeviceService devices,
                              AuditService audit, SigningService signing,
-                             ArtifactScanService scanService, ReviewService review) {
+                             ArtifactScanService scanService, ReviewService review,
+                             RecycleService recycle) {
         this.changesets = changesets;
         this.uploads = uploads;
         this.skills = skills;
@@ -83,6 +87,7 @@ public class SyncUploadService {
         this.signing = signing;
         this.scanService = scanService;
         this.review = review;
+        this.recycle = recycle;
     }
 
     /** 为变更集里的每个相对路径开一个上传会话。 */
@@ -153,7 +158,7 @@ public class SyncUploadService {
         // 锁的顺序是「先版本行、后 Skill 行」——这里不锁别人的版本行，只锁 Skill 行。
         SkillEntity locked = skills.findByIdForUpdate(changeset.getSkillId()).orElse(skill);
         List<SkillVersionEntity> rows =
-            versions.findBySkillIdOrderByCreatedAtDesc(changeset.getSkillId());
+            versions.findBySkillIdOrderByCreatedAtDescThenId(changeset.getSkillId());
         String cloud = cloudRevision(rows);
         if (expectedRevision != null && !expectedRevision.isBlank()
             && !expectedRevision.equals(cloud)) {
@@ -220,6 +225,11 @@ public class SyncUploadService {
             version.setSubmittedAt(now);
         }
         versions.save(version);
+
+        if ("published".equals(version.getStatus())) {
+            // 同步提交也会让文件变少：少的那些进回收站（设计文档 §6.4）。
+            recycle.recordRemoved(skill.getId(), version.getVersion());
+        }
 
         changeset.setStatus("completed");
         changeset.setTargetRevision(ContentDigest.of(manifestJson(files)));
@@ -311,13 +321,8 @@ public class SyncUploadService {
 
     /** 云端当前 revision：最新已发布版本的内容摘要。 */
     private String cloudRevision(List<SkillVersionEntity> rows) {
-        for (SkillVersionEntity version : rows) {
-            if ("published".equals(version.getStatus())
-                && version.getManifestJson() != null && !version.getManifestJson().isEmpty()) {
-                return ContentDigest.of(version.getManifestJson());
-            }
-        }
-        return "";
+        String digest = PublishedDigest.of(rows);
+        return digest == null ? "" : digest;
     }
 
     /**

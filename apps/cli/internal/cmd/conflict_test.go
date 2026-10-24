@@ -89,13 +89,9 @@ func Test同一文件的三方合并(t *testing.T) {
 	write(cloudDir, "line1\nline2\nline3\n云端加的\n")
 	write(localDir, "line1\n本机改的\nline2\nline3\n")
 
-	ok, err := mergeFile(baseDir, localDir, cloudDir, "SKILL.md")
+	merged, ok, err := mergeFile(baseDir, localDir, cloudDir, "SKILL.md")
 	if err != nil || !ok {
 		t.Fatalf("改的是不同位置，应该合得上：%v %v", ok, err)
-	}
-	merged, err := os.ReadFile(filepath.Join(localDir, "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
 	}
 	for _, want := range []string{"本机改的", "云端加的"} {
 		if !strings.Contains(string(merged), want) {
@@ -107,7 +103,7 @@ func Test同一文件的三方合并(t *testing.T) {
 	write(cloudDir, "line1\nline2\n云端改的\nline3\n")
 	write(localDir, "line1\nline2\n本机改的\nline3\n")
 	before, _ := os.ReadFile(filepath.Join(localDir, "SKILL.md"))
-	ok, err = mergeFile(baseDir, localDir, cloudDir, "SKILL.md")
+	_, ok, err = mergeFile(baseDir, localDir, cloudDir, "SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +132,7 @@ func Test基线文件缺失时不硬合(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cloud, "SKILL.md"), []byte("x\ny\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := mergeFile(filepath.Join(root, "no-such-base"), local, cloud, "SKILL.md")
+	_, ok, err := mergeFile(filepath.Join(root, "no-such-base"), local, cloud, "SKILL.md")
 	if err != nil {
 		t.Fatalf("基线缺失不该报错：%v", err)
 	}
@@ -212,5 +208,153 @@ func Test合并失败不动本机目录(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("没合完不该说合成了")
+	}
+}
+
+// 合并只写合并涉及的文件，本机目录里别的东西原样留着。
+//
+// 符号链接最要紧：整目录换入的实现里 copyTree 只拷普通文件，
+// 合并一次就把本机目录里的符号链接换没了——从「保留」变成了「消失」。
+// Windows 上建符号链接要管理员权限，建不出来就跳过这条断言。
+func Test合并保留本机目录里的符号链接(t *testing.T) {
+	root := t.TempDir()
+	local := filepath.Join(root, "local")
+	cloud := filepath.Join(root, "cloud")
+	for _, dir := range []string{local, cloud} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(dir, name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(local, "SKILL.md", "# 本机\n")
+	write(cloud, "SKILL.md", "# 本机\n")
+	write(cloud, "a.md", "云端的 a\n")
+
+	link := filepath.Join(local, "link.md")
+	if err := os.Symlink("SKILL.md", link); err != nil {
+		t.Skipf("建不出符号链接，跳过：%v", err)
+	}
+
+	artifact, err := packager.Pack(cloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localHashes, err := skillscan.DirHashes(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashes := toHashMap(localHashes)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1/versions":
+			w.Write([]byte(`{"items":[{"version":"1.0.0","status":"published","manifest":[` +
+				`{"path":"SKILL.md","sha256":"` + hashes["SKILL.md"] + `"},` +
+				`{"path":"a.md","sha256":"ca"}],` +
+				`"artifact":{"id":"art-1"}}],"has_more":false}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/artifacts/art-1/download":
+			w.Write(artifact.Zip)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	target := syncTarget{Name: "demo", Agent: "claude-code", Path: local, SkillID: "skill-1"}
+	entry := syncstate.Entry{Name: "demo", Agent: "claude-code",
+		BaseFiles: map[string]string{"SKILL.md": hashes["SKILL.md"]}}
+	ok, _, err := mergeConflict(context.Background(), apiclient.New(srv.URL, "tok", 0),
+		target, entry, artifact, apiclient.Skill{ID: "skill-1"})
+	if err != nil || !ok {
+		t.Fatalf("合并该成功：%v %v", ok, err)
+	}
+	// 合并进来的文件落地了。
+	if _, statErr := os.Stat(filepath.Join(local, "a.md")); statErr != nil {
+		t.Fatalf("云端的新文件该写进本机目录：%v", statErr)
+	}
+	// 符号链接还在，还是链接（不是被换成普通文件）。
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("合并把符号链接弄没了：%v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("符号链接被换成了普通文件")
+	}
+}
+
+// 写回中途失败要把本机目录还原。
+//
+// 不还原会留下更糟的状态：一半文件已是合并结果、另一半还是旧的，
+// 而基线没更新——下一轮同步会把「已经合过的文件」判成冲突，
+// 让用户去处理一个根本不存在的问题。
+func Test写回失败还原本机目录(t *testing.T) {
+	root := t.TempDir()
+	local := filepath.Join(root, "local")
+	cloud := filepath.Join(root, "cloud")
+	for _, dir := range []string{local, cloud} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(dir, name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(local, "SKILL.md", "# 本机\n")
+	write(cloud, "SKILL.md", "# 本机\n")
+	write(cloud, "a.md", "# 云端的 a\n")
+	write(cloud, "b.md", "# 云端的 b\n")
+
+	// b.md 在本机是个目录：写文件到它上面必然失败。
+	// a.md 本机没有：走「采用云端」那条路，写回时先写 a.md 再写 b.md，
+	// b.md 失败就能验证 a.md 有没有被还原。
+	if err := os.MkdirAll(filepath.Join(local, "b.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	artifact, err := packager.Pack(cloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localHashes, err := skillscan.DirHashes(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashes := toHashMap(localHashes)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1/versions":
+			w.Write([]byte(`{"items":[{"version":"1.0.0","status":"published","manifest":[` +
+				`{"path":"SKILL.md","sha256":"` + hashes["SKILL.md"] + `"},` +
+				`{"path":"a.md","sha256":"ca"},{"path":"b.md","sha256":"cb"}],` +
+				`"artifact":{"id":"art-1"}}],"has_more":false}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/artifacts/art-1/download":
+			w.Write(artifact.Zip)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	target := syncTarget{Name: "demo", Agent: "claude-code", Path: local, SkillID: "skill-1"}
+	entry := syncstate.Entry{Name: "demo", Agent: "claude-code",
+		BaseFiles: map[string]string{"SKILL.md": hashes["SKILL.md"]}}
+	ok, _, err := mergeConflict(context.Background(), apiclient.New(srv.URL, "tok", 0),
+		target, entry, artifact, apiclient.Skill{ID: "skill-1"})
+	if err == nil {
+		t.Fatal("写回失败该把错报出来")
+	}
+	if ok {
+		t.Fatal("没写完不该说合成了")
+	}
+	// 本机目录回到合并前：a.md 本机原来没有，写回失败后不该留下它。
+	if _, statErr := os.Stat(filepath.Join(local, "a.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("本机目录该被还原，a.md 不该留下：%v", statErr)
 	}
 }

@@ -23,10 +23,30 @@ public final class ContentDigest {
     public static String of(List<Map<String, Object>> manifest) {
         StringBuilder sorted = new StringBuilder();
         manifest.stream()
-            .sorted(Comparator.comparing(item -> String.valueOf(item.get("path"))))
+            .sorted(Comparator.comparing(item -> String.valueOf(item.get("path")),
+                ContentDigest::compareByCodePoint))
             .forEach(item -> sorted.append(item.get("path")).append(FIELD_SEP)
                 .append(item.get("sha256")).append('\n'));
         return sha256(sorted.toString());
+    }
+
+    /**
+     * 按 Unicode 码点比路径。
+     *
+     * 不能用 {@code String.compareTo}：那是 UTF-16 码元序，
+     * 增补平面字符（emoji 之类）的代理对落在 U+E000..U+FFFF 之前，
+     * 而 CLI 那边（Go 的字符串比较）是 UTF-8 字节序，等于码点序。
+     * 两边排序不同，同一份内容的摘要就对不上——基线校验会一直失败。
+     */
+    private static int compareByCodePoint(String left, String right) {
+        int[] a = left.codePoints().toArray();
+        int[] b = right.codePoints().toArray();
+        for (int i = 0; i < Math.min(a.length, b.length); i++) {
+            if (a[i] != b[i]) {
+                return Integer.compare(a[i], b[i]);
+            }
+        }
+        return Integer.compare(a.length, b.length);
     }
 
     public static String sha256(String text) {

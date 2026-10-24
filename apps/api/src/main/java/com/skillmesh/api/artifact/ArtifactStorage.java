@@ -21,6 +21,7 @@ import io.minio.messages.Status;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,20 +62,24 @@ public class ArtifactStorage {
     }
 
     /**
-     * 给 bucket 挂一条生命周期规则：{@code tmp/} 下的对象几天后自动清掉。
+     * 给 bucket 挂生命周期规则：临时对象几天后自动清掉。
      *
-     * 上传会话 30 分钟就过期，但**对象不会自己消失**——没人来收的话，
-     * 对象存储里的 tmp/ 一直涨。
+     * 两个前缀都要管：
+     * - {@code tmp/}：整包上传的临时位置。
+     * - {@code sync-staging/}：文件级同步的暂存位置。同步提交后没人删它，
+     *   不挂规则的话这批对象会永久驻留桶里（孤儿清理也不碰在传的对象）。
      *
-     * bucket 上已经有生命周期规则就不动它：部署方自己配的规则优先，
-     * 别用我们的覆盖人家的。
+     * 上传会话 30 分钟就过期，但**对象不会自己消失**——没人来收就一直涨。
+     *
+     * 部署方自己配的规则不动：只补我们缺的那几条，别用我们的覆盖人家的。
      */
     private void ensureTempLifecycle() {
+        List<LifecycleRule> rules = new ArrayList<>();
         try {
             LifecycleConfiguration current = client.getBucketLifecycle(
                 GetBucketLifecycleArgs.builder().bucket(bucket).build());
-            if (current != null && !current.rules().isEmpty()) {
-                return;
+            if (current != null && current.rules() != null) {
+                rules.addAll(current.rules());
             }
         } catch (Exception e) {
             // bucket 上还没有生命周期配置——那正是要挂规则的情况，接着往下走。
@@ -83,21 +88,44 @@ public class ArtifactStorage {
                 return;
             }
         }
+        List<LifecycleRule> wanted = new ArrayList<>();
+        if (!hasRule(rules, "expire-temp-objects")) {
+            wanted.add(expireRule("tmp/", "expire-temp-objects"));
+        }
+        if (!hasRule(rules, "expire-sync-staging-objects")) {
+            wanted.add(expireRule("sync-staging/", "expire-sync-staging-objects"));
+        }
+        if (wanted.isEmpty()) {
+            return;
+        }
+        List<LifecycleRule> all = new ArrayList<>(rules);
+        all.addAll(wanted);
         try {
             client.setBucketLifecycle(SetBucketLifecycleArgs.builder()
                 .bucket(bucket)
-                .config(new LifecycleConfiguration(List.of(new LifecycleRule(
-                    Status.ENABLED,
-                    null,
-                    new Expiration((ResponseDate) null, tempExpireDays, null),
-                    new RuleFilter("tmp/"),
-                    "expire-temp-objects",
-                    null, null, null))))
+                .config(new LifecycleConfiguration(all))
                 .build());
         } catch (Exception e) {
             // 挂不上不影响主流程：只是临时对象清得没那么及时。
             log.warn("给 bucket 挂临时对象生命周期规则失败: {}", e.getMessage());
         }
+    }
+
+    /** 规则在不在：按 id 认，认不出就当没有。 */
+    private boolean hasRule(List<LifecycleRule> rules, String id) {
+        for (LifecycleRule rule : rules) {
+            if (id.equals(rule.id())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 一条「过期某个前缀下对象」的规则。 */
+    private LifecycleRule expireRule(String prefix, String id) {
+        return new LifecycleRule(Status.ENABLED, null,
+            new Expiration((ResponseDate) null, tempExpireDays, null),
+            new RuleFilter(prefix), id, null, null, null);
     }
 
     /** bucket 上还没有生命周期配置时，对象存储是这么说的。 */

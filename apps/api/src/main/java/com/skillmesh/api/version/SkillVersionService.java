@@ -87,6 +87,9 @@ public class SkillVersionService {
         version.setStatus("draft");
         version.setCreatedBy(user.id());
         version.setCreatedAt(now);
+        // 基线存到版本行：转正时还要再对一次（建版本到上传完成之间，
+        // 云端可能被别人动过——那次的改动会被静默盖掉）。
+        version.setBaseRevision(blankToNull(req.expected_base_revision()));
         versions.save(version);
 
         String tempKey = artifacts.tempKey(skillId, version.getId());
@@ -132,24 +135,11 @@ public class SkillVersionService {
     /**
      * 云端当前已发布版本的内容摘要——基线校验的比对对象。
      *
-     * 口径照抄 {@code SyncService.cloudHash}：最新已发布版本（跳过清单为空的）→ 清单摘要。
-     * 客户端按同一个算法算云端摘要，两边算法不一样的话前置条件永远对不上。
+     * 口径见 {@link PublishedDigest}：客户端按同一个算法算云端摘要，
+     * 两边算法不一样的话前置条件永远对不上。
      */
     private String publishedDigest(UUID skillId) {
-        for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
-            if (!"published".equals(version.getStatus())) {
-                continue;
-            }
-            if (version.getArtifactId() == null) {
-                continue;
-            }
-            // 清单为空的版本要跳过、继续往下找（与 SyncService.cloudHash 同一口径）。
-            if (version.getManifestJson() == null || version.getManifestJson().isEmpty()) {
-                continue;
-            }
-            return ContentDigest.of(version.getManifestJson());
-        }
-        return null;
+        return PublishedDigest.of(versions.findBySkillIdOrderByCreatedAtDescThenId(skillId));
     }
 
     /** 摘要太长不好看，只留头 8 位。 */
@@ -158,6 +148,11 @@ public class SkillVersionService {
             return "空";
         }
         return digest.length() > 8 ? digest.substring(0, 8) : digest;
+    }
+
+    /** 空串与 null 一回事：没带基线的版本，列上留空。 */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     @Transactional(readOnly = true)

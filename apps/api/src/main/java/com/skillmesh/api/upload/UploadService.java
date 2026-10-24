@@ -3,6 +3,7 @@ package com.skillmesh.api.upload;
 import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.SigningService;
 import com.skillmesh.api.common.ContentDigest;
+import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.review.ReviewService;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.artifact.ArtifactService;
@@ -16,6 +17,7 @@ import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.PublishedDigest;
 import com.skillmesh.api.version.VersionOrder;
 import com.skillmesh.api.version.dto.UploadSession;
 import java.io.IOException;
@@ -46,11 +48,12 @@ public class UploadService {
     private final AuditService audit;
     private final SigningService signing;
     private final ReviewService review;
+    private final RecycleService recycle;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
                          SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
                          ArtifactScanService scanService, AuditService audit,
-                         SigningService signing, ReviewService review) {
+                         SigningService signing, ReviewService review, RecycleService recycle) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
@@ -60,6 +63,7 @@ public class UploadService {
         this.audit = audit;
         this.signing = signing;
         this.review = review;
+        this.recycle = recycle;
     }
 
     @Transactional
@@ -98,6 +102,10 @@ public class UploadService {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "版本已撤回，不能再发布");
         }
+        // 基线复检：建版本到转正之间，云端可能被别人动过。
+        // 建版本那一刻查过一次，但那个窗口没被覆盖——这次转正会把
+        // 那份改动静默盖掉。这里再对一次，对不上就让客户端重新对账。
+        requireBaseRevision(version);
         session.setStatus("verifying");
         uploads.save(session);
 
@@ -158,6 +166,9 @@ public class UploadService {
                 skill.setUpdatedAt(now);
                 skills.save(skill);
             });
+            // 这一版比上一版少的文件进回收站（设计文档 §6.4）：
+            // 删掉不是抹掉，回收期内能找回来。
+            recycle.recordRemoved(version.getSkillId(), version.getVersion());
         }
 
         String action = switch (version.getStatus()) {
@@ -181,6 +192,39 @@ public class UploadService {
         // 客户端要判断的是这版被服务端怎么处理了（扫描拦下 / 待审 / 已发布）。
         return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
             session.getExpiresAt(), promoted.sha256(), null, version.getStatus());
+    }
+
+    /**
+     * 基线复检：建版本时带的云端摘要，现在还对得上吗。
+     *
+     * 建版本那一刻查过一次，但那次查只覆盖了「查的那一瞬间」。
+     * 从建版本到转正（上传完成）之间，云端可能被别人发布了新版本——
+     * 这次转正会把那份改动静默盖掉。转正前再对一次，对不上就让客户端重新对账。
+     *
+     * 只查这一版自己的基线：没带基线的（普通发布、网页端编辑）照旧放行。
+     * 锁 Skill 行再读已发布版本：和并发发布串行，否则读到的是半路状态。
+     */
+    private void requireBaseRevision(SkillVersionEntity version) {
+        String expected = version.getBaseRevision();
+        if (expected == null || expected.isBlank()) {
+            return;
+        }
+        skills.findByIdForUpdate(version.getSkillId());
+        String cloud = PublishedDigest.of(
+            versions.findBySkillIdOrderByCreatedAtDescThenId(version.getSkillId()));
+        if (!expected.equals(cloud)) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "云端已被别人改动（你看到的是 " + shortDigest(expected) + "，现在是 "
+                    + shortDigest(cloud) + "），请重新对账");
+        }
+    }
+
+    /** 摘要太长不好看，只留头 8 位。 */
+    private String shortDigest(String digest) {
+        if (digest == null || digest.isEmpty()) {
+            return "空";
+        }
+        return digest.length() > 8 ? digest.substring(0, 8) : digest;
     }
 
     /**

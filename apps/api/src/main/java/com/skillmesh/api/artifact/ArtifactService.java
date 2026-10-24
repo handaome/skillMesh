@@ -1,5 +1,6 @@
 package com.skillmesh.api.artifact;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import java.io.ByteArrayOutputStream;
@@ -8,8 +9,6 @@ import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -28,10 +27,13 @@ public class ArtifactService {
 
     private final ArtifactStorage storage;
     private final ArtifactRepository artifacts;
+    private final ObjectMapper json;
 
-    public ArtifactService(ArtifactStorage storage, ArtifactRepository artifacts) {
+    public ArtifactService(ArtifactStorage storage, ArtifactRepository artifacts,
+                           ObjectMapper json) {
         this.storage = storage;
         this.artifacts = artifacts;
+        this.json = json;
         storage.ensureBucket();
     }
 
@@ -125,22 +127,34 @@ public class ArtifactService {
         return key;
     }
 
-    /** 内容寻址：同一份内容只留一条 artifact 记录。 */
+    /**
+     * 内容寻址：同一份内容只留一条 artifact 记录。
+     *
+     * 插入由数据库判重复（ON CONFLICT DO NOTHING）：两台设备同时提交同一份内容时，
+     * 「先查再插」会双双查到空，然后第二个插入撞 sha256 唯一约束变成 500。
+     * 让约束来判，撞上了就当没插，再读一次读到的就是先到那条。
+     */
     @Transactional
     public ArtifactEntity record(String sha256, String storageKey, long sizeBytes,
                                  int fileCount, List<java.util.Map<String, Object>> manifest) {
-        return artifacts.findBySha256(sha256).orElseGet(() -> {
-            ArtifactEntity artifact = new ArtifactEntity();
-            artifact.setId(UUID.randomUUID());
-            artifact.setSha256(sha256);
-            artifact.setStorageKey(storageKey);
-            artifact.setContentType("application/zip");
-            artifact.setSizeBytes(sizeBytes);
-            artifact.setFileCount(fileCount);
-            artifact.setManifestJson(manifest);
-            artifact.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
-            return artifacts.save(artifact);
-        });
+        ArtifactEntity existing = artifacts.findBySha256(sha256).orElse(null);
+        if (existing != null) {
+            return existing;
+        }
+        artifacts.insertIfAbsent(UUID.randomUUID(), sha256, storageKey, sizeBytes,
+            fileCount, toJson(manifest));
+        return artifacts.findBySha256(sha256)
+            .orElseThrow(() -> new ApiException(500, ErrorCodes.INTERNAL,
+                "制品记录写入后读不到"));
+    }
+
+    /** 清单转成 jsonb 文本：原生 SQL 插不进 List，得自己序列。 */
+    private String toJson(List<java.util.Map<String, Object>> manifest) {
+        try {
+            return json.writeValueAsString(manifest);
+        } catch (Exception e) {
+            throw new ApiException(500, ErrorCodes.INTERNAL, "清单序列化失败");
+        }
     }
 
     @Transactional

@@ -9,6 +9,7 @@ import com.skillmesh.api.artifact.ZipRewriter;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
@@ -61,11 +62,13 @@ public class VersionEditService {
     private final ArtifactStorage storage;
     private final UploadSessionRepository uploads;
     private final UploadService uploadService;
+    private final RecycleService recycle;
 
     public VersionEditService(SkillRepository skills, SkillService skillService,
                               SkillVersionRepository versions, SkillVersionService versionService,
                               ArtifactRepository artifacts, ArtifactStorage storage,
-                              UploadSessionRepository uploads, UploadService uploadService) {
+                              UploadSessionRepository uploads, UploadService uploadService,
+                              RecycleService recycle) {
         this.skills = skills;
         this.skillService = skillService;
         this.versions = versions;
@@ -74,6 +77,7 @@ public class VersionEditService {
         this.storage = storage;
         this.uploads = uploads;
         this.uploadService = uploadService;
+        this.recycle = recycle;
     }
 
     /**
@@ -156,6 +160,92 @@ public class VersionEditService {
         var completed = uploadService.complete(user, session.getId());
         return new EditFileResponse(skillId, version, manifest.size(), sha256,
             completed.versionStatus());
+    }
+
+    /**
+     * 把回收站里的一个文件放回当前已发布版本，产出新版本。
+     *
+     * 回收站恢复走这条路：被删的文件内容还在它最后出现的那一版里
+     * （版本不可变，制品不会被删），把它取出来放回去就恢复了。
+     *
+     * 别的文件保持现状——恢复的是那一个文件，不是回滚到旧版。
+     */
+    @Transactional
+    public EditFileResponse restore(CurrentUser user, UUID skillId, String path) {
+        var recycled = recycle.require(user, skillId, path);
+        SkillEntity skill = skills.findById(skillId)
+            .orElseThrow(() -> ApiException.notFound("Skill"));
+        if (!skillService.canView(user, skill)) {
+            throw ApiException.notFound("Skill");
+        }
+        skillService.requirePublishRight(user, skill);
+
+        SkillVersionEntity source = versions.findBySkillIdAndVersion(skillId,
+                recycled.sourceVersion())
+            .orElseThrow(() -> ApiException.notFound("版本 " + recycled.sourceVersion()));
+        ArtifactEntity sourceArtifact = artifactOf(source);
+        String normalized = normalizePath(path);
+
+        // 内容从源版本里取。
+        byte[] sourceZip = readArtifact(sourceArtifact);
+        byte[] content = readEntry(sourceZip, normalized);
+        if (content == null) {
+            throw new ApiException(404, ErrorCodes.NOT_FOUND,
+                "版本 " + recycled.sourceVersion() + " 里没有这个文件：" + path);
+        }
+        boolean executable = ZipRewriter.isExecutable(sourceZip, normalized);
+
+        // 底稿用当前最新已发布版本：恢复的是那一个文件，不是回滚。
+        SkillVersionEntity latest = latestPublished(skillId);
+        if (latest == null) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "这个 Skill 还没有已发布版本，没法恢复");
+        }
+        byte[] repacked = ZipRewriter.replace(readArtifact(artifactOf(latest)),
+            normalized, content, executable);
+
+        List<Map<String, Object>> manifest = ZipManifest.of(repacked);
+        String sha256 = ArtifactService.sha256(repacked);
+        String version = nextVersion(skillId, null);
+
+        var created = versionService.create(user, skillId, new CreateVersionRequest(
+            version, "stable", null, null, "恢复文件 " + path,
+            repacked.length, manifest.size(), sha256, toManifest(manifest), null));
+        var session = uploads.findById(created.upload().sessionId())
+            .orElseThrow(() -> ApiException.notFound("上传会话"));
+        storage.put(session.getTemporaryStorageKey(), repacked, "application/zip");
+        var completed = uploadService.complete(user, session.getId());
+        // 恢复过了就从回收站里去掉：文件回到版本里了，再恢复一次是多余的。
+        recycle.markRestored(skillId, recycled.path());
+        return new EditFileResponse(skillId, version, manifest.size(), sha256,
+            completed.versionStatus());
+    }
+
+    /** 最新已发布版本。 */
+    private SkillVersionEntity latestPublished(UUID skillId) {
+        for (SkillVersionEntity row : versions.findBySkillIdOrderByCreatedAtDescThenId(skillId)) {
+            if ("published".equals(row.getStatus()) && row.getArtifactId() != null) {
+                return row;
+            }
+        }
+        return null;
+    }
+
+    /** 从 zip 字节里取一个 entry 的内容。取不到返回 null。 */
+    private byte[] readEntry(byte[] zip, String path) {
+        try (java.util.zip.ZipInputStream reader = new java.util.zip.ZipInputStream(
+                new java.io.ByteArrayInputStream(zip))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = reader.getNextEntry()) != null) {
+                if (entry.isDirectory() || !path.equals(entry.getName())) {
+                    continue;
+                }
+                return reader.readAllBytes();
+            }
+        } catch (java.io.IOException e) {
+            return null;
+        }
+        return null;
     }
 
     /**
