@@ -9,6 +9,8 @@ import com.skillmesh.api.common.ErrorCodes;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,6 +27,9 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class OrgService {
+
+    /** 接口能设的账号状态。库里还允许 pending，那一档没有对应的操作。 */
+    private static final List<String> ALLOWED_STATUSES = List.of("active", "disabled");
 
     private final OrgRepository organizations;
     private final TeamRepository teams;
@@ -175,10 +180,12 @@ public class OrgService {
 
     /** /me 要返回的组织列表。 */
     public List<Membership> myOrganizations(UUID userId) {
+        List<MembershipEntities.OrgMembership> memberships = orgMembers.findByIdUserId(userId);
+        Map<UUID, OrganizationEntity> orgById = orgsById(memberships.stream()
+            .map(membership -> membership.getId().getOrganizationId()).toList());
         List<Membership> result = new ArrayList<>();
-        for (MembershipEntities.OrgMembership membership : orgMembers.findByIdUserId(userId)) {
-            OrganizationEntity org = organizations.findById(membership.getId().getOrganizationId())
-                .orElse(null);
+        for (MembershipEntities.OrgMembership membership : memberships) {
+            OrganizationEntity org = orgById.get(membership.getId().getOrganizationId());
             if (org == null) {
                 continue;
             }
@@ -322,17 +329,25 @@ public class OrgService {
 
     /** 组织成员列表，带上人的显示名。 */
     public List<Member> orgMembers(UUID organizationId) {
-        return orgMembers.findByIdOrganizationId(organizationId).stream()
-            .map(membership -> toMember(membership.getId().getUserId(),
-                membership.getRole(), membership.getJoinedAt()))
+        List<MembershipEntities.OrgMembership> memberships =
+            orgMembers.findByIdOrganizationId(organizationId);
+        Map<UUID, UserEntity> userById = usersById(memberships.stream()
+            .map(membership -> membership.getId().getUserId()).toList());
+        return memberships.stream()
+            .map(membership -> toMember(userById.get(membership.getId().getUserId()),
+                membership.getId().getUserId(), membership.getRole(), membership.getJoinedAt()))
             .toList();
     }
 
     /** 团队成员列表。 */
     public List<Member> teamMembers(UUID teamId) {
-        return teamMembers.findByIdTeamId(teamId).stream()
-            .map(membership -> toMember(membership.getId().getUserId(),
-                membership.getRole(), membership.getJoinedAt()))
+        List<MembershipEntities.TeamMembership> memberships =
+            teamMembers.findByIdTeamId(teamId);
+        Map<UUID, UserEntity> userById = usersById(memberships.stream()
+            .map(membership -> membership.getId().getUserId()).toList());
+        return memberships.stream()
+            .map(membership -> toMember(userById.get(membership.getId().getUserId()),
+                membership.getId().getUserId(), membership.getRole(), membership.getJoinedAt()))
             .toList();
     }
 
@@ -362,6 +377,63 @@ public class OrgService {
         orgMembers.save(membership);
         audit.record(actor, "organization.membership.update", "organization", organizationId,
             "success", Map.of("user_id", memberId.toString(), "role", role));
+    }
+
+    /**
+     * 改组织成员：角色与账号状态都能改，都能不给，但至少要改一项。
+     *
+     * 状态先改、角色后改：「owner 不能被禁用」按请求提交时的角色判定——
+     * 降级与禁用得分两次请求，先降级再禁用。
+     */
+    @Transactional
+    public void updateOrgMember(CurrentUser actor, UUID organizationId, UUID memberId,
+                                 String role, String status) {
+        if (role == null && status == null) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "角色与账号状态至少要改一项");
+        }
+        if (status != null) {
+            updateMemberStatus(actor, organizationId, memberId, status);
+        }
+        if (role != null) {
+            updateOrgRole(actor, organizationId, memberId, role);
+        }
+    }
+
+    /**
+     * 禁用/启用组织成员。
+     *
+     * 口径跟改角色一致：调用者得是该组织的 owner 或 admin。
+     * 另外两条更严——不能禁用自己的账号；不能禁用组织 owner
+     * （owner 是组织的最后一道保险，禁掉他就没人能任命下一个了）。
+     */
+    private void updateMemberStatus(CurrentUser actor, UUID organizationId, UUID memberId,
+                                    String status) {
+        // 锁先拿：owner 的判定要跟并发的角色变更串起来。
+        lockOrgForRoleChange(organizationId);
+        requireOrgAdmin(actor, organizationId);
+        if (!ALLOWED_STATUSES.contains(status)) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "账号状态只能是 " + String.join(" / ", ALLOWED_STATUSES));
+        }
+        MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
+        MembershipEntities.OrgMembership membership = orgMembers.findById(key)
+            .orElseThrow(() -> ApiException.notFound("成员"));
+        if ("disabled".equals(status)) {
+            if (actor.id().equals(memberId)) {
+                throw new ApiException(403, ErrorCodes.FORBIDDEN, "不能禁用自己的账号");
+            }
+            if (hasRole(Roles.ORG_OWNER_ROLES, membership.getRole())) {
+                throw new ApiException(403, ErrorCodes.FORBIDDEN, "组织 owner 不能被禁用");
+            }
+        }
+        UserEntity user = users.findById(memberId)
+            .orElseThrow(() -> ApiException.notFound("用户"));
+        user.setStatus(status);
+        user.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        users.save(user);
+        audit.record(actor, "organization.membership.status", "organization", organizationId,
+            "success", Map.of("user_id", memberId.toString(), "status", status));
     }
 
     /** 改团队角色。 */
@@ -408,18 +480,50 @@ public class OrgService {
         }
     }
 
-    // ponytail: 逐个查 users（N+1），成员表规模不大；量大时改成一次批量查。
-    private Member toMember(UUID userId, String role, OffsetDateTime joinedAt) {
+    // ponytail: users 一次查齐（见 usersById）——逐个查就是 N+1，
+    // 一个组织几十个成员就是几十次往返，本机到远程库一次几十毫秒，这个页面直接卡住。
+    private Member toMember(UserEntity user, UUID userId, String role,
+                            OffsetDateTime joinedAt) {
         String displayName = userId.toString();
         String email = null;
         String subject = null;
-        UserEntity user = users.findById(userId).orElse(null);
+        String status = null;
         if (user != null) {
             displayName = user.getDisplayName();
             email = user.getEmail();
             subject = user.getOidcSubject();
+            status = user.getStatus();
         }
-        return new Member(userId, displayName, email, role, joinedAt, subject);
+        return new Member(userId, displayName, email, role, joinedAt, subject, status);
+    }
+
+    /**
+     * 批量取的行按 id 归拢成 Map。
+     *
+     * 查不到的 id 不在这里报错——调用方按自己的口径处理（成员表对 users 有外键，
+     * 理论上查得到，但兜底比抛异常稳）。
+     */
+    private Map<UUID, UserEntity> usersById(Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, UserEntity> out = new LinkedHashMap<>();
+        for (UserEntity user : users.findAllById(ids)) {
+            out.put(user.getId(), user);
+        }
+        return out;
+    }
+
+    /** 批量取组织，按 id 归拢——形状同 {@link #usersById}。 */
+    private Map<UUID, OrganizationEntity> orgsById(Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, OrganizationEntity> out = new LinkedHashMap<>();
+        for (OrganizationEntity org : organizations.findAllById(ids)) {
+            out.put(org.getId(), org);
+        }
+        return out;
     }
 
     private void requireOrgRole(CurrentUser user, UUID organizationId, Set<String> allowed) {
@@ -509,7 +613,7 @@ public class OrgService {
     /** 我在某个组织里的身份。 */
     public record Membership(UUID id, String slug, String name, String role) {}
 
-    /** 成员列表项。 */
+    /** 成员列表项。status 是账号状态（active/disabled），来自 users 表。 */
     public record Member(UUID userId, String displayName, String email, String role,
-                         OffsetDateTime joinedAt, String subject) {}
+                         OffsetDateTime joinedAt, String subject, String status) {}
 }

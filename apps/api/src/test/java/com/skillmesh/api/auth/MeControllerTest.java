@@ -91,20 +91,22 @@ class MeControllerTest {
     }
 
     /**
-     * /me 回显 users 表里真实的 status，不是写死的 active。
+     * 账号被禁用后，令牌立刻失效。
      *
-     * 写死的话这列就没人读——账号被禁用，客户端看到的还是 active。
+     * 写死 status 的话这列就没人读——账号被禁用，客户端看到的还是 active。
+     * 现在禁用是**真的禁用**：`CurrentUserService.current()` 是所有请求的强制点，
+     * 被禁用的账号在那里就被拒，不再是「看得到自己被禁用但还能干活」。
      */
     @Test
-    void me回显库里的真实状态() throws Exception {
+    void 账号被禁用后令牌立刻失效() throws Exception {
         String token = tokens.accessToken();
         mockMvc.perform(get("/api/v1/me").header("Authorization", "Bearer " + token))
-            .andExpect(status().isOk());
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.user.status").value("active"));
         jdbc.update("update users set status = 'disabled'");
 
         mockMvc.perform(get("/api/v1/me").header("Authorization", "Bearer " + token))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.user.status").value("disabled"));
+            .andExpect(status().isForbidden());
     }
 
     /**

@@ -223,9 +223,20 @@ export SKILLMESH_TOKEN=<access-token>
 ```bash
 skillmesh installations                    # 跨设备看安装全貌
 skillmesh installations --status conflict  # 只看有问题的
+skillmesh installations --check            # 巡检本机磁盘，把真实状态写回服务端
 ```
 
 `install` 和 `uninstall` 会自动登记（设备 + 目录 + 版本 + 制品摘要 + 有没有本地改过）。服务端只记事实，不替客户端决定装不装。
+
+**`--check` 是客户端推状态**：服务端不会自己去扫你的磁盘——它看不到。巡检只动**这台机器**的记录，算出来的状态会写回服务端：
+
+| 状态 | 什么时候是它 |
+| --- | --- |
+| `uninstalled` | 目标目录不在了 |
+| `missing` | 目录还在，`SKILL.md` 不见了 |
+| `conflict` | 本机内容被改过，云端也有内容不同的已发布版本 |
+| `blocked` | 服务端记的那一版在云端已经不能用了（撤回、驳回） |
+| `active` | 一切正常（内容对不上但云端没动时是 `active` + 「本地改过」） |
 
 ### 本地项目状态
 
@@ -284,7 +295,16 @@ skillmesh sync --resolve keep-cloud   # 冲突时保留云端并拉回
 skillmesh sync --resolve keep-both    # 本地备份一份，两边都留
 skillmesh sync --retry-only      # 只重试断网失败的任务
 skillmesh sync --skip-new        # 只同步已收编的，首次发现先留在本地
+skillmesh sync --allow-delete    # 确认把「本地删掉的文件」也传播到云端
 ```
+
+**本地删了文件不会静默传到云端**：同步发现「基线里有、本地没了、云端也没变」的文件时，
+这次上传会**停下**，报「待确认」并列出是哪些文件。确认要删就加 `--allow-delete` 再跑一次。
+（设计文档 §6.4 说的「软删除 + 回收期 + 可恢复」还没做，现在是「不静默传播 + 要人确认」。）
+
+> 后台同步（`watch` / `daemon`）**永远不会传播删除**——它们不传 `--allow-delete`。
+> 删除只能手动跑 `skillmesh sync --allow-delete` 确认。这是有意的：后台任务没人盯着，
+> 不该替人做删除这种不可逆的决定。
 
 **首次发现不等于收编**：新出现在授权目录里的 Skill 默认会备份到个人私有空间，**不会自动公开**；`--skip-new` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
 
@@ -300,6 +320,10 @@ skillmesh sync --skip-new        # 只同步已收编的，首次发现先留在
 **能合就合，合不了才问你**：冲突时先按文件来——本机改了 A、云端改了 B，两边都要；同一个文件两边都改，会做**行级三方文本合并**，合得上直接合，合不上的才生成冲突副本等你定夺（设计文档 §6.3）。合并需要上次同步时的基线（逐文件摘要 + 内容副本，存在配置目录的 `sync-base/`），没有基线就老实说合不了，不会瞎合。
 
 云端也会再判一次（`POST /api/v1/sync/changesets`，带幂等键）：别的设备在两次请求之间动过内容的话，它会直接回冲突。断网失败的任务进持久队列，指数退避（1 分钟起步、翻倍、封顶 30 分钟），重试 5 次后标记放弃但仍留在队列里可查。
+
+**上传时带基线**：同步上传会带上「本次决策时看到的云端摘要」，服务端锁住该 Skill 后重算一遍——
+对不上说明云端在这期间被别人动过，这次上传会把那份改动静默盖掉，所以服务端直接回冲突，让 CLI 重新对账
+（详细设计 §12 的 `expected_revision`）。普通 `skillmesh publish` 不带基线，行为不变。
 
 ```bash
 skillmesh watch start --interval 5m   # 后台盯住目录，变了才同步

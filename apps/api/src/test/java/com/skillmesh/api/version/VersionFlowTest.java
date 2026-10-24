@@ -431,7 +431,9 @@ class VersionFlowTest {
         String digest = sha256(zip);
         return new CreateVersionRequest(version, "stable", null, null, "",
             zip.length, 1, digest,
-            List.of(new CreateVersionRequest.ManifestEntry("SKILL.md", digest, zip.length, false)));
+            List.of(new CreateVersionRequest.ManifestEntry("SKILL.md", digest, zip.length, false)),
+            // 不带基线：普通发布，服务端不校验基线。
+            null);
     }
 
     private void putToStorage(String url, byte[] data) throws Exception {

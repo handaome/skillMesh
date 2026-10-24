@@ -36,6 +36,17 @@ public class TestTokens {
     }
 
     public String accessToken() {
+        return accessToken(username, password);
+    }
+
+    /**
+     * 按用户名取另一个用户的令牌。
+     *
+     * 「谁可以往谁的流水里写」这类断言要两个真实主体：只有一个令牌的话，
+     * 造不出「跟这个 Skill 没关系的人」。realm 里的第二个测试用户是 dev-user2，
+     * 密码 dev2（infra/scripts/add-second-user.sh 建的就是它）。
+     */
+    public String accessToken(String username, String password) {
         RestTemplate rt = new RestTemplate();
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);

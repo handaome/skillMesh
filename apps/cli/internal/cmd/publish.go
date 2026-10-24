@@ -123,6 +123,9 @@ type publishOptions struct {
 	// RequestedVisibility 是用户显式给的 --visibility，没给就是空串。
 	// 已有 Skill 的可见性改不动，带着这个去发布要报错，而不是假装生效。
 	RequestedVisibility string
+	// ExpectedBaseRevision 是「本次决策依据的云端已发布版本内容摘要」。
+	// 只有同步上传才带：普通 publish 不带（服务端也就不校验基线）。
+	ExpectedBaseRevision string
 }
 
 // visibilityFor 定出这次发布的可见性。
@@ -284,6 +287,8 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 		FileCount: len(artifact.Manifest),
 		SHA256:    artifact.SHA256,
 		Manifest:  toManifest(artifact.Manifest),
+		// 基线带上，服务端才知道这次上传是基于哪个云端版本做的。
+		ExpectedBaseRevision: options.ExpectedBaseRevision,
 	})
 	if err != nil {
 		return publishResult{}, err

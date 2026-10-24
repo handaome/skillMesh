@@ -148,7 +148,13 @@ public class SyncUploadService {
         // 只查 canView 的话，团队的普通成员也能往待审队列里塞一版内容。
         // 个人 Skill 没有组织角色，requirePublishRight 放行（与整包上传同一口径）。
         skillService.requirePublishRight(user, skill);
-        String cloud = cloudRevision(changeset.getSkillId());
+        // 锁住 Skill 行再读基线、算版本号：并发提交会排队，
+        // 不会各读各的基线后各写一版，撞 UNIQUE(skill_id, version) 变成 500。
+        // 锁的顺序是「先版本行、后 Skill 行」——这里不锁别人的版本行，只锁 Skill 行。
+        SkillEntity locked = skills.findByIdForUpdate(changeset.getSkillId()).orElse(skill);
+        List<SkillVersionEntity> rows =
+            versions.findBySkillIdOrderByCreatedAtDesc(changeset.getSkillId());
+        String cloud = cloudRevision(rows);
         if (expectedRevision != null && !expectedRevision.isBlank()
             && !expectedRevision.equals(cloud)) {
             changeset.setStatus("conflict");
@@ -163,8 +169,11 @@ public class SyncUploadService {
         List<UploadedFile> files = collectUploadedFiles(changesetId);
         byte[] zip = zip(files);
         String sha256 = ArtifactService.sha256(zip);
-        String finalKey = "sync/" + changesetId + "/" + sha256 + ".zip";
-        storage.put(finalKey, zip, "application/zip");
+        // 内容寻址落桶：同一份内容在桶里只留一份。
+        // 早先这里按 changeset 拼 key（sync/<changesetId>/<sha>.zip），
+        // 每次提交都写一个新对象——两台设备各提交一次同一份内容，
+        // 桶里就多出一份没人删的孤儿，而库里只有一条记录指向第一个。
+        String finalKey = artifacts.store(sha256, zip);
 
         ArtifactEntity artifact = artifacts.record(sha256, finalKey, zip.length, files.size(),
             manifestJson(files));
@@ -179,7 +188,7 @@ public class SyncUploadService {
         SkillVersionEntity version = new SkillVersionEntity();
         version.setId(UUID.randomUUID());
         version.setSkillId(skill.getId());
-        version.setVersion(nextVersion(skill.getId()));
+        version.setVersion(nextVersion(locked.getLatestVersion(), rows));
         version.setChannel("stable");
         version.setChangelog("同步提交 " + changesetId);
         version.setManifestJson(manifestJson(files));
@@ -301,8 +310,8 @@ public class SyncUploadService {
     }
 
     /** 云端当前 revision：最新已发布版本的内容摘要。 */
-    private String cloudRevision(UUID skillId) {
-        for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
+    private String cloudRevision(List<SkillVersionEntity> rows) {
+        for (SkillVersionEntity version : rows) {
             if ("published".equals(version.getStatus())
                 && version.getManifestJson() != null && !version.getManifestJson().isEmpty()) {
                 return ContentDigest.of(version.getManifestJson());
@@ -311,9 +320,26 @@ public class SyncUploadService {
         return "";
     }
 
-    private String nextVersion(UUID skillId) {
-        String latest = skills.findById(skillId).map(SkillEntity::getLatestVersion)
-            .orElse(null);
+    /**
+     * 下一个版本号：在 latest_version 上加一，且不撞这个 Skill 已有的版本号。
+     *
+     * 已有的版本号包括待审与草稿：待审的版本没进 latest_version，
+     * 只看 latest_version 会算出同一个号，撞 UNIQUE(skill_id, version) 变成 500。
+     */
+    private String nextVersion(String latest, List<SkillVersionEntity> rows) {
+        Set<String> used = new HashSet<>();
+        for (SkillVersionEntity row : rows) {
+            used.add(row.getVersion());
+        }
+        String candidate = bumpVersion(latest);
+        while (used.contains(candidate)) {
+            candidate = bumpVersion(candidate);
+        }
+        return candidate;
+    }
+
+    /** 版本号加一：语义化版本加 patch 位，不是语义化版本就加 -sync 后缀。 */
+    private String bumpVersion(String latest) {
         if (latest == null || latest.isBlank()) {
             return "1.0.0";
         }

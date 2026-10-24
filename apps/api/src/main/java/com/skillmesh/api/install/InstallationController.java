@@ -144,7 +144,11 @@ public class InstallationController {
         if (req.installed_version() != null) {
             entity.setInstalledVersion(req.installed_version());
         }
-        entity.setLastUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        entity.setLastUpdatedAt(now);
+        // 巡检就是走这条路改状态的：last_checked_at 记的是「最近什么时候查过本机磁盘」，
+        // 不跟着更新的话它永远停在登记时的那一刻。
+        entity.setLastCheckedAt(now);
         installations.save(entity);
         audit.record(user, "installation.update", "skill", entity.getSkillId(), "success",
             Map.of("installation_id", entity.getId().toString(),
@@ -198,6 +202,9 @@ public class InstallationController {
             : entity.getInstalledAt().toString());
         body.put("last_updated_at", entity.getLastUpdatedAt() == null ? ""
             : entity.getLastUpdatedAt().toString());
+        // 巡检时间：最近什么时候查过这台机器上的磁盘。
+        body.put("last_checked_at", entity.getLastCheckedAt() == null ? ""
+            : entity.getLastCheckedAt().toString());
         return body;
     }
 

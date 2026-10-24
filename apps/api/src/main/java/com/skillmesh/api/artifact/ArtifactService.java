@@ -47,17 +47,26 @@ public class ArtifactService {
         return "tmp/%s/%s/%s.zip".formatted(skillId, versionId, UUID.randomUUID());
     }
 
-    public String finalKey(UUID skillId, String version, String sha256) {
-        return "%s/%s/%s.zip".formatted(skillId, version, sha256);
+    /**
+     * 正式对象按摘要寻址：同一份内容永远只有一个地址（附录 A.2）。
+     *
+     * 早先的地址带 Skill 与版本（{@code %s/%s/%s.zip}），同一份内容发到两个版本
+     * 会算出两个 key，桶里留下两份、库里只有一条记录，第二份成了没人清理的孤儿
+     * （bucket 生命周期只清 tmp/ 前缀）。
+     *
+     * 存量制品的 key 记在 artifacts.storage_key 里，下载走库里的 key，不受影响。
+     */
+    public String finalKey(String sha256) {
+        return "sha256/%s.zip".formatted(sha256);
     }
 
     /**
      * 把临时对象转正：重算摘要、比对声明值、写入正式地址、删除临时对象。
      * 摘要不匹配就删临时对象并报错——不留下未验证的残留（详细设计 §13）。
+     * 同一份内容已经有正式对象时复用它，不再写第二份（见 store）。
      */
     @Transactional
-    public Promoted promote(String tempKey, String finalKey, String expectedSha256,
-                            long expectedSizeBytes) {
+    public Promoted promote(String tempKey, String expectedSha256, long expectedSizeBytes) {
         if (!storage.exists(tempKey)) {
             throw new ApiException(422, ErrorCodes.ARTIFACT_MISSING,
                 "上传对象不存在或已过期，请重新上传");
@@ -90,9 +99,30 @@ public class ArtifactService {
             throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,
                 "制品摘要不匹配：声明 " + expectedSha256 + "，实际 " + actual);
         }
-        storage.put(finalKey, bytes, "application/zip");
+        // 同一份内容已经有正式对象就复用它，不往桶里再写一份。
+        String key = store(actual, bytes);
         storage.delete(tempKey);
-        return new Promoted(actual, bytes.length);
+        return new Promoted(actual, bytes.length, key);
+    }
+
+    /**
+     * 内容寻址落桶：同一份内容在桶里只留一份。
+     *
+     * 已经有同摘要的制品就复用它的 storage_key，不再写对象——
+     * 否则同一份内容发到两个版本（或两台设备各提交一次同步），
+     * 桶里会多出一份没人删的孤儿对象，而库里只有一条记录指向第一个。
+     *
+     * @return 正式对象的 key：复用时是已有记录的 key
+     */
+    @Transactional
+    public String store(String sha256, byte[] bytes) {
+        ArtifactEntity existing = artifacts.findBySha256(sha256).orElse(null);
+        String key = existing != null ? existing.getStorageKey() : finalKey(sha256);
+        // 库里有记录但对象不在（对象被清掉了）：按原 key 补写一次，key 不变。
+        if (existing == null || !storage.exists(key)) {
+            storage.put(key, bytes, "application/zip");
+        }
+        return key;
     }
 
     /** 内容寻址：同一份内容只留一条 artifact 记录。 */
@@ -180,5 +210,5 @@ public class ArtifactService {
     }
 
     /** 校验通过后的制品信息。 */
-    public record Promoted(String sha256, long sizeBytes) {}
+    public record Promoted(String sha256, long sizeBytes, String storageKey) {}
 }

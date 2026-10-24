@@ -2,10 +2,15 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
@@ -101,5 +106,114 @@ func Test服务端出错不当成冲突(t *testing.T) {
 	failure := outcomeForError(target, errors.New("INTERNAL (500): 服务端崩了"))
 	if failure.Outcome != failed {
 		t.Fatalf("服务端出错该报失败，得到 %s", failure.Outcome)
+	}
+}
+
+// 幂等键必须带 skill id：同一台设备上两个 Skill 的内容摘要与基线可能一模一样
+// （同一份模板装到两个目录），不带 id 服务端会把第二个当重复提交吞掉。
+func Test幂等键带skillID(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	base := strings.Repeat("b", 64)
+	if idempotencyKey("skill-1", hash, base) == idempotencyKey("skill-2", hash, base) {
+		t.Fatal("两个不同的 Skill 不该撞幂等键")
+	}
+}
+
+// 同步下来的 Skill 也要登记安装实例：不然 installations 里看不到任何同步来的 Skill。
+func Test下载后登记安装实例(t *testing.T) {
+	cloud := writeSkill(t, filepath.Join(t.TempDir(), "demo"), "# demo\n")
+	artifact, err := packager.Pack(cloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got apiclient.RegisterInstallationInput
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1/versions":
+			w.Write([]byte(`{"items":[{"version":"1.0.0","status":"published",` +
+				`"artifact":{"id":"art-1","sha256":"` + artifact.SHA256 + `"}}],"has_more":false}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/artifacts/art-1/download":
+			w.Write(artifact.Zip)
+		case r.Method == http.MethodPost && r.URL.Path == "/devices":
+			w.Write([]byte(`{"id":"dev-1"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/installations":
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Error(err)
+			}
+			w.Write([]byte(`{"id":"inst-1"}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	target := syncTarget{Name: "demo", Agent: "claude-code",
+		Path: filepath.Join(t.TempDir(), "demo"), SkillID: "skill-1"}
+	version, err := downloadInto(context.Background(), apiclient.New(srv.URL, "tok", 0), target,
+		apiclient.Skill{ID: "skill-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "1.0.0" {
+		t.Fatalf("该装的是 1.0.0，得到 %s", version)
+	}
+	if got.SkillID != "skill-1" || got.Agent != "claude-code" || got.InstallScope != "user" {
+		t.Fatalf("登记的安装实例不对: %+v", got)
+	}
+	if got.TargetPath != target.Path {
+		t.Fatalf("登记的安装路径不对: %+v", got)
+	}
+	if got.InstalledVersion != "1.0.0" || got.InstalledSHA256 != artifact.SHA256 {
+		t.Fatalf("登记的版本或摘要不对: %+v", got)
+	}
+}
+
+// 本地删掉的文件不能静默跟着新版本传到云端：没确认就不上传。
+func Test本地删除不静默上传(t *testing.T) {
+	old := cfg.ConfigDir
+	cfg.ConfigDir = t.TempDir()
+	defer func() { cfg.ConfigDir = old }()
+
+	skill := writeSkill(t, filepath.Join(t.TempDir(), "demo"), "# demo\n")
+	artifact, err := packager.Pack(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	// 基线里有、现在本地没有的文件 = 本机删掉了。
+	target := syncTarget{Name: "demo", Agent: "claude-code", Path: skill,
+		BaseFiles: map[string]string{"SKILL.md": "sha", "删掉的.md": "sha2"}}
+	result, _, err := applyDecision(context.Background(), apiclient.New(srv.URL, "tok", 0),
+		target, syncstate.Upload, artifact, manifestDigest(artifact.Manifest),
+		apiclient.Skill{ID: "skill-1"}, true, syncOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome != pendingDelete {
+		t.Fatalf("本地删了文件该等着确认，得到 %s（%s）", result.Outcome, result.Detail)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("没确认就不该上传，却发了 %d 个请求", requests.Load())
+	}
+
+	// 给了 --allow-delete 才真传。
+	result, _, err = applyDecision(context.Background(), apiclient.New(srv.URL, "tok", 0),
+		target, syncstate.Upload, artifact, manifestDigest(artifact.Manifest),
+		apiclient.Skill{ID: "skill-1"}, true, syncOptions{AllowDelete: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Outcome == pendingDelete {
+		t.Fatal("确认过了还拦着不让传")
+	}
+	if requests.Load() == 0 {
+		t.Fatal("确认过了就该去上传")
 	}
 }

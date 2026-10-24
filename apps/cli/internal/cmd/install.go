@@ -179,6 +179,8 @@ func reportInstallation(ctx context.Context, client *apiclient.Client,
 		TargetPath:       target,
 		InstalledVersion: req.Version.Version,
 		InstalledSHA256:  artifactSHA256(req.Version),
+		// 刚装完的内容就是制品里的那份，本机还没被改过。
+		LocalModified: false,
 	})
 }
 

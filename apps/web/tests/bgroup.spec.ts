@@ -19,6 +19,11 @@ function jsonResponse(body: unknown) {
   return { ok: true, status: 200, statusText: 'OK', json: async () => body }
 }
 
+/** 邀请列表是一页：这一页的条目 + 下一页的起点 + 还有没有更多。 */
+function invitationPage(items: unknown[], next: string | null = null) {
+  return jsonResponse({ items, next_cursor: next, has_more: next !== null })
+}
+
 function problemResponse(status: number, code: string, detail: string) {
   return { ok: false, status, statusText: 'Error', json: async () => ({ code, detail }) }
 }
@@ -77,7 +82,7 @@ describe('B1 换组织时旧组织的慢响应', () => {
         return jsonResponse([{ ...TEAM, id: 't2', organization_id: 'org2', name: 'OtherTeam' }])
       }
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -108,7 +113,7 @@ describe('B3 读取失败时不再显示空态', () => {
       if (url.includes('/members')) {
         return problemResponse(403, 'FORBIDDEN', '组织权限不足')
       }
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     }))
 

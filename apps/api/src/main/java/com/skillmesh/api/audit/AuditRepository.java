@@ -19,6 +19,13 @@ public interface AuditRepository extends JpaRepository<AuditEventEntity, Long> {
      * 可见性条件与搜索共用 {@link VisibleSkills}——权限判断只有一份。
      * 以前是「把全部 Skill 查出来逐个判可见、再逐个查事件」，
      * 那等于把权限过滤放在内存里，且事件数随 Skill 数线性涨。
+     *
+     * join 条件 {@code s.id::text = e.target_id} 靠 V7 迁移加的表达式索引
+     * {@code skills ((id::text))} 才走得动：skills.id 是 uuid，转成 text 之后
+     * 主键索引用不上。没有那个索引，planner 只能把整张 skills 扫一遍。
+     *
+     * 转换留在 uuid 那一边是有原因的：target_id 是 text，别的 target_type
+     * 装的是任意字符串，转 uuid 会在非法的行上报错（invalid input syntax）。
      */
     @Query(value = """
         select e.* from audit_events e

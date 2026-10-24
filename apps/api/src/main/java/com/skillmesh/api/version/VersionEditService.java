@@ -143,7 +143,9 @@ public class VersionEditService {
             version, request.channel() == null ? "stable" : request.channel(),
             null, null, request.changelog() == null ? "" : request.changelog(),
             repacked.length, manifest.size(), sha256,
-            toManifest(manifest)));
+            toManifest(manifest),
+            // 编辑是服务端自己基于某个已发布版本改的，没有客户端带来的基线。
+            null));
 
         // 内容在服务端生成，没有客户端要传的字节：直接写进临时位置，
         // 再走 complete 转正。

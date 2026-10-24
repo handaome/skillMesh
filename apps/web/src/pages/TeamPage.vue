@@ -26,6 +26,12 @@ const membersLoading = ref(true)
 const membersScope = ref('')
 const members = ref<Member[]>([])
 const invitations = ref<Invitation[]>([])
+/** 下一页的起点；null 表示没有更多了。 */
+const invitationCursor = ref<string | null>(null)
+/** 服务端说还有没有更多。 */
+const invitationsHasMore = ref(false)
+/** 正在取下一页。 */
+const invitationsLoadingMore = ref(false)
 /** 邀请区正在读。 */
 const invitationsLoading = ref(true)
 /** 成员区的错（改角色、读成员、读团队） */
@@ -57,8 +63,13 @@ const TEAM_ROLE_OPTIONS = ['admin', 'publisher', 'reviewer', 'member', 'viewer']
 /** 角色下拉的选项：选了团队就是团队角色，没选就是组织角色。 */
 const roleOptions = computed(() => (selectedTeam.value ? TEAM_ROLE_OPTIONS : ORG_ROLE_OPTIONS))
 
-/** 邀请历史只列最近几条：几十条记录在页面上没有可读性。 */
-const visibleInvitations = computed(() => invitations.value.slice(0, 8))
+/**
+ * 条数说明。有下一页时不能说「共 N 个」——服务端只给了一页，那个数不是总数。
+ */
+const invitationCountText = computed(() =>
+  invitationsHasMore.value
+    ? `已显示 ${invitations.value.length} 个，还有更多`
+    : `${invitations.value.length} 个`)
 
 /**
  * 角色是什么意思。表头只说「角色」时没人知道改的是哪一层——
@@ -173,14 +184,40 @@ async function load() {
 async function loadInvitations(orgId: string) {
   invitationsLoading.value = true
   try {
-    const list = await listInvitations(orgId)
+    const page = await listInvitations(orgId)
     if (org.value?.id !== orgId) return
-    invitations.value = list
+    invitations.value = page.items
+    invitationCursor.value = page.next_cursor
+    invitationsHasMore.value = page.has_more
   } catch (e) {
     if (org.value?.id !== orgId) return
     inviteError.value = errorText(e)
   } finally {
     invitationsLoading.value = false
+  }
+}
+
+/**
+ * 取下一页的邀请，追加到已有的后面。
+ *
+ * 翻页失败不清列表：已经取到的那几页还在，用户重试就行。
+ */
+async function loadMoreInvitations() {
+  const orgId = org.value?.id
+  const cursor = invitationCursor.value
+  if (!orgId || !cursor || invitationsLoadingMore.value) return
+  invitationsLoadingMore.value = true
+  try {
+    const page = await listInvitations(orgId, cursor)
+    if (org.value?.id !== orgId) return
+    invitations.value = [...invitations.value, ...page.items]
+    invitationCursor.value = page.next_cursor
+    invitationsHasMore.value = page.has_more
+  } catch (e) {
+    if (org.value?.id !== orgId) return
+    inviteError.value = errorText(e)
+  } finally {
+    invitationsLoadingMore.value = false
   }
 }
 
@@ -283,6 +320,8 @@ watch(() => org.value?.id, async () => { selectedTeam.value = ''
   teams.value = []
   members.value = []
   invitations.value = []
+  invitationCursor.value = null
+  invitationsHasMore.value = false
   inviteLink.value = ''
   inviteToken.value = ''
   notice.value = ''
@@ -424,7 +463,17 @@ onMounted(load)
             </thead>
             <tbody>
               <tr v-for="member in members" :key="member.user_id">
-                <td><span data-test="member-row">{{ member.display_name }}</span></td>
+                <td>
+                  <div class="sm-row">
+                    <span data-test="member-row">{{ member.display_name }}</span>
+                    <span
+                      v-if="member.status === 'disabled'"
+                      class="sm-pill sm-pill-neg"
+                      data-test="member-disabled"
+                      >已禁用</span
+                    >
+                  </div>
+                </td>
                 <td class="sm-muted sm-cell-sub">{{ member.email ?? '—' }}</td>
                 <td>
                   <select
@@ -516,7 +565,7 @@ onMounted(load)
         </p>
 
         <!-- 邀请区同理：读失败不是「没有发出过邀请」。 -->
-        <div v-if="visibleInvitations.length" class="sm-table-scroll">
+        <div v-if="invitations.length" class="sm-table-scroll">
           <table class="sm-table sm-table--flush sm-table--stack">
             <thead>
               <tr>
@@ -529,7 +578,7 @@ onMounted(load)
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in visibleInvitations" :key="row.id">
+              <tr v-for="row in invitations" :key="row.id">
                 <td><span data-test="invitation-row">{{ row.team_name ?? '—' }}</span></td>
                 <td><span data-test="invitation-org-role">{{ row.org_role }}</span></td>
                 <td class="sm-drop">
@@ -571,9 +620,21 @@ onMounted(load)
           v-if="!invitationsLoading && !inviteError && !invitations.length"
           text="还没有发出过邀请"
         />
-        <p v-if="invitations.length > visibleInvitations.length" class="sm-muted sm-meta sm-mt-12">
-          只显示最近 {{ visibleInvitations.length }} 条，共 {{ invitations.length }} 条。
+        <p v-if="invitations.length" class="sm-muted sm-meta sm-mt-12">
+          {{ invitationCountText }}
         </p>
+
+        <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+        <div v-if="invitationsHasMore" class="sm-row sm-mt-16">
+          <button
+            class="sm-btn sm-btn--quiet sm-btn--sm"
+            data-test="load-more-invitations"
+            :disabled="invitationsLoadingMore"
+            @click="loadMoreInvitations"
+          >
+            {{ invitationsLoadingMore ? '加载中…' : '加载更多' }}
+          </button>
+        </div>
       </div>
     </template>
   </section>

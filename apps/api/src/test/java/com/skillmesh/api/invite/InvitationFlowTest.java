@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.TestTokens;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.invite.dto.InvitationPage;
 import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.support.DatabaseCleaner;
@@ -20,7 +21,11 @@ import com.skillmesh.api.support.QueryCounter;
 import jakarta.persistence.EntityManagerFactory;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -442,12 +447,58 @@ class InvitationFlowTest {
 
         QueryCounter counter = new QueryCounter(entityManagerFactory);
         long queries = counter.count(() -> {
-            List<InvitationSummary> summaries = invitations.listSummaries(orgId);
-            assertThat(summaries).as("四条邀请都在列表里").hasSize(4);
+            InvitationPage page = invitations.listSummaries(orgId, 20, null);
+            assertThat(page.items()).as("四条邀请都在列表里").hasSize(4);
         });
 
         assertThat(queries).as("列表页的查询条数不该随邀请条数增长")
             .isLessThanOrEqualTo(5);
+    }
+
+    /**
+     * 邀请列表翻页不重不漏。
+     *
+     * 五条邀请的 created_at 设成同一时刻：created_at 单列会重复，
+     * 翻页只能靠 id 兜底排序——顺序差一点就会漏掉或重复一条。
+     */
+    @Test
+    void 邀请列表翻页不重不漏() throws Exception {
+        UUID orgId = createOrganization("acme");
+        List<UUID> created = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            created.add(invitations.create(owner, orgId, null, "member", null, null).id());
+        }
+        jdbc.update("update org_invitations set created_at = ? where organization_id = ?",
+            OffsetDateTime.now(ZoneOffset.UTC), orgId);
+
+        var page = json.readTree(mockMvc.perform(
+                get("/api/v1/organizations/{id}/invitations", orgId)
+                    .header("Authorization", auth).param("limit", "2"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items").isArray())
+            .andExpect(jsonPath("$.has_more").value(true))
+            .andExpect(jsonPath("$.next_cursor").isNotEmpty())
+            .andReturn().getResponse().getContentAsString());
+
+        List<String> seen = new ArrayList<>();
+        page.path("items").forEach(n -> seen.add(n.path("id").asText()));
+        String cursor = page.path("next_cursor").asText(null);
+        while (cursor != null && !cursor.isBlank()) {
+            var next = json.readTree(mockMvc.perform(
+                    get("/api/v1/organizations/{id}/invitations", orgId)
+                        .header("Authorization", auth)
+                        .param("limit", "2").param("cursor", cursor))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+            next.path("items").forEach(n -> seen.add(n.path("id").asText()));
+            cursor = next.path("has_more").asBoolean()
+                ? next.path("next_cursor").asText(null) : null;
+        }
+
+        // 五条都在：一条不多，一条不少
+        assertThat(seen).hasSize(5);
+        assertThat(new HashSet<>(seen)).as("翻完一遍拿到全部五条，且不重复")
+            .containsExactlyInAnyOrderElementsOf(created.stream().map(UUID::toString).toList());
     }
 
     /**

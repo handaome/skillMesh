@@ -101,18 +101,16 @@ public class UploadService {
         session.setStatus("verifying");
         uploads.save(session);
 
-        String finalKey = artifacts.finalKey(version.getSkillId(), version.getVersion(),
-            session.getExpectedSha256());
         ArtifactService.Promoted promoted;
         byte[] content;
         List<Map<String, Object>> manifest;
         boolean manifestMatches;
         try {
-            promoted = artifacts.promote(session.getTemporaryStorageKey(), finalKey,
+            promoted = artifacts.promote(session.getTemporaryStorageKey(),
                 session.getExpectedSha256(), session.getExpectedSizeBytes());
             // 逐文件清单由服务端从真 zip 算：发布方声明的那份只是他的说法，不能当准。
             // 算清单的同时验包：重名 entry 的包是非法制品，不能变成正式制品。
-            content = readArtifact(finalKey);
+            content = readArtifact(promoted.storageKey());
             manifest = ZipManifest.of(content);
             // 详细设计 §13：服务端重新计算归档内实际路径和哈希，并与上传声明比对。
             // 比对的结果是用真值——声明跟真包不符也照收，但记一笔，
@@ -129,7 +127,7 @@ public class UploadService {
             throw e;
         }
 
-        ArtifactEntity artifact = artifacts.record(promoted.sha256(), finalKey,
+        ArtifactEntity artifact = artifacts.record(promoted.sha256(), promoted.storageKey(),
             promoted.sizeBytes(), manifest.size(), manifest);
         signArtifact(artifact, version);
 

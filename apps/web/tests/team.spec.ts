@@ -17,6 +17,11 @@ function noContent() {
   return { ok: true, status: 204, statusText: 'No Content', json: async () => null }
 }
 
+/** 邀请列表现在是一页：这一页的条目 + 下一页的起点 + 还有没有更多。 */
+function invitationPage(items: unknown[], next: string | null = null) {
+  return jsonResponse({ items, next_cursor: next, has_more: next !== null })
+}
+
 function makeRouter() {
   return createRouter({
     history: createMemoryHistory(),
@@ -38,6 +43,7 @@ const MEMBER = {
   role: 'member', joined_at: '2026-10-20T00:00:00Z',
   // 邀请要绑到某个人时填的就是这个 sub
   subject: 'sub-u1',
+  status: 'active',
 }
 
 const TEAM = {
@@ -62,7 +68,7 @@ describe('TeamPage', () => {
     session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     }))
     const wrapper = await mountTeam()
@@ -74,6 +80,52 @@ describe('TeamPage', () => {
     expect(wrapper.find('[data-test="invitation-team-role"]').text()).toBe('member')
   })
 
+  // 被禁用的成员还挂在花名册上，只是登不进来了——列表要标出来。
+  it('被禁用的成员显示已禁用标记', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/members')) {
+        return jsonResponse([{ ...MEMBER, status: 'disabled' }])
+      }
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
+      return jsonResponse([TEAM])
+    }))
+    const wrapper = await mountTeam()
+
+    expect(wrapper.find('[data-test="member-disabled"]').text()).toContain('已禁用')
+  })
+
+  // 邀请只撤销不删，越攒越多：列表要能一页一页翻，不能只给最近几条。
+  it('有下一页时能加载下一页', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/members')) return jsonResponse([MEMBER])
+      if (url.includes('/invitations')) {
+        if (url.includes('cursor=')) {
+          return invitationPage([{ ...INVITATION, id: 'i2' }])
+        }
+        return invitationPage([INVITATION], 'c1')
+      }
+      return jsonResponse([TEAM])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    // 首页只有一条，但服务端说还有更多——页面得说清，不能装作这就是全部
+    expect(wrapper.findAll('[data-test="invitation-row"]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('还有更多')
+
+    await wrapper.find('[data-test="load-more-invitations"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="invitation-row"]')).toHaveLength(2)
+    const second = fetchMock.mock.calls.filter(([url]) => String(url).includes('cursor='))
+    expect(second).toHaveLength(1)
+    expect(String(second[0][0])).toContain('cursor=c1')
+    // 翻完了就不用再说「还有更多」
+    expect(wrapper.text()).not.toContain('还有更多')
+  })
+
   it('改组织角色会 PATCH 并重读成员列表', async () => {
     session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
     let role = MEMBER.role
@@ -83,7 +135,7 @@ describe('TeamPage', () => {
         return noContent()
       }
       if (url.includes('/members')) return jsonResponse([{ ...MEMBER, role }])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -111,7 +163,7 @@ describe('TeamPage', () => {
         }
       }
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     }))
     const wrapper = await mountTeam()
@@ -135,7 +187,7 @@ describe('TeamPage', () => {
         return jsonResponse([{ ...MEMBER, role: 'member' }])
       }
       if (url.includes('/members')) return jsonResponse([{ ...MEMBER, role: 'publisher' }])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -166,7 +218,7 @@ describe('TeamPage', () => {
         return jsonResponse([{ ...MEMBER, user_id: 'u2', display_name: 'Team Dev' }])
       }
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -188,7 +240,7 @@ describe('TeamPage', () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url.includes('/teams/t2/members')) return pendingTeamMembers
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM, { ...TEAM, id: 't2', slug: 'infra', name: 'Infra' }])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -219,7 +271,7 @@ describe('TeamPage', () => {
         })
       }
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -247,7 +299,7 @@ describe('TeamPage', () => {
         })
       }
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([INVITATION])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
       return jsonResponse([TEAM])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -278,6 +330,7 @@ describe('TeamPage', () => {
           { id: 'org2', slug: 'acme', name: 'Acme', role: 'owner' },
         ] })
       }
+      if (url.includes('/invitations')) return invitationPage([])
       return jsonResponse([])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -304,7 +357,7 @@ describe('TeamPage', () => {
         return jsonResponse({ id: 'i1', token: 'raw-tok', invite_url: 'http://x/invite/raw-tok' })
       }
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([])
+      if (url.includes('/invitations')) return invitationPage([])
       return jsonResponse([])
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -326,7 +379,7 @@ describe('TeamPage', () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST') return jsonResponse(TEAM)
       if (url.includes('/members')) return jsonResponse([MEMBER])
-      if (url.includes('/invitations')) return jsonResponse([])
+      if (url.includes('/invitations')) return invitationPage([])
       return jsonResponse([])
     })
     vi.stubGlobal('fetch', fetchMock)

@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, Invitation, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
 export class ApiError extends Error {
@@ -216,8 +216,16 @@ export function listTeamMembers(organizationId: string, teamId: string): Promise
   return request<Member[]>(`/organizations/${organizationId}/teams/${teamId}/members`)
 }
 
-export function listInvitations(organizationId: string): Promise<Invitation[]> {
-  return request<Invitation[]>(`/organizations/${organizationId}/invitations`)
+/**
+ * 组织的邀请列表（一页）。
+ *
+ * 服务端按 (created_at, id) 倒序翻页：has_more 说清还有没有，next_cursor 是
+ * 下一页的起点。只拉一页就当成全部，页面说的就是假话——把「还有更多」接出去。
+ */
+export function listInvitations(organizationId: string, cursor?: string): Promise<InvitationPage> {
+  const params = new URLSearchParams({ limit: '20' })
+  if (cursor) params.set('cursor', cursor)
+  return request<InvitationPage>(`/organizations/${organizationId}/invitations?${params}`, 'GET')
 }
 
 export function createInvitation(organizationId: string, body: {

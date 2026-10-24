@@ -4,13 +4,13 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.invite.dto.AcceptInvitationResponse;
 import com.skillmesh.api.invite.dto.CreateInvitationRequest;
+import com.skillmesh.api.invite.dto.InvitationPage;
 import com.skillmesh.api.invite.dto.InvitationResponse;
 import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrganizationEntity;
 import com.skillmesh.api.org.TeamEntity;
 import jakarta.validation.Valid;
 import java.net.URI;
-import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /** 邀请端点（设计文档 §10 团队管理）。 */
@@ -64,11 +65,13 @@ public class InvitationController {
     }
 
     @GetMapping("/organizations/{organizationId}/invitations")
-    public List<InvitationSummary> list(@AuthenticationPrincipal Jwt jwt,
-                                        @PathVariable UUID organizationId) {
+    public InvitationPage list(@AuthenticationPrincipal Jwt jwt,
+                               @PathVariable UUID organizationId,
+                               @RequestParam(required = false) Integer limit,
+                               @RequestParam(required = false) String cursor) {
         CurrentUser user = currentUserService.current(jwt);
         invitations.requireOrgMember(user, organizationId);
-        return invitations.listSummaries(organizationId);
+        return invitations.listSummaries(organizationId, limit, cursor);
     }
 
     @DeleteMapping("/organizations/{organizationId}/invitations/{invitationId}")

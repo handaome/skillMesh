@@ -1,10 +1,18 @@
 package cmd
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
+	"github.com/handaome/skillmesh/apps/cli/internal/packager"
+	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
+	"github.com/handaome/skillmesh/apps/cli/internal/syncstate"
 )
 
 // 设计文档 §6.3 的冲突表：两边都改时能按文件合就合，合不了才报冲突。
@@ -134,5 +142,75 @@ func Test基线文件缺失时不硬合(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("没有基线可比，合不了才对")
+	}
+}
+
+// 合并中途失败不能留下「改了一半」的目录：基线没更新，下一轮又判冲突。
+// 失败时本机目录必须还是原样，错误也得如实报出来。
+func Test合并失败不动本机目录(t *testing.T) {
+	root := t.TempDir()
+	local := filepath.Join(root, "local")
+	cloud := filepath.Join(root, "cloud")
+	for _, dir := range []string{local, cloud} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(dir, name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(local, "SKILL.md", "# 本机\n")
+	write(cloud, "SKILL.md", "# 本机\n")
+	write(cloud, "a.md", "云端的 a\n")
+
+	// 云端清单说有 b.md，制品里却没有：写到 b.md 时必然失败。
+	artifact, err := packager.Pack(cloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localHashes, err := skillscan.DirHashes(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashes := toHashMap(localHashes)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/skills/skill-1/versions":
+			w.Write([]byte(`{"items":[{"version":"1.0.0","status":"published","manifest":[` +
+				`{"path":"SKILL.md","sha256":"` + hashes["SKILL.md"] + `"},` +
+				`{"path":"a.md","sha256":"ca"},{"path":"b.md","sha256":"cb"}],` +
+				`"artifact":{"id":"art-1"}}],"has_more":false}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/artifacts/art-1/download":
+			w.Write(artifact.Zip)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	target := syncTarget{Name: "demo", Agent: "claude-code", Path: local, SkillID: "skill-1"}
+	entry := syncstate.Entry{Name: "demo", Agent: "claude-code",
+		BaseFiles: map[string]string{"SKILL.md": hashes["SKILL.md"]}}
+	ok, _, err := mergeConflict(context.Background(), apiclient.New(srv.URL, "tok", 0),
+		target, entry, artifact, apiclient.Skill{ID: "skill-1"})
+	// 本机目录保持原样：前面合上的 a.md 不能落到本机目录里。
+	if _, statErr := os.Stat(filepath.Join(local, "a.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("合并失败不该往本机目录写文件：%v", statErr)
+	}
+	content, readErr := os.ReadFile(filepath.Join(local, "SKILL.md"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(content) != "# 本机\n" {
+		t.Fatalf("本机文件被改了：%q", content)
+	}
+	if err == nil {
+		t.Fatal("合并中途失败该把错报出来")
+	}
+	if ok {
+		t.Fatal("没合完不该说合成了")
 	}
 }

@@ -103,6 +103,8 @@ export interface Member {
   joined_at: string
   /** OIDC 的 sub——邀请要绑到某个人时填的就是它。 */
   subject: string
+  /** 账号状态：active / disabled。被禁用的人还挂在花名册上，只是登不进来了。 */
+  status: string
 }
 
 export interface Invitation {
@@ -114,6 +116,13 @@ export interface Invitation {
   status: string
   expires_at: string
   created_at: string
+}
+
+// 邀请列表的一页：与服务端的 InvitationPage 同形状，跟 SkillPage 一个口径。
+export interface InvitationPage {
+  items: Invitation[]
+  next_cursor: string | null
+  has_more: boolean
 }
 
 export interface CreatedInvitation {

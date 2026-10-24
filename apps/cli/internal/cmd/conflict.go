@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
@@ -75,6 +76,9 @@ func mergePlan(base, local, cloud map[string]string) map[string]fileAction {
 //	本地改了 A、云端改了 B      → 两边都要，合完直接上传
 //	同一个文件两边都改且能文本合 → 合完上传
 //	同一个文件两边都改且合不了   → 返回 ok=false，交给 --resolve 生成冲突副本
+//
+// 合并先在临时副本上做，全部成功才原子换回本机目录：
+// 中途失败不能留下「改了一半」的目录——基线没更新，下一轮又判冲突。
 func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTarget,
 	entry syncstate.Entry, local packager.Artifact, skill apiclient.Skill) (bool, string, error) {
 
@@ -99,19 +103,53 @@ func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTar
 	}
 	defer cleanup()
 
-	var merged, conflicted, deleted []string
-	for path, action := range plan {
-		switch action {
+	// 本机目录整份复制到暂存目录（含隐藏文件），合并在暂存目录上做。
+	staged, cleanupLocal, err := stageLocal(target.Path)
+	if err != nil {
+		return false, "复制本机目录到暂存位置失败", err
+	}
+	defer cleanupLocal()
+
+	merged, conflicted, deleted, err := applyMerge(staged, cloudDir, entry.BaseSnapshot, plan)
+	if err != nil {
+		return false, err.Error(), err
+	}
+	if len(conflicted) > 0 || len(deleted) > 0 {
+		var notes []string
+		if len(conflicted) > 0 {
+			notes = append(notes, fmt.Sprintf("%d 个文件两边改到同一处合不了：%v",
+				len(conflicted), conflicted))
+		}
+		if len(deleted) > 0 {
+			notes = append(notes, fmt.Sprintf("%d 个文件本机已删除、云端还在，"+
+				"删除要不要传到云端得你确认（--allow-delete）：%v", len(deleted), deleted))
+		}
+		return false, strings.Join(notes, "；"), nil
+	}
+	// 全合上了：把暂存目录原子换回本机目录，中途出错旧目录还在。
+	if err := installer.InstallAtomic(staged, target.Path, true); err != nil {
+		return false, "换回本机目录失败：" + err.Error(), err
+	}
+	return true, fmt.Sprintf("按文件合并完成（云端 %d 个文件参与）", len(merged)), nil
+}
+
+// applyMerge 把合并计划落到暂存目录上。
+// 返回合上的文件、合不成的文件、本机删掉的文件；出错就把错原样带出去。
+func applyMerge(staged, cloudDir, baseSnapshot string, plan map[string]fileAction) (
+	merged, conflicted, deleted []string, err error) {
+
+	for _, path := range sortedPaths(plan) {
+		switch plan[path] {
 		case actionTakeCloud:
 			if err := copyFile(filepath.Join(cloudDir, filepath.FromSlash(path)),
-				filepath.Join(target.Path, filepath.FromSlash(path))); err != nil {
-				return false, "写入云端版本失败：" + path, nil
+				filepath.Join(staged, filepath.FromSlash(path))); err != nil {
+				return nil, nil, nil, fmt.Errorf("写入云端版本失败 %s：%w", path, err)
 			}
 			merged = append(merged, path)
 		case actionMergeLocal:
-			ok, err := mergeFile(entry.BaseSnapshot, target.Path, cloudDir, path)
-			if err != nil {
-				return false, fmt.Sprintf("三方合并失败 %s：%v", path, err), nil
+			ok, mergeErr := mergeFile(baseSnapshot, staged, cloudDir, path)
+			if mergeErr != nil {
+				return nil, nil, nil, fmt.Errorf("三方合并失败 %s：%w", path, mergeErr)
 			}
 			if ok {
 				merged = append(merged, path)
@@ -123,19 +161,34 @@ func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTar
 			deleted = append(deleted, path)
 		}
 	}
-	if len(conflicted) > 0 || len(deleted) > 0 {
-		var notes []string
-		if len(conflicted) > 0 {
-			notes = append(notes, fmt.Sprintf("%d 个文件两边改到同一处合不了：%v",
-				len(conflicted), conflicted))
-		}
-		if len(deleted) > 0 {
-			notes = append(notes, fmt.Sprintf("%d 个文件本机已删除、云端还在，"+
-				"删除要不要传到云端得你确认：%v", len(deleted), deleted))
-		}
-		return false, strings.Join(notes, "；"), nil
+	return merged, conflicted, deleted, nil
+}
+
+// stageLocal 把本机目录整份复制到临时目录（含隐藏文件），返回暂存目录与清理函数。
+//
+// 合并在暂存目录上做：中途失败本机目录还是原样，不会留下改了一半的内容。
+func stageLocal(dir string) (string, func(), error) {
+	work, err := os.MkdirTemp("", "skillmesh-merge-local-*")
+	if err != nil {
+		return "", func() {}, err
 	}
-	return true, fmt.Sprintf("按文件合并完成（云端 %d 个文件参与）", len(merged)), nil
+	staged := filepath.Join(work, "merged")
+	// InstallAtomic 内部就是「复制到暂存目录再改名」，隐藏文件也照copy进去。
+	if err := installer.InstallAtomic(dir, staged, false); err != nil {
+		os.RemoveAll(work)
+		return "", func() {}, err
+	}
+	return staged, func() { os.RemoveAll(work) }, nil
+}
+
+// sortedPaths 按路径顺序处理合并计划：顺序固定，合并失败时才知道断在哪一步。
+func sortedPaths(plan map[string]fileAction) []string {
+	paths := make([]string, 0, len(plan))
+	for path := range plan {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // mergeFile 对单个文件做三方文本合并。合不了就返回 false，不写盘。

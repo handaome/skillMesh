@@ -65,6 +65,11 @@ public class SkillVersionService {
         // 建版本是发布动作：团队/组织可见的 Skill 要有发布权（组织角色 publisher 及以上）。
         // 只判可见性的话，团队的普通成员也能往待审队列里塞一版内容。
         skillService.requirePublishRight(user, skill);
+        // 锁住 Skill 行：基线校验、版本号查重、落版本都要与并发的发布串行。
+        // 锁的顺序是「先版本行、后 Skill 行」——这里不碰别人的版本行，只锁 Skill 行。
+        skills.findByIdForUpdate(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
+        // 基线前置条件：客户端做决策时看到的云端摘要必须还对得上。
+        requireBaseRevision(skillId, req.expected_base_revision());
         if (versions.existsBySkillIdAndVersion(skillId, req.version())) {
             throw ApiException.versionConflict("版本已存在且不可覆盖: " + req.version());
         }
@@ -104,6 +109,55 @@ public class SkillVersionService {
             Map.of("Content-Type", "application/zip"),
             session.getExpiresAt());
         return new CreateVersionResponse(version.getId(), version.getStatus(), upload, null);
+    }
+
+    /**
+     * 基线前置条件：客户端做决策时看到的云端摘要，必须与现在的云端一致。
+     *
+     * 没带基线（普通 publish）就照旧放行。带了对不上，说明云端在这期间被别人动过：
+     * 这次上传会把那份改动静默盖掉——报 409，让客户端重新对账（详细设计 §12 的 If-Match）。
+     */
+    private void requireBaseRevision(UUID skillId, String expected) {
+        if (expected == null || expected.isBlank()) {
+            return;
+        }
+        String cloud = publishedDigest(skillId);
+        if (!expected.equals(cloud)) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "云端已被别人改动（你看到的是 " + shortDigest(expected) + "，现在是 "
+                    + shortDigest(cloud) + "），请重新对账");
+        }
+    }
+
+    /**
+     * 云端当前已发布版本的内容摘要——基线校验的比对对象。
+     *
+     * 口径照抄 {@code SyncService.cloudHash}：最新已发布版本（跳过清单为空的）→ 清单摘要。
+     * 客户端按同一个算法算云端摘要，两边算法不一样的话前置条件永远对不上。
+     */
+    private String publishedDigest(UUID skillId) {
+        for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
+            if (!"published".equals(version.getStatus())) {
+                continue;
+            }
+            if (version.getArtifactId() == null) {
+                continue;
+            }
+            // 清单为空的版本要跳过、继续往下找（与 SyncService.cloudHash 同一口径）。
+            if (version.getManifestJson() == null || version.getManifestJson().isEmpty()) {
+                continue;
+            }
+            return ContentDigest.of(version.getManifestJson());
+        }
+        return null;
+    }
+
+    /** 摘要太长不好看，只留头 8 位。 */
+    private String shortDigest(String digest) {
+        if (digest == null || digest.isEmpty()) {
+            return "空";
+        }
+        return digest.length() > 8 ? digest.substring(0, 8) : digest;
     }
 
     @Transactional(readOnly = true)

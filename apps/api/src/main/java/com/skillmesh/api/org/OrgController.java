@@ -4,6 +4,7 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.dto.MemberResponse;
+import com.skillmesh.api.org.dto.MemberUpdateRequest;
 import com.skillmesh.api.org.dto.RoleRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -107,8 +108,10 @@ public class OrgController {
     public ResponseEntity<Void> updateOrgMember(@AuthenticationPrincipal Jwt jwt,
                                                  @PathVariable UUID organizationId,
                                                  @PathVariable UUID userId,
-                                                 @Valid @RequestBody RoleRequest req) {
-        orgs.updateOrgRole(currentUserService.current(jwt), organizationId, userId, req.role());
+                                                 @RequestBody MemberUpdateRequest req) {
+        // 角色与账号状态都能改，都能不给——至少要给一项，服务层才不报错。
+        orgs.updateOrgMember(currentUserService.current(jwt), organizationId, userId,
+            req.role(), req.status());
         return ResponseEntity.noContent().build();
     }
 
@@ -137,7 +140,7 @@ public class OrgController {
 
     private static MemberResponse toResponse(OrgService.Member member) {
         return new MemberResponse(member.userId(), member.displayName(), member.email(),
-            member.role(), member.joinedAt(), member.subject());
+            member.role(), member.joinedAt(), member.subject(), member.status());
     }
 
     private static Map<String, Object> toResponse(OrganizationEntity org) {

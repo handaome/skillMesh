@@ -43,6 +43,9 @@ type CreateVersionRequest struct {
 	FileCount    int             `json:"file_count"`
 	SHA256       string          `json:"sha256"`
 	Manifest     []ManifestEntry `json:"manifest"`
+	// ExpectedBaseRevision 是客户端做决策时看到的云端已发布版本内容摘要。
+	// 不传 = 服务端不校验基线；传了但云端已经变了，服务端回 409。
+	ExpectedBaseRevision string `json:"expected_base_revision,omitempty"`
 }
 
 // UploadTarget 是直传对象存储的目标。注意 url 自带签名，

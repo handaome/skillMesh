@@ -2,6 +2,7 @@ package com.skillmesh.api.install;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -78,6 +79,30 @@ class InstallationTest {
                     "install_scope", "宇宙",
                     "target_path", "/tmp/x"))))
             .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * 巡检会更新巡检时间。
+     *
+     * 巡检走的是 PATCH 改状态这条路：last_checked_at 记的是「最近什么时候查过本机磁盘」，
+     * 不跟着更新的话它永远停在登记的那一刻，这条字段就没用了。
+     */
+    @Test
+    void 巡检更新巡检时间() throws Exception {
+        UUID skillId = createSkill();
+        UUID deviceId = registerDevice();
+        String registered = register(skillId, deviceId, "1.0.0");
+        String id = json.readTree(registered).path("id").asText();
+        String checkedAt = json.readTree(registered).path("last_checked_at").asText();
+        assertThat(checkedAt).as("登记时也记下巡检时间").isNotBlank();
+
+        mockMvc.perform(patch("/api/v1/installations/{id}", id)
+                .header("Authorization", auth).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":\"missing\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("missing"))
+            .andExpect(jsonPath("$.last_checked_at").value(
+                org.hamcrest.Matchers.not(checkedAt)));
     }
 
     private String register(UUID skillId, UUID deviceId, String version) throws Exception {

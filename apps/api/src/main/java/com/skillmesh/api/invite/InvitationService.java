@@ -4,6 +4,7 @@ import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.invite.dto.InvitationPage;
 import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrgRepository;
 import com.skillmesh.api.org.OrgService;
@@ -26,6 +27,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +42,10 @@ public class InvitationService {
 
     private static final int TOKEN_BYTES = 32;
     private static final long DEFAULT_TTL_DAYS = 7;
+    /** 一页默认给多少条邀请。 */
+    private static final int DEFAULT_LIMIT = 20;
+    /** 上限：再大就是「一次把全量拉回来」，那不是分页。 */
+    private static final int MAX_LIMIT = 100;
 
     private final InvitationRepository invitations;
     private final OrgService orgs;
@@ -167,26 +173,52 @@ public class InvitationService {
     }
 
     /**
-     * 组织下的邀请列表（摘要）。
+     * 组织下的邀请列表（一页）。
+     *
+     * 游标分页：按 (created_at, id) 倒序翻页，跟技能列表同一套口径。
+     * 邀请只撤销不删，越攒越多——一次全查回来迟早把这个页面拖垮，
+     * 而前端再 slice 一刀只是把「多」藏起来，不是解决。
      *
      * 组织与团队一次批量查齐：逐条查就是 2N 次往返，本机到远程库一次往返几十毫秒，
-     * 一个组织攒下几十份邀请（邀请只撤销不删，越攒越多）就够这个页面卡住。
+     * 一个组织攒下几十份邀请就够这个页面卡住。
      */
-    public List<InvitationSummary> listSummaries(UUID organizationId) {
-        List<InvitationEntity> rows =
-            invitations.findByOrganizationIdOrderByCreatedAtDesc(organizationId);
+    @Transactional(readOnly = true)
+    public InvitationPage listSummaries(UUID organizationId, Integer limit, String cursor) {
+        int size = limit == null ? DEFAULT_LIMIT : Math.clamp(limit, 1, MAX_LIMIT);
+        OffsetDateTime cursorTime = null;
+        UUID cursorId = null;
+        if (cursor != null && !cursor.isBlank()) {
+            String[] parts;
+            try {
+                parts = new String(decode(cursor), StandardCharsets.UTF_8).split("\\|", 2);
+                cursorTime = OffsetDateTime.parse(parts[0]);
+                cursorId = UUID.fromString(parts[1]);
+            } catch (RuntimeException e) {
+                // 游标是客户端给的东西，坏了是调用方的错，不该以 500 的形式暴露。
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "cursor 格式不对");
+            }
+        }
+        List<InvitationEntity> rows = invitations.pageByOrganizationId(organizationId,
+            cursorTime, cursorId, PageRequest.of(0, size + 1));
+        boolean hasMore = rows.size() > size;
+        List<InvitationEntity> page = hasMore ? rows.subList(0, size) : rows;
         Map<UUID, OrganizationEntity> orgById = organizations.findAllById(
-                rows.stream().map(InvitationEntity::getOrganizationId).toList())
+                page.stream().map(InvitationEntity::getOrganizationId).toList())
             .stream().collect(Collectors.toMap(OrganizationEntity::getId, org -> org));
         Map<UUID, TeamEntity> teamById = teams.findAllById(
-                rows.stream().map(InvitationEntity::getTeamId).filter(Objects::nonNull).toList())
+                page.stream().map(InvitationEntity::getTeamId).filter(Objects::nonNull).toList())
             .stream().collect(Collectors.toMap(TeamEntity::getId, team -> team));
-        List<InvitationSummary> out = new ArrayList<>(rows.size());
-        for (InvitationEntity row : rows) {
+        List<InvitationSummary> out = new ArrayList<>(page.size());
+        for (InvitationEntity row : page) {
             out.add(toSummary(row, orgById.get(row.getOrganizationId()),
                 row.getTeamId() == null ? null : teamById.get(row.getTeamId())));
         }
-        return out;
+        String next = null;
+        if (hasMore && !page.isEmpty()) {
+            InvitationEntity last = page.get(page.size() - 1);
+            next = encode(last.getCreatedAt() + "|" + last.getId());
+        }
+        return new InvitationPage(out, next, hasMore);
     }
 
     /** 单份邀请的摘要（公开页用）。 */
@@ -276,6 +308,16 @@ public class InvitationService {
         byte[] bytes = new byte[TOKEN_BYTES];
         random.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    /** 游标：base64 的「创建时间|id」，跟技能列表同一套形状。 */
+    private static String encode(String raw) {
+        return Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static byte[] decode(String cursor) {
+        return Base64.getUrlDecoder().decode(cursor);
     }
 
     private static String sha256Hex(String raw) {
