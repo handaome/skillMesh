@@ -306,11 +306,11 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 	// 结果看版本自己的状态，不从 Skill 的可见性去猜：服务端扫描拦下的版本
 	// 可见性还是 team，照可见性猜就会说「已提交审核」，用户等一场不会来的审核。
 	switch session.VersionStatus {
-	case "rejected":
+	case "rejected", "quarantined":
 		return publishResult{}, fmt.Errorf(
-			"版本 %s 被服务端的制品扫描拦下了（rejected），没有进审核队列。"+
+			"版本 %s 被服务端的制品扫描拦下了（%s），没有进审核队列。"+
 				"服务端扫的是上传的真包，本地扫描没看到的文件也会被算进去——清掉包里的密钥再重发",
-			version)
+			version, session.VersionStatus)
 	case "pending_review":
 		return publishResult{
 			Action:    "已提交审核",

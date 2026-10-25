@@ -29,7 +29,8 @@ class ArtifactDedupeTest {
     void 同一份内容重复上传只写一次桶() {
         ArtifactStorage storage = mock(ArtifactStorage.class);
         ArtifactRepository artifacts = mock(ArtifactRepository.class);
-        ArtifactService service = new ArtifactService(storage, artifacts, new ObjectMapper());
+        ArtifactService service = new ArtifactService(storage, artifacts, new ObjectMapper(),
+                ArtifactService.DEFAULT_MAX_ARTIFACT_BYTES);
 
         byte[] zip = "zip".getBytes(StandardCharsets.UTF_8);
         String sha = ArtifactService.sha256(zip);
@@ -59,7 +60,8 @@ class ArtifactDedupeTest {
     void 已有记录时复用原来的key() {
         ArtifactStorage storage = mock(ArtifactStorage.class);
         ArtifactRepository artifacts = mock(ArtifactRepository.class);
-        ArtifactService service = new ArtifactService(storage, artifacts, new ObjectMapper());
+        ArtifactService service = new ArtifactService(storage, artifacts, new ObjectMapper(),
+                ArtifactService.DEFAULT_MAX_ARTIFACT_BYTES);
 
         byte[] zip = "zip".getBytes(StandardCharsets.UTF_8);
         String sha = ArtifactService.sha256(zip);

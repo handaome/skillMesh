@@ -352,6 +352,25 @@ func TestPublishOne归属与可见性(t *testing.T) {
 		}
 	})
 
+	// 服务端把版本隔离时（内容里有真凭据），也要说清楚：
+	// 它没进审核队列，说成「已提交审核」会让人等一场不会来的审核。
+	t.Run("版本被服务端隔离要报错", func(t *testing.T) {
+		srv, _ := publishServer(t, "quarantined")
+
+		result, err := cmd.PublishOne(context.Background(), apiclient.New(srv.URL, "tok", 0),
+			cmd.PublishTarget{Dir: demoSkillDir(t), RelPath: "demo"},
+			cmd.PublishOptions{
+				Slug:  "demo",
+				Scope: cmd.PublishScope{OrganizationID: "org-1", TeamID: "team-1", Visibility: "team"},
+			})
+		if err == nil {
+			t.Fatalf("被隔离的版本不该报成功，实际 %q", result.Action)
+		}
+		if !strings.Contains(err.Error(), "quarantined") {
+			t.Fatalf("错误信息该说明版本被隔离: %v", err)
+		}
+	})
+
 	// 服务端说 slug 被占用时，用户看到的应该是「slug 已被占用」，
 	// 而不是「服务内部错误」。
 	t.Run("slug被占用时报错说清楚", func(t *testing.T) {

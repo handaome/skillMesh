@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,19 +24,27 @@ public class ArtifactService {
 
     public static final Duration DOWNLOAD_TTL = Duration.ofMinutes(5);
     public static final Duration UPLOAD_TTL = Duration.ofMinutes(30);
-    public static final long MAX_ARTIFACT_BYTES = 52_428_800L;
+
+    /** 制品大小上限的默认值（50 MiB）。运维可按环境调（设计文档 §14）。 */
+    public static final long DEFAULT_MAX_ARTIFACT_BYTES = 52_428_800L;
 
     private final ArtifactStorage storage;
     private final ArtifactRepository artifacts;
     private final ObjectMapper json;
+    /** 单个制品的大小上限。 */
+    private final long maxArtifactBytes;
 
     public ArtifactService(ArtifactStorage storage, ArtifactRepository artifacts,
-                           ObjectMapper json) {
+                           ObjectMapper json,
+                           @Value("${skillmesh.artifact.max-bytes:52428800}") long maxArtifactBytes) {
         this.storage = storage;
         this.artifacts = artifacts;
         this.json = json;
+        this.maxArtifactBytes = maxArtifactBytes <= 0
+            ? DEFAULT_MAX_ARTIFACT_BYTES : maxArtifactBytes;
         storage.ensureBucket();
     }
+
 
     /**
      * 临时对象与正式对象分开：临时对象设过期，正式对象按摘要寻址且不可覆盖（附录 A.2）。
@@ -76,7 +85,7 @@ public class ArtifactService {
         // 先问对象多大：预签名地址在有效期内还能继续 PUT，对象可能比声明的大得多。
         // 不先看一眼就整包读进堆，一个大对象就能把堆撑爆。
         long storedSize = storage.size(tempKey);
-        if (storedSize > MAX_ARTIFACT_BYTES) {
+        if (storedSize > maxArtifactBytes) {
             storage.delete(tempKey);
             throw new ApiException(422, ErrorCodes.VALIDATION_FAILED, "制品超过大小上限");
         }
@@ -214,7 +223,7 @@ public class ArtifactService {
             byte[] buffer = new byte[64 * 1024];
             int read;
             while ((read = in.read(buffer)) > 0) {
-                if (out.size() + (long) read > MAX_ARTIFACT_BYTES) {
+                if (out.size() + (long) read > maxArtifactBytes) {
                     throw new ApiException(422, ErrorCodes.VALIDATION_FAILED, "制品超过大小上限");
                 }
                 out.write(buffer, 0, read);

@@ -166,8 +166,9 @@ class ReviewFlowTest {
     /**
      * 扫描被拦下的版本不许重新送审。
      *
-     * 服务端扫描命中阻断规则就把版本置成 rejected；再 submit 一次就能把它
-     * 放回队列，过审就等于把带密制品发出去——服务端扫描那道闸整个绕过去了。
+     * 服务端扫描命中阻断规则就把版本置成 quarantined（隔离，不是普通的拒绝）；
+     * 再 submit 一次就能把它放回队列，过审就等于把带密制品发出去——
+     * 服务端扫描那道闸整个绕过去了。
      */
     @Test
     void 扫描被拦截的版本不能送审() throws Exception {
@@ -176,7 +177,7 @@ class ReviewFlowTest {
         UUID teamId = orgs.createTeam(owner, orgId, "platform", "Platform", null).getId();
         UUID skillId = createTeamSkill(orgId, teamId, "runbook");
         publish(skillId, "1.0.0", "AKIAIOSFODNN7EXAMPLE\n");
-        assertThat(versionStatus(skillId, "1.0.0")).isEqualTo("rejected");
+        assertThat(versionStatus(skillId, "1.0.0")).isEqualTo("quarantined");
 
         ApiException error = catchThrowableOfType(
             () -> reviews.submit(owner, skillId, "1.0.0", "改好了"), ApiException.class);
@@ -185,7 +186,7 @@ class ReviewFlowTest {
         assertThat(error.status()).isEqualTo(409);
         assertThat(error.getMessage()).contains("扫描");
         assertThat(versionStatus(skillId, "1.0.0"))
-            .as("被拦下的版本不能回到待审队列").isEqualTo("rejected");
+            .as("被拦下的版本不能回到待审队列").isEqualTo("quarantined");
     }
 
     /** 没上传过制品的版本不许送审——送审了队列里也是空的。 */

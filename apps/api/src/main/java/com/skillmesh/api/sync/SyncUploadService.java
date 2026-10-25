@@ -168,7 +168,8 @@ public class SyncUploadService {
             changeset.setStatus("conflict");
             changesets.save(changeset);
             audit.record(user, "sync.commit_conflict", "skill", changeset.getSkillId(),
-                "denied", Map.of("expected", expectedRevision, "cloud", orEmpty(cloud)));
+                "denied", Map.of("expected", expectedRevision, "cloud", orEmpty(cloud)),
+                changeset.getDeviceId());
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "云端已经变了（期望 " + shortDigest(expectedRevision) + "，实际 "
                     + shortDigest(cloud) + "），本次提交没生效");
@@ -212,7 +213,9 @@ public class SyncUploadService {
         // 团队与组织可见的版本要等人审，跟整包上传一个口径：
         // 走 sync commit 不能把审核队列绕过去。
         boolean needsReview = review.needsReview(skill.getId());
-        version.setStatus(scan.blocked() ? "rejected" : needsReview ? "pending_review" : "published");
+        // 扫描命中阻断规则 -> quarantined（隔离），与审核拒绝的 rejected 分开
+        // （设计文档 §10.1）。
+        version.setStatus(scan.blocked() ? "quarantined" : needsReview ? "pending_review" : "published");
         if ("published".equals(version.getStatus())) {
             version.setPublishedBy(user.id());
             version.setPublishedAt(now);
@@ -241,7 +244,8 @@ public class SyncUploadService {
 
         audit.record(user, "sync.commit", "skill", skill.getId(), "success",
             Map.of("version", version.getVersion(), "files", String.valueOf(files.size()),
-                "status", version.getStatus(), "scan_status", scan.status()));
+                "status", version.getStatus(), "scan_status", scan.status()),
+            changeset.getDeviceId());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("changeset_id", changesetId.toString());
         result.put("status", "completed");

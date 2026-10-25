@@ -42,6 +42,23 @@ skillmesh:
     client-id: ${SM_OIDC_CLIENT_ID:skillmesh-cli}
   web:
     base-url: ${SM_WEB_BASE_URL:http://127.0.0.1:5174}
+  # 下面的限额都能按环境调（设计文档 §14「设置制品大小、文件数、扫描时间和 API 请求频率限制」）。
+  # 磁盘小的地方把制品与扫描的限额调紧，扫描慢的地方给扫描器更多时间。
+  artifact:
+    max-bytes: ${SM_ARTIFACT_MAX_BYTES:52428800}
+  scan:
+    max-file-bytes: ${SM_SCAN_MAX_FILE_BYTES:20971520}
+    max-total-bytes: ${SM_SCAN_MAX_TOTAL_BYTES:52428800}
+    max-files: ${SM_SCAN_MAX_FILES:5000}
+    timeout-ms: ${SM_SCAN_TIMEOUT_MS:30000}
+  rate-limit:
+    read-per-minute: ${SM_RATE_LIMIT_READ:600}
+    write-per-minute: ${SM_RATE_LIMIT_WRITE:60}
+    window-seconds: ${SM_RATE_LIMIT_WINDOW:60}
+  git:
+    allowed-hosts: "${SM_GIT_ALLOWED_HOSTS:github.com,gitlab.com,gitee.com}"
+    timeout-seconds: ${SM_GIT_TIMEOUT_SECONDS:30}
+    max-concurrent: ${SM_GIT_MAX_CONCURRENT:4}
 
 management:
   endpoints:

@@ -1,6 +1,7 @@
 package com.skillmesh.api.config;
 
 import com.skillmesh.api.common.RateLimitFilter;
+import com.skillmesh.api.common.RequestLogFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.security.oauth2.resource.OAuth2ResourceServerProperties;
 import org.springframework.context.annotation.Bean;
@@ -12,6 +13,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtDecoders;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.SecurityFilterChain;
 
 @Configuration
@@ -41,6 +43,9 @@ public class SecurityConfig {
             // servlet 过滤器，那样同一个请求会被数两遍。
             .addFilterAfter(new RateLimitFilter(readLimit, writeLimit, windowSeconds),
                 BearerTokenAuthenticationFilter.class)
+            // 请求日志挂在最前：所有请求都要记，包括被 401 挡下的——
+            // 「谁在试」正是日志要回答的问题（设计文档 §13）。
+            .addFilterBefore(new RequestLogFilter(), SecurityContextHolderFilter.class)
             .build();
     }
 

@@ -48,16 +48,34 @@ func newDoctorCmd() *cobra.Command {
 					fmt.Printf("agent %-12s 未启用\n", name)
 					continue
 				}
-				state := "不存在，安装时创建"
-				if info, err := os.Stat(agentCfg.UserSkillsDir); err == nil && info.IsDir() {
-					state = "存在"
-				}
-				fmt.Printf("agent %-12s %s（%s）\n", name, agentCfg.UserSkillsDir, state)
+				fmt.Printf("agent %-12s %s（%s）\n", name, agentCfg.UserSkillsDir,
+					DirState(agentCfg.UserSkillsDir))
 			}
 			reportSyncHealth()
 			return nil
 		},
 	}
+}
+
+// DirState 说一个目录能不能用：不存在、存在但写不进去、还是正常。
+//
+// 「存在」不等于「能用」——目录在、权限只读时装 Skill 会在最后一步失败，
+// 而那时候用户已经等完一轮下载了。设计文档 §13 要求 doctor 诊断「目录权限」。
+func DirState(dir string) string {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return "不存在，安装时创建"
+	}
+	// 真写一个临时文件：权限位骗人（ACL、只读挂载、容器里的 root），
+	// 试写才准。写完立刻删，不留东西。
+	probe, err := os.CreateTemp(dir, ".skillmesh-probe-*")
+	if err != nil {
+		return "存在，但写不进去"
+	}
+	name := probe.Name()
+	probe.Close()
+	os.Remove(name)
+	return "存在，可写"
 }
 
 // reportSyncHealth 报同步队列概况（设计文档 §13：doctor 要能诊断同步队列）。

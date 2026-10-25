@@ -34,9 +34,38 @@ public class AuditService {
         this.repository = repository;
     }
 
+    /**
+     * 记一笔审计。
+     *
+     * deviceId 为空时（大部分场景）就空着——审计表的那一列是可选的。
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(CurrentUser actor, String action, String targetType, Object targetId,
                        String outcome, Map<String, Object> details) {
+        write(actor, action, targetType, targetId, outcome, details, null);
+    }
+
+    /**
+     * 记一笔审计，并带上发起这次动作的设备。
+     *
+     * 同步与安装走这条路：那两种请求头里带 X-Device-Id，
+     * 「哪台机器做的」是这类事件的关键信息（设计文档 §11 的 audit_events.device_id）。
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void record(CurrentUser actor, String action, String targetType, Object targetId,
+                       String outcome, Map<String, Object> details, UUID deviceId) {
+        write(actor, action, targetType, targetId, outcome, details, deviceId);
+    }
+
+    /**
+     * 真正落库的那一步。
+     *
+     * 两个 public 方法各自带 @Transactional：同类内部调用绕过 Spring 代理，
+     * 注解不生效——审计要独立事务（REQUIRES_NEW）才能在业务回滚时也留下痕迹，
+     * 所以落库这一步必须由带注解的入口直接调用。
+     */
+    private void write(CurrentUser actor, String action, String targetType, Object targetId,
+                       String outcome, Map<String, Object> details, UUID deviceId) {
         try {
             AuditEventEntity event = new AuditEventEntity();
             event.setOccurredAt(OffsetDateTime.now(ZoneOffset.UTC));
@@ -48,6 +77,7 @@ public class AuditService {
             // details 里只放业务事实，不放令牌、私钥、Skill 正文。
             event.setDetailsJson(details == null ? Map.of() : details);
             applyRequestContext(event);
+            event.setDeviceId(deviceId);
             repository.save(event);
         } catch (RuntimeException e) {
             log.error("审计写入失败 action={} target={}/{} —— 业务动作照常生效",

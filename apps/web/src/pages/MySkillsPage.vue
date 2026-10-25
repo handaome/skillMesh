@@ -91,7 +91,9 @@ function visibilityPill(visibility: string): string {
 /** 版本状态 → 药丸的颜色。 */
 function versionPill(status: string): string {
   if (status === 'published') return 'sm-pill sm-pill-pos'
-  if (status === 'rejected' || status === 'revoked') return 'sm-pill sm-pill-neg'
+  if (status === 'rejected' || status === 'revoked' || status === 'quarantined') {
+    return 'sm-pill sm-pill-neg'
+  }
   if (status === 'pending_review') return 'sm-pill sm-pill-warn'
   return 'sm-pill'
 }
@@ -109,6 +111,7 @@ const STATUS_TEXT: Record<string, string> = {
   pending_review: '待审核',
   published: '已发布',
   rejected: '已拒绝',
+  quarantined: '已隔离',
   revoked: '已撤回',
 }
 

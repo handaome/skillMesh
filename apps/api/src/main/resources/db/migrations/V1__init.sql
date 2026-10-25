@@ -185,7 +185,7 @@ CREATE TABLE skill_versions (
     manifest_json       jsonb NOT NULL DEFAULT '[]'::jsonb
                         CHECK (jsonb_typeof(manifest_json) = 'array'),
     status              text NOT NULL DEFAULT 'draft'
-                        CHECK (status IN ('draft', 'scanning', 'pending_review', 'published', 'rejected', 'revoked', 'yanked')),
+                        CHECK (status IN ('draft', 'scanning', 'pending_review', 'published', 'rejected', 'quarantined', 'revoked', 'yanked')),
     created_by          uuid REFERENCES users(id) ON DELETE SET NULL,
     published_by        uuid REFERENCES users(id) ON DELETE SET NULL,
     created_at          timestamptz NOT NULL DEFAULT now(),

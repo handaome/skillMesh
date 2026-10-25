@@ -166,6 +166,9 @@ class VersionFlowTest {
     /**
      * 服务端独立扫描：含真实凭据的包不能发布（详细设计 §10、§15.1）。
      * 这条不依赖客户端——绕开 CLI 直接 POST 也得被拦。
+     *
+     * 落的是 quarantined 而不是 rejected：「内容里有真凭据」与
+     * 「审核者觉得不合适」是两回事，流水要能分开看（设计文档 §10.1）。
      */
     @Test
     void 含凭据的包被服务端扫描拦下() throws Exception {
@@ -187,7 +190,7 @@ class VersionFlowTest {
         mockMvc.perform(get("/api/v1/skills/{id}/versions", skillId)
                 .header("Authorization", auth))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.items[0].status").value("rejected"))
+            .andExpect(jsonPath("$.items[0].status").value("quarantined"))
             .andExpect(jsonPath("$.items[0].scan.status").value("failed"))
             .andExpect(jsonPath("$.items[0].scan.scanner_name").value("skillmesh-server-scan"))
             .andExpect(jsonPath("$.items[0].scan.findings[0].rule").value("AWS Access Key"));

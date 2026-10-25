@@ -72,7 +72,7 @@ type UploadSession struct {
 	Status         string `json:"status"`
 	VerifiedSHA256 string `json:"verified_sha256"`
 	ErrorCode      string `json:"error_code"`
-	// VersionStatus 是版本的状态（rejected / pending_review / published）。
+	// VersionStatus 是版本的状态（rejected / quarantined / pending_review / published）。
 	// 会话自己的 status 只说「上传完了没有」，不说这版被服务端怎么处理了——
 	// 拿它去推断发布结果，就会把被扫描拦下的版本说成「已提交审核」。
 	VersionStatus string `json:"version_status"`

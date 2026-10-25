@@ -404,6 +404,7 @@ function statusText(status: string): string {
     published: '已发布',
     pending_review: '已提交审核',
     rejected: '被服务端的制品扫描拦下',
+    quarantined: '被服务端的制品扫描隔离',
   }
   return map[status] ?? status
 }

@@ -109,7 +109,8 @@ public class InstallationController {
         audit.record(user, isNew ? "installation.register" : "installation.refresh",
             "skill", req.skill_id(), "success",
             Map.of("agent", req.agent() == null ? "" : req.agent(), "version",
-                req.installed_version() == null ? "" : req.installed_version()));
+                req.installed_version() == null ? "" : req.installed_version()),
+            entity.getDeviceId());
         return ResponseEntity.created(URI.create("/api/v1/installations/" + entity.getId()))
             .body(toResponse(entity));
     }
@@ -152,7 +153,8 @@ public class InstallationController {
         installations.save(entity);
         audit.record(user, "installation.update", "skill", entity.getSkillId(), "success",
             Map.of("installation_id", entity.getId().toString(),
-                "status", entity.getStatus(), "policy", entity.getUpdatePolicy()));
+                "status", entity.getStatus(), "policy", entity.getUpdatePolicy()),
+            entity.getDeviceId());
         return toResponse(entity);
     }
 
@@ -163,7 +165,7 @@ public class InstallationController {
         InstallationEntity entity = require(user, installationId);
         installations.delete(entity);
         audit.record(user, "installation.unregister", "skill", entity.getSkillId(), "success",
-            Map.of("target_path", entity.getTargetPath()));
+            Map.of("target_path", entity.getTargetPath()), entity.getDeviceId());
         return ResponseEntity.noContent().build();
     }
 

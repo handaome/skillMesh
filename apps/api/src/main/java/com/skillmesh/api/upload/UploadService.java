@@ -186,7 +186,10 @@ public class UploadService {
         // 个人与公开的版本扫描通过就发布；团队与组织可见的要等人审
         // （设计文档 §10.1 的 draft → scanning → pending_review → published）。
         boolean needsReview = review.needsReview(version.getSkillId());
-        version.setStatus(scan.blocked() ? "rejected" : needsReview ? "pending_review" : "published");
+        // 扫描命中阻断规则 -> quarantined（隔离，不是普通的拒绝）：
+        // 「内容里有真凭据」与「审核者觉得不合适」是两回事，流水要能分开看
+        // （设计文档 §10.1：扫描失败或审核拒绝进入 rejected/quarantined）。
+        version.setStatus(scan.blocked() ? "quarantined" : needsReview ? "pending_review" : "published");
         if ("published".equals(version.getStatus())) {
             version.setPublishedBy(user.id());
             version.setPublishedAt(now);
@@ -208,11 +211,13 @@ public class UploadService {
 
         String action = switch (version.getStatus()) {
             case "rejected" -> "skill.publish_rejected";
+            case "quarantined" -> "skill.publish_quarantined";
             case "pending_review" -> "skill.submit_for_review";
             default -> "skill.publish";
         };
         audit.record(user, action, "skill", version.getSkillId(),
-            "rejected".equals(version.getStatus()) ? "failure" : "success",
+            "rejected".equals(version.getStatus()) || "quarantined".equals(version.getStatus())
+                ? "failure" : "success",
             Map.of("version", version.getVersion(), "sha256", promoted.sha256(),
                 "scan_status", scan.status(),
                 // 声明的清单跟真包对不上：收下了，但记一笔——发布方说的不算数。

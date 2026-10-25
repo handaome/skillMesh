@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,16 +25,27 @@ public class ArtifactScanner {
     public static final String NAME = "skillmesh-server-scan";
     public static final String VERSION = "0.1.0";
 
-    /** 单文件与总量上限，与 CLI 的 skillscan.DefaultLimits 对齐。 */
-    private static final long MAX_FILE_BYTES = 20L << 20;
-    private static final long MAX_TOTAL_BYTES = 50L << 20;
-    private static final int MAX_FILES = 5000;
-
     /** 路径穿越这条规则的名字。 */
     private static final String RULE_PATH_TRAVERSAL = "路径穿越";
 
+    /**
+     * 单文件与总量上限，与 CLI 的 skillscan.DefaultLimits 对齐。
+     *
+     * 运维可按环境调（设计文档 §14「设置制品大小、文件数、扫描时间限制」）：
+     * 磁盘小的地方要限得紧，扫描慢的地方要给扫描器更多时间。
+     */
+    @Value("${skillmesh.scan.max-file-bytes:20971520}")
+    private long maxFileBytes = 20L << 20;
+
+    @Value("${skillmesh.scan.max-total-bytes:52428800}")
+    private long maxTotalBytes = 50L << 20;
+
+    @Value("${skillmesh.scan.max-files:5000}")
+    private int maxFiles = 5000;
+
     /** 超过这个时长按「未完成」处理，不让它拖住上传流程。 */
-    private static final long TIMEOUT_MS = 30_000;
+    @Value("${skillmesh.scan.timeout-ms:30000}")
+    private long timeoutMs = 30_000;
 
     /**
      * 规则清单：只收误报极低的特征。
@@ -95,9 +107,9 @@ public class ArtifactScanner {
         if (error != null) {
             return new ScanResult("error", findings, error, duration);
         }
-        if (duration > TIMEOUT_MS) {
+        if (duration > timeoutMs) {
             return new ScanResult("error", findings,
-                "扫描超过 " + TIMEOUT_MS + "ms，按未完成处理", duration);
+                "扫描超过 " + timeoutMs + "ms，按未完成处理", duration);
         }
         boolean blocking = false;
         StringBuilder summary = new StringBuilder();
@@ -126,8 +138,8 @@ public class ArtifactScanner {
                     continue;
                 }
                 files++;
-                if (files > MAX_FILES) {
-                    return "文件数超过上限 " + MAX_FILES;
+                if (files > maxFiles) {
+                    return "文件数超过上限 " + maxFiles;
                 }
                 String path = entry.getName();
                 if (path.startsWith("/") || path.contains("..")) {
@@ -135,10 +147,10 @@ public class ArtifactScanner {
                         "制品里出现越界路径，不该发到云端"));
                     continue;
                 }
-                byte[] data = readEntry(zip, MAX_FILE_BYTES, path);
+                byte[] data = readEntry(zip, maxFileBytes, path);
                 total += data.length;
-                if (total > MAX_TOTAL_BYTES) {
-                    return "制品总大小超过上限 " + MAX_TOTAL_BYTES;
+                if (total > maxTotalBytes) {
+                    return "制品总大小超过上限 " + maxTotalBytes;
                 }
                 scanContent(path, data, findings);
             }

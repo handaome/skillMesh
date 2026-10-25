@@ -67,6 +67,18 @@ async function download(version: SkillVersion) {
   }
 }
 
+/** 版本状态的读法。与「我的 Skill」页同一份词表。 */
+function versionStatusText(status: string): string {
+  if (status === 'draft') return '草稿'
+  if (status === 'scanning') return '扫描中'
+  if (status === 'pending_review') return '待审核'
+  if (status === 'published') return '已发布'
+  if (status === 'rejected') return '已拒绝'
+  if (status === 'quarantined') return '已隔离'
+  if (status === 'revoked') return '已撤回'
+  return status
+}
+
 /** 扫描结论的读法。服务端给的是状态词，这里翻成人话。 */
 function scanText(status: string): string {
   if (status === 'passed') return '通过'
@@ -218,7 +230,7 @@ onMounted(search)
           <tbody>
             <tr v-for="version in versions" :key="version.id">
               <td class="sm-mono">{{ version.version }}</td>
-              <td>{{ version.status }}</td>
+              <td>{{ versionStatusText(version.status) }}</td>
               <td>{{ version.channel }}</td>
               <td>
                 <span

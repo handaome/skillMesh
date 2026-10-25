@@ -55,6 +55,9 @@ bash infra/scripts/smoke.sh         # 健康检查，四项全 OK 才继续
 
 停止：`bash infra/scripts/stop.sh`（`stop.sh minio` / `stop.sh keycloak` 可只停一个）。
 
+备份：`bash infra/scripts/backup.sh <备份目录>`——应用起不来时也能跑（绕开 Flyway 校验），
+定期备份用 cron 调它，见[部署文档](docs/部署与排障.md)。
+
 > 整套用容器跑（自带 PostgreSQL）见 [Docker Compose 路线](docs/部署与排障.md#docker-compose-路线)。两条路线抢同一批端口，不能同时开。
 
 Keycloak 首次启动会导入 `infra/keycloak/realm-skillmesh.json`，其中含 `dev-user` / `dev` 与两个客户端：

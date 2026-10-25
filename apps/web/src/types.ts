@@ -100,7 +100,7 @@ export interface EditFileResult {
   version: string
   file_count: number
   sha256: string
-  /** published / pending_review / rejected。 */
+  /** published / pending_review / rejected / quarantined。 */
   status: string
 }
 
@@ -192,7 +192,7 @@ export interface PendingReview {
   submitted_at: string | null
   scan: ReviewScan
   source: ReviewSource
-  /** 版本自己的状态：draft / scanning / pending_review / published / rejected。 */
+  /** 版本自己的状态：draft / scanning / pending_review / published / rejected / quarantined。 */
   status: string
 }
 

@@ -20,6 +20,7 @@ const ACTION_TEXT: Record<string, string> = {
   'access.denied': '访问被拒',
   'skill.publish': '发布版本',
   'skill.publish_rejected': '发布被拒',
+  'skill.publish_quarantined': '发布被隔离',
   'skill.submit_for_review': '提交审核',
   'version.approve': '审核放行',
   'version.reject': '审核拒绝',

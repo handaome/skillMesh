@@ -410,7 +410,7 @@ verify:
 ### 诊断
 
 ```bash
-./skillmesh.exe doctor        # 服务端地址、配置目录、git 是否可用、登录状态、各 Agent 目录是否存在
+./skillmesh.exe doctor        # 服务端地址、配置目录、git 是否可用、登录状态、各 Agent 目录能不能写
 ./skillmesh.exe agents detect  # 各 Agent 的用户级/项目级目录表格
 ```
 
