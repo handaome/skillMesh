@@ -38,6 +38,13 @@ type LockedSkill struct {
 	Scope          string   `yaml:"scope,omitempty"`
 	UpdatePolicy   string   `yaml:"update_policy,omitempty"`
 	Agents         []string `yaml:"agents"`
+	// TargetPath 是实际装到哪。记下来是因为 Agent 目录会变：
+	// 改了 config 里的路径，按配置重算出来的位置与当初装的对不上，
+	// 卸载就会卸错地方（设计文档 §9.1 要求锁文件记「目标路径」）。
+	TargetPath string `yaml:"target_path,omitempty"`
+	// License 是识别到的许可证及识别状态（设计文档 §7.1）。
+	// 只能重新分发不等于一定能分发，识别结果只是线索。
+	License string `yaml:"license,omitempty"`
 }
 
 func Path(projectRoot string) string {

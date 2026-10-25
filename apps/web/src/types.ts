@@ -47,6 +47,23 @@ export interface SkillVersion {
   artifact: ArtifactSummary | null
   published_at: string | null
   created_at: string
+  /** 最近一次扫描结论：装之前给用户看的风险来源（设计文档 §4「来源与风险展示」）。 */
+  scan: ScanSummary | null
+}
+
+/** 扫描结论。 */
+export interface ScanSummary {
+  scanner_name: string
+  scanner_version: string
+  status: string
+  summary: string
+  completed_at: string | null
+  findings: {
+    path: string
+    line: number
+    rule: string
+    detail: string
+  }[]
 }
 
 export interface VersionPage {
@@ -205,4 +222,24 @@ export interface ReviewDetail {
     truncated: boolean
     files: FileChange[]
   }
+}
+
+/** 一条审计事件（设计文档 §4 审计）。 */
+export interface AuditEvent {
+  occurred_at: string
+  action: string
+  target_type: string
+  target_id: string | null
+  outcome: 'success' | 'denied' | 'failure'
+  details: Record<string, unknown>
+}
+
+/** 回收站里被删掉的文件（设计文档 §6.4：软删除、回收期内能找回）。 */
+export interface RecycleFile {
+  path: string
+  sha256: string
+  size_bytes: number
+  source_version: string
+  created_at: string
+  expires_at: string
 }

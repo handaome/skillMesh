@@ -10,6 +10,7 @@ import {
   listTeamMembers,
   listTeams,
   revokeInvitation,
+  updateMemberStatus,
   updateOrgRole,
   updateTeamRole,
 } from '../api'
@@ -276,6 +277,25 @@ async function changeRole(member: Member, role: string) {
 }
 
 /**
+ * 禁用或启用一个成员。
+ *
+ * 只在组织层有这回事：团队角色管不了账号状态。
+ * 禁用的是账号而不是移出花名册——人还在，恢复后不用重新邀请。
+ */
+async function toggleMemberStatus(member: Member) {
+  if (!org.value) return
+  memberError.value = ''
+  const next = member.status === 'disabled' ? 'active' : 'disabled'
+  try {
+    await updateMemberStatus(org.value.id, member.user_id, next)
+  } catch (e) {
+    memberError.value = errorText(e)
+    return
+  }
+  await refreshMembers()
+}
+
+/**
  * 建组织。组织只能被邀请进，但自己也能建——建完组织列表要重拉：
  * 顶栏与团队页都从 session.organizations 算出来的（currentOrg 是它的 computed）。
  */
@@ -458,6 +478,7 @@ onMounted(load)
                 <th>成员</th>
                 <th>邮箱</th>
                 <th>{{ roleScopeLabel }}</th>
+                <th v-if="!selectedTeam">账号</th>
                 <th class="sm-num">加入时间</th>
               </tr>
             </thead>
@@ -486,6 +507,15 @@ onMounted(load)
                       {{ role }}
                     </option>
                   </select>
+                </td>
+                <td v-if="!selectedTeam">
+                  <button
+                    class="sm-btn sm-btn--quiet sm-btn--sm"
+                    data-test="member-status-toggle"
+                    @click="toggleMemberStatus(member)"
+                  >
+                    {{ member.status === 'disabled' ? '启用' : '禁用' }}
+                  </button>
                 </td>
                 <td class="sm-num sm-muted sm-cell-sub">
                   加入于 {{ member.joined_at.slice(0, 10) }}

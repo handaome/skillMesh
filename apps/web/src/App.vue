@@ -24,6 +24,7 @@ const NAV = [
   { to: '/mine', label: '我的 Skill', icon: 'box' as const },
   { to: '/team', label: '团队', icon: 'users' as const },
   { to: '/reviews', label: '审核', icon: 'review' as const },
+  { to: '/audit', label: '审计', icon: 'audit' as const },
 ]
 
 /**

@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	stagingPrefix = ".skillmesh-staging-"
-	backupSuffix  = ".skillmesh-backup"
+	StagingPrefix = ".skillmesh-staging-"
+	BackupSuffix  = ".skillmesh-backup"
 	markerFile    = ".skillmesh-install"
 )
 
@@ -27,20 +27,20 @@ func InstallAtomic(src, target string, requireSkillMd bool) error {
 		return err
 	}
 
-	staging, err := os.MkdirTemp(parent, stagingPrefix)
+	staging, err := os.MkdirTemp(parent, StagingPrefix)
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(staging)
 
 	stagedTarget := filepath.Join(staging, filepath.Base(target))
-	if err := copyTree(src, stagedTarget); err != nil {
+	if err := CopyTree(src, stagedTarget); err != nil {
 		return fmt.Errorf("复制到暂存目录失败: %w", err)
 	}
 
 	backup := ""
 	if _, err := os.Stat(target); err == nil {
-		backup = target + backupSuffix
+		backup = target + BackupSuffix
 		os.RemoveAll(backup)
 		if err := os.Rename(target, backup); err != nil {
 			return fmt.Errorf("备份现有安装失败: %w", err)
@@ -59,7 +59,7 @@ func InstallAtomic(src, target string, requireSkillMd bool) error {
 	return nil
 }
 
-func copyTree(src, dst string) error {
+func CopyTree(src, dst string) error {
 	return filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err

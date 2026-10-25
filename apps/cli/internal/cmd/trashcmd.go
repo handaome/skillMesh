@@ -27,7 +27,7 @@ func trashListCmd() *cobra.Command {
 		Short: "看回收站里有什么",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			items, err := trash.NewStore(cfg.ConfigDir).Items()
+			items, err := trash.NewStore(Cfg.ConfigDir).Items()
 			if err != nil {
 				return err
 			}
@@ -52,7 +52,7 @@ func trashRestoreCmd() *cobra.Command {
 		Short: "把回收站里的东西放回去",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if err := trash.NewStore(cfg.ConfigDir).Restore(args[0], args[1]); err != nil {
+			if err := trash.NewStore(Cfg.ConfigDir).Restore(args[0], args[1]); err != nil {
 				return err
 			}
 			fmt.Printf("已还原到 %s\n", args[1])
@@ -68,7 +68,7 @@ func trashPurgeCmd() *cobra.Command {
 		Short: "清掉超过保留期的条目",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			removed, err := trash.NewStore(cfg.ConfigDir).Purge(days)
+			removed, err := trash.NewStore(Cfg.ConfigDir).Purge(days)
 			if err != nil {
 				return err
 			}

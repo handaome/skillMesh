@@ -36,7 +36,7 @@ func newRestoreCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			wanted := pickBySlug(skills, args)
+			wanted := PickBySlug(skills, args)
 			if len(wanted) == 0 {
 				fmt.Println("个人空间里没有可恢复的 Skill（要先 publish/sync 过）。")
 				return nil
@@ -76,8 +76,8 @@ func mySkills(ctx context.Context, client *apiclient.Client) ([]apiclient.Skill,
 	}
 }
 
-// pickBySlug 按名字挑；不给名字就是全要。
-func pickBySlug(skills []apiclient.Skill, slugs []string) []apiclient.Skill {
+// PickBySlug 按名字挑；不给名字就是全要。
+func PickBySlug(skills []apiclient.Skill, slugs []string) []apiclient.Skill {
 	if len(slugs) == 0 {
 		return skills
 	}
@@ -127,7 +127,7 @@ func restoreOne(ctx context.Context, client *apiclient.Client, projectRoot strin
 	if err != nil {
 		return "", "", err
 	}
-	target, err := pickVersion(versions, "", false, lockfile.LockedSkill{}, false)
+	target, err := PickVersion(versions, "", false, lockfile.LockedSkill{}, false)
 	if err != nil {
 		// 一个还没发过版的 Skill 不该让整批恢复失败。
 		return "跳过", err.Error(), nil
@@ -154,10 +154,10 @@ func reportRestore(results []restoreResult) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	failed := counts["失败"]
-	fmt.Printf("\n已恢复 %d，跳过 %d，失败 %d\n", counts["已恢复"], counts["跳过"], failed)
-	if failed > 0 {
-		return fmt.Errorf("%d 个恢复失败", failed)
+	Failed := counts["失败"]
+	fmt.Printf("\n已恢复 %d，跳过 %d，失败 %d\n", counts["已恢复"], counts["跳过"], Failed)
+	if Failed > 0 {
+		return fmt.Errorf("%d 个恢复失败", Failed)
 	}
 	return nil
 }

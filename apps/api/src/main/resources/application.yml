@@ -2,9 +2,7 @@ spring:
   application:
     name: skillmesh-api
   config:
-    # 从仓库根的 .env 读凭据。.env 是 KEY=VALUE 格式，与 properties 兼容；
-    # 显式指定 [.properties] 否则 Spring 会因扩展名不认识而报错。
-    import: "optional:file:../../.env[.properties]"
+    import: "optional:file:./.env[.properties],optional:file:../../.env[.properties]"
   datasource:
     url: ${SM_DB_URL}
     username: ${SM_DB_USER}
@@ -23,9 +21,6 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          # issuer-uri 会连带做 iss 校验。容器内外 issuer 天然不一致
-          # （容器里的 127.0.0.1 指自己），所以 compose 里改用 jwk-set-uri：
-          # 只验签名，不校验 iss。两个都空则没有 JwtDecoder，启动会失败。
           issuer-uri: ${SM_KEYCLOAK_ISSUER:}
           jwk-set-uri: ${SM_KEYCLOAK_JWK_SET_URI:}
 
@@ -41,13 +36,8 @@ skillmesh:
     access-key: ${SM_MINIO_ACCESS_KEY}
     secret-key: ${SM_MINIO_SECRET_KEY}
     bucket: ${SM_MINIO_BUCKET}
-    # 临时对象（上传会话的中间产物）几天后由对象存储自动清掉。
-    # 会话 30 分钟就过期，但对象不会自己消失——没人收就一直涨。
     temp-expire-days: ${SM_MINIO_TEMP_EXPIRE_DAYS:1}
   oidc:
-    # 网页端登录要用的公开配置：issuer 与 client_id。
-    # 写死在控制台源码里的话，换企业 IdP 就得改代码重新打包——
-    # 部署文档写的是「只认 OIDC issuer，代码不用改」。
     issuer: ${SM_OIDC_ISSUER:${SM_KEYCLOAK_ISSUER:}}
     client-id: ${SM_OIDC_CLIENT_ID:skillmesh-cli}
   web:

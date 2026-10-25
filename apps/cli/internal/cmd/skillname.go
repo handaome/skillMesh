@@ -14,14 +14,14 @@ import (
 // 它会拼进 Agent 目录的路径里，不校验就等于让发布方决定往哪写。
 func skillDirName(dir string) (string, error) {
 	name := skillscan.SkillName(dir)
-	if err := checkDirName(name); err != nil {
+	if err := CheckDirName(name); err != nil {
 		return "", err
 	}
 	return name, nil
 }
 
-// checkDirName 名字必须是单个路径段：不含分隔符、不含 ..、不是绝对路径。
-func checkDirName(name string) error {
+// CheckDirName 名字必须是单个路径段：不含分隔符、不含 ..、不是绝对路径。
+func CheckDirName(name string) error {
 	if name == "" {
 		return fmt.Errorf("Skill 名字为空")
 	}

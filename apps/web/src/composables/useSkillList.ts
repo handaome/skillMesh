@@ -2,8 +2,17 @@ import { computed, ref } from 'vue'
 import { ApiError } from '../api'
 import type { Skill, SkillPage } from '../types'
 
-/** 取一页：cursor 非空就是接着上一页往后取。 */
-export type SkillPageFetcher = (q: string, cursor?: string) => Promise<SkillPage>
+/**
+ * 取一页：cursor 非空就是接着上一页往后取。
+ *
+ * filters 是额外的筛选条件（可见性、标签……）：市场页按可见性筛，
+ * 「我的 Skill」页不用。
+ */
+export type SkillPageFilters = Record<string, string>
+
+export type SkillPageFetcher = (
+  q: string, cursor?: string, filters?: SkillPageFilters,
+) => Promise<SkillPage>
 
 function errorText(e: unknown): string {
   return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
@@ -26,14 +35,17 @@ export function useSkillList(fetchPage: SkillPageFetcher) {
   const hasMore = ref(false)
   /** 最近一次请求用的查询词。响应回来时词已经变了，这份结果就丢掉。 */
   let current = ''
+  /** 最近一次请求用的筛选条件。同理：变了就丢掉这份结果。 */
+  let currentFilters: SkillPageFilters = {}
 
   /** 重新取第一页，替换掉现有的。 */
-  async function load(q: string) {
+  async function load(q: string, filters: SkillPageFilters = {}) {
     current = q
+    currentFilters = filters
     loading.value = true
     error.value = ''
     try {
-      const page = await fetchPage(q)
+      const page = await fetchPage(q, undefined, filters)
       if (current !== q) return
       items.value = page.items
       nextCursor.value = page.next_cursor
@@ -54,7 +66,7 @@ export function useSkillList(fetchPage: SkillPageFetcher) {
     const q = current
     loadingMore.value = true
     try {
-      const page = await fetchPage(q, cursor)
+      const page = await fetchPage(q, cursor, currentFilters)
       if (current !== q) return
       items.value = [...items.value, ...page.items]
       nextCursor.value = page.next_cursor

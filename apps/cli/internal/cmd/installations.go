@@ -36,7 +36,7 @@ func newInstallationsCmd() *cobra.Command {
 				return err
 			}
 			if check {
-				rows, notes := checkInstallations(cmd.Context(), client, rows)
+				rows, notes := CheckInstallations(cmd.Context(), client, rows)
 				for _, note := range notes {
 					fmt.Println(note)
 				}

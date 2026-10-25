@@ -29,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,11 +50,13 @@ public class UploadService {
     private final SigningService signing;
     private final ReviewService review;
     private final RecycleService recycle;
+    private final JdbcTemplate jdbc;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
                          SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
                          ArtifactScanService scanService, AuditService audit,
-                         SigningService signing, ReviewService review, RecycleService recycle) {
+                         SigningService signing, ReviewService review, RecycleService recycle,
+                         JdbcTemplate jdbc) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
@@ -64,6 +67,35 @@ public class UploadService {
         this.signing = signing;
         this.review = review;
         this.recycle = recycle;
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * 把 latest_version 推到更大的那个版本。
+     *
+     * 用 JdbcTemplate 直接读写，**不经过 Hibernate 实体**：
+     * Skill 实体可能已被懒加载进持久化上下文，`findByIdForUpdate` 返回的是
+     * 一级缓存里的旧实例（SQL 根本没执行），两个并发发布就各读各的旧值，
+     * 后写的把 latest 顶回旧版本——「最新版本」退回旧的一版。
+     *
+     * 这里读的是数据库里此刻的值，比的是 semver。
+     * Skill 行在 complete 开头已经锁住（先 Skill 行、后版本行），这里不再重复加锁。
+     */
+    private void advanceLatestVersion(UUID skillId, String version, OffsetDateTime now) {
+        // 不带 for update：这一行在 complete 开头已经锁住了（先 Skill 行、
+        // 后版本行，全局同一顺序）。这里再锁一次会与并发发布构成死锁环。
+        List<String> current = jdbc.query(
+            "select latest_version from skills where id = ?",
+            (rs, rowNum) -> rs.getString(1), skillId);
+        if (current.isEmpty()) {
+            return;
+        }
+        // latest_version 取版本号较大者：发一版旧的不能把 latest 顶回去。
+        if (!VersionOrder.isGreater(version, current.get(0))) {
+            return;
+        }
+        jdbc.update("update skills set latest_version = ?, updated_at = ? where id = ?",
+            version, now, skillId);
     }
 
     @Transactional
@@ -91,6 +123,16 @@ public class UploadService {
             return completeSyncFile(session, now);
         }
 
+        // 锁的顺序全局统一：**先 Skill 行、后版本行**。
+        // 建版本（SkillVersionService.create）也是这个顺序——两条路径一致才不会死锁。
+        // 反过来（先版本行后 Skill 行）时，两个并发发布各持一半，锁成环。
+        //
+        // 先把版本读出来拿 skill_id（不锁），锁住 Skill 行之后再锁版本行。
+        // 后面改 latest_version 时直接用这个锁：最新值要用数据库里此刻的值
+        // （JdbcTemplate 读，不走 Hibernate 的一级缓存），不能拿实体里的旧值。
+        SkillVersionEntity unlocked = versions.findById(session.getSkillVersionId())
+            .orElseThrow(() -> ApiException.notFound("版本"));
+        skills.findByIdForUpdate(unlocked.getSkillId());
         SkillVersionEntity version = versions.findByIdForUpdate(session.getSkillVersionId())
             .orElseThrow(() -> ApiException.notFound("版本"));
         // 撤回不可逆：撤回了的版本不能再被上传会话转成已发布或待审。
@@ -158,14 +200,7 @@ public class UploadService {
         if ("published".equals(version.getStatus())) {
             // 锁住这一行再改 latest_version：不锁的话两个并发发布会各读各的，
             // 后写的把先写的顶掉，latest 就退回了旧版本。
-            skills.findByIdForUpdate(version.getSkillId()).ifPresent(skill -> {
-                // latest_version 取版本号较大者：发一版旧的不能把 latest 顶回去。
-                if (VersionOrder.isGreater(version.getVersion(), skill.getLatestVersion())) {
-                    skill.setLatestVersion(version.getVersion());
-                }
-                skill.setUpdatedAt(now);
-                skills.save(skill);
-            });
+            advanceLatestVersion(version.getSkillId(), version.getVersion(), now);
             // 这一版比上一版少的文件进回收站（设计文档 §6.4）：
             // 删掉不是抹掉，回收期内能找回来。
             recycle.recordRemoved(version.getSkillId(), version.getVersion());
@@ -209,6 +244,8 @@ public class UploadService {
         if (expected == null || expected.isBlank()) {
             return;
         }
+        // complete 开头已经锁过这一行；这里再锁一次是同事务重复加锁，立即返回。
+        // 留着是为了这个方法自洽——它不依赖调用方已经持锁。
         skills.findByIdForUpdate(version.getSkillId());
         String cloud = PublishedDigest.of(
             versions.findBySkillIdOrderByCreatedAtDescThenId(version.getSkillId()));

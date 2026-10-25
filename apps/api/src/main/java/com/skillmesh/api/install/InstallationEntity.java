@@ -20,7 +20,7 @@ public class InstallationEntity {
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
-    @Column(name = "device_id")
+    @Column(name = "device_id", nullable = false)
     private UUID deviceId;
 
     @Column(name = "skill_id", nullable = false)

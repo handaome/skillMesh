@@ -10,6 +10,7 @@ const router = createRouter({
     { path: '/mine', component: () => import('./pages/MySkillsPage.vue') },
     { path: '/team', component: () => import('./pages/TeamPage.vue') },
     { path: '/reviews', component: () => import('./pages/ReviewQueuePage.vue') },
+    { path: '/audit', component: () => import('./pages/AuditPage.vue') },
     { path: '/reviews/:skillId/:version', component: () => import('./pages/ReviewDetailPage.vue') },
   ],
 })

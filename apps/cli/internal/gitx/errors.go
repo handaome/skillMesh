@@ -17,7 +17,7 @@ var networkMarkers = []string{
 	"could not resolve hostname",
 	"connection timed out",
 	"operation timed out",
-	"failed to connect",
+	"Failed to connect",
 	"unable to connect",
 	"network is unreachable",
 	"empty reply from server",
@@ -31,18 +31,18 @@ const proxyHint = `如果这台机器访问 GitHub 受限，给 git 配一个代
   git config --global https.proxy http://127.0.0.1:7890
 （Clash for Windows 默认 7890，v2rayN 常见 10809；换成你自己实际用的端口）`
 
-// gitError 组装 git 失败的信息。网络类失败附上代理提示。
-func gitError(args []string, err error, output string) error {
+// GitError 组装 git 失败的信息。网络类失败附上代理提示。
+func GitError(args []string, err error, output string) error {
 	trimmed := strings.TrimSpace(output)
 	message := fmt.Errorf("git %s 失败: %w\n%s",
 		strings.Join(args, " "), err, trimmed)
-	if isNetworkFailure(trimmed) {
+	if IsNetworkFailure(trimmed) {
 		return fmt.Errorf("%w\n\n%s", message, proxyHint)
 	}
 	return message
 }
 
-func isNetworkFailure(output string) bool {
+func IsNetworkFailure(output string) bool {
 	lower := strings.ToLower(output)
 	for _, marker := range networkMarkers {
 		if strings.Contains(lower, strings.ToLower(marker)) {

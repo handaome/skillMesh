@@ -11,8 +11,8 @@ var roleRank = map[string]int{
 	"viewer":    5,
 }
 
-// roleAtLeast 判断实际角色是否达到要求。
-func roleAtLeast(actual, required string) bool {
+// RoleAtLeast 判断实际角色是否达到要求。
+func RoleAtLeast(actual, required string) bool {
 	have, ok := roleRank[actual]
 	if !ok {
 		return false

@@ -35,17 +35,17 @@ type syncOutcome string
 
 const (
 	synced     syncOutcome = "已同步"
-	skipped    syncOutcome = "无变化"
-	uploaded   syncOutcome = "新版本"
+	Skipped    syncOutcome = "无变化"
+	Uploaded   syncOutcome = "新版本"
 	fetched    syncOutcome = "已拉取"
-	conflicted syncOutcome = "冲突"
-	// pendingDelete 本地删掉了文件，等用户确认再往云端传播。
-	pendingDelete syncOutcome = "待确认"
-	failed        syncOutcome = "失败"
+	Conflicted syncOutcome = "冲突"
+	// PendingDelete 本地删掉了文件，等用户确认再往云端传播。
+	PendingDelete syncOutcome = "待确认"
+	Failed        syncOutcome = "失败"
 )
 
-// syncOptions 是一次同步的可调项。
-type syncOptions struct {
+// SyncOptions 是一次同步的可调项。
+type SyncOptions struct {
 	Agents    []string
 	Only      string // --skill，只同步这一个
 	Direction string // upload / download / both
@@ -59,7 +59,7 @@ type syncOptions struct {
 }
 
 func newSyncCmd() *cobra.Command {
-	options := syncOptions{}
+	options := SyncOptions{}
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "把本地 Agent 目录里的 Skill 与个人私有空间对账",
@@ -112,8 +112,8 @@ type syncResult struct {
 	Detail  string
 }
 
-func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.Queue, error) {
-	targets, err := syncTargets(options)
+func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.Queue, error) {
+	targets, err := SyncTargets(options)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
@@ -121,11 +121,11 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
-	state, err := syncstate.Load(cfg.ConfigDir)
+	state, err := syncstate.Load(Cfg.ConfigDir)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
-	queue, err := syncqueue.Load(cfg.ConfigDir)
+	queue, err := syncqueue.Load(Cfg.ConfigDir)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
@@ -134,39 +134,39 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 	var results []syncResult
 	// 同一份内容可能同时出现在多个位置：多个 Agent 目录、符号链接目录、
 	// 甚至是某个 Skill 内部的嵌套子 Skill。按内容摘要去重，只同步一次。
-	uploaded := map[string]string{}
+	Uploaded := map[string]string{}
 	for i, target := range targets {
 		progressStart(i+1, len(targets), target.Name)
 		started := time.Now()
 		digest, digestErr := skillscan.DirDigest(target.Path)
 		if digestErr == nil {
-			if first, seen := uploaded[digest]; seen {
+			if first, seen := Uploaded[digest]; seen {
 				detail := "与 " + first + " 内容一致，已同步过，跳过"
 				results = append(results, syncResult{Name: target.Name, Path: target.Path,
-					Outcome: skipped, Detail: detail})
-				progressDone(string(skipped)+"："+detail, time.Since(started))
+					Outcome: Skipped, Detail: detail})
+				progressDone(string(Skipped)+"："+detail, time.Since(started))
 				continue
 			}
-			uploaded[digest] = target.Name
+			Uploaded[digest] = target.Name
 		}
 		result, entry, err := syncOne(ctx, client, target, options)
 		if err != nil {
 			results = append(results, failedResult(target, err.Error()))
-			progressDone(string(failed)+"："+oneLine(err.Error()), time.Since(started))
+			progressDone(string(Failed)+"："+oneLine(err.Error()), time.Since(started))
 			continue
 		}
 		progressDone(progressText(result, options.DryRun), time.Since(started))
-		if result.Outcome == failed || result.Outcome == conflicted {
+		if result.Outcome == Failed || result.Outcome == Conflicted {
 			// 没同步成的不算数，别把后面同内容的也一起挡掉
-			delete(uploaded, digest)
+			delete(Uploaded, digest)
 		}
-		if result.Outcome == failed && !options.DryRun {
+		if result.Outcome == Failed && !options.DryRun {
 			// 只有网络类失败才值得重试；校验不通过重试一百次也一样。
 			if isTransient(result.Detail) {
 				queue.Record(target.Name, target.Agent, target.Path, result.Detail)
 			}
 		}
-		if result.Outcome != failed && !options.DryRun {
+		if result.Outcome != Failed && !options.DryRun {
 			queue.Clear(target.Name, target.Agent)
 		}
 		// entry 为空表示这次没同步过（冲突没解决），基线不动。
@@ -176,10 +176,10 @@ func runSync(ctx context.Context, options syncOptions) ([]syncResult, syncqueue.
 		results = append(results, result)
 	}
 	if !options.DryRun {
-		if err := state.Save(cfg.ConfigDir); err != nil {
+		if err := state.Save(Cfg.ConfigDir); err != nil {
 			return results, queue, err
 		}
-		if err := queue.Save(cfg.ConfigDir); err != nil {
+		if err := queue.Save(Cfg.ConfigDir); err != nil {
 			return results, queue, err
 		}
 	}
@@ -207,8 +207,8 @@ func progressText(result syncResult, dryRun bool) string {
 	switch {
 	case dryRun:
 		return "演练：" + oneLine(result.Detail)
-	case result.Outcome == failed || result.Outcome == conflicted ||
-		result.Outcome == pendingDelete:
+	case result.Outcome == Failed || result.Outcome == Conflicted ||
+		result.Outcome == PendingDelete:
 		return string(result.Outcome) + "：" + oneLine(result.Detail)
 	default:
 		return string(result.Outcome)
@@ -231,7 +231,7 @@ func queueKey(name, agentName string) string {
 // filterByBackoff 按退避时间安排任务：
 //   - 默认：还在退避期内的先不碰，避免网络不通时每次运行都硬撞一遍
 //   - --retry-only：只留下队列里到点且没放弃的任务
-func filterByBackoff(targets []syncTarget, queue syncqueue.Queue, options syncOptions) []syncTarget {
+func filterByBackoff(targets []SyncTarget, queue syncqueue.Queue, options SyncOptions) []SyncTarget {
 	pending := map[string]syncqueue.Entry{}
 	for _, entry := range queue.Pending() {
 		pending[queueKey(entry.Name, entry.Agent)] = entry
@@ -240,7 +240,7 @@ func filterByBackoff(targets []syncTarget, queue syncqueue.Queue, options syncOp
 		return nil
 	}
 	now := time.Now()
-	kept := make([]syncTarget, 0, len(targets))
+	kept := make([]SyncTarget, 0, len(targets))
 	for _, target := range targets {
 		entry, queued := pending[queueKey(target.Name, target.Agent)]
 		if options.RetryOnly {
@@ -272,8 +272,8 @@ func isTransient(detail string) bool {
 	return false
 }
 
-// syncTarget 是一个待对账的 Skill。
-type syncTarget struct {
+// SyncTarget 是一个待对账的 Skill。
+type SyncTarget struct {
 	Name     string
 	Agent    string
 	Path     string
@@ -288,39 +288,52 @@ type syncTarget struct {
 	BaseSnapshot string
 }
 
-// syncTargets 列出所有要处理的 Skill，并带上各自的基线。
-func syncTargets(options syncOptions) ([]syncTarget, error) {
-	state, err := syncstate.Load(cfg.ConfigDir)
+// SyncTargets 列出所有要处理的 Skill，并带上各自的基线。
+func SyncTargets(options SyncOptions) ([]SyncTarget, error) {
+	state, err := syncstate.Load(Cfg.ConfigDir)
 	if err != nil {
 		return nil, err
 	}
-	var targets []syncTarget
+	var targets []SyncTarget
 	for _, agentName := range syncAgentNames(options.Agents) {
-		dir, err := agent.Dir(cfg, agentName, "user", "")
+		dir, err := agent.Dir(Cfg, agentName, "user", "")
 		if err != nil {
 			return nil, err
 		}
-		for _, path := range localSkills(dir) {
-			name := skillscan.SkillName(path)
-			if options.Only != "" && name != options.Only {
-				continue
-			}
-			// 第一次看到就先记一笔，但不等于收编——收编由同步本身决定
-			entry, known := state.Find(name, agentName)
-			if !known {
-				entry = state.Discover(name, agentName)
-			}
-			if options.SkipNew && state.New(name, agentName) {
-				continue
-			}
-			targets = append(targets, syncTarget{
-				Name: name, Agent: agentName, Path: path,
-				BaseHash: entry.BaseHash, SkillID: entry.SkillID,
-				BaseFiles: entry.BaseFiles, BaseSnapshot: entry.BaseSnapshot,
-			})
-		}
+		targets = append(targets, targetsIn(state, dir, agentName, options)...)
+	}
+	// 额外配置的目录：项目级、自定义目录（设计文档 §6.1）。
+	// 它们不属于任何 Agent，用 custom 当标识——同一个 Skill 在
+	// Agent 目录与自定义目录里各有一份时，两份各自记基线。
+	for _, dir := range Cfg.Sync.ExtraDirs {
+		targets = append(targets, targetsIn(state, dir, "custom", options)...)
 	}
 	return targets, nil
+}
+
+// targetsIn 列出一个目录里的 Skill，并带上各自的基线。
+func targetsIn(state syncstate.State, dir, agentName string, options SyncOptions) []SyncTarget {
+	var targets []SyncTarget
+	for _, path := range localSkills(dir) {
+		name := skillscan.SkillName(path)
+		if options.Only != "" && name != options.Only {
+			continue
+		}
+		// 第一次看到就先记一笔，但不等于收编——收编由同步本身决定
+		entry, known := state.Find(name, agentName)
+		if !known {
+			entry = state.Discover(name, agentName)
+		}
+		if options.SkipNew && state.New(name, agentName) {
+			continue
+		}
+		targets = append(targets, SyncTarget{
+			Name: name, Agent: agentName, Path: path,
+			BaseHash: entry.BaseHash, SkillID: entry.SkillID,
+			BaseFiles: entry.BaseFiles, BaseSnapshot: entry.BaseSnapshot,
+		})
+	}
+	return targets
 }
 
 func syncAgentNames(selected []string) []string {
@@ -329,7 +342,7 @@ func syncAgentNames(selected []string) []string {
 	}
 	var names []string
 	for _, name := range agent.Supported {
-		if agentCfg, ok := cfg.Agents[name]; ok && agentCfg.Enabled {
+		if agentCfg, ok := Cfg.Agents[name]; ok && agentCfg.Enabled {
 			names = append(names, name)
 		}
 	}
@@ -353,8 +366,8 @@ func localSkills(dir string) []string {
 }
 
 // syncOne 对账一个 Skill。返回结果，以及同步成功后要写进基线的内容（没变就返回 nil）。
-func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
-	options syncOptions) (syncResult, syncstate.Entry, error) {
+func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
+	options SyncOptions) (syncResult, syncstate.Entry, error) {
 
 	if err := skillscan.ValidateDir(target.Path, skillscan.DefaultLimits); err != nil {
 		return failedResult(target, err.Error()), syncstate.Entry{}, nil
@@ -370,7 +383,7 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 	if err != nil {
 		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
-	localHash := manifestDigest(local.Manifest)
+	localHash := ManifestDigest(local.Manifest)
 	slug, err := skillscan.SlugFromDirName(filepath.Base(target.Path))
 	if err != nil {
 		return failedResult(target, err.Error()), syncstate.Entry{}, nil
@@ -403,12 +416,12 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 		if err != nil {
 			// 只有服务端明确判了冲突才算冲突。服务端自己出错（500/404/403）
 			// 是失败：失败才进重试队列，报成冲突会让用户去 --resolve 白折腾。
-			return outcomeForError(target, err), syncstate.Entry{}, nil
+			return OutcomeForError(target, err), syncstate.Entry{}, nil
 		}
 	}
-	result, entry, err := applyDecision(ctx, client, target, decision, local, localHash,
+	result, entry, err := ApplyDecision(ctx, client, target, decision, local, localHash,
 		skill, found, options)
-	if changeset != "" && result.Outcome == uploaded {
+	if changeset != "" && result.Outcome == Uploaded {
 		result.Detail += "（云端记录 " + short(changeset) + "）"
 	}
 	return result, entry, err
@@ -416,7 +429,7 @@ func syncOne(ctx context.Context, client *apiclient.Client, target syncTarget,
 
 // confirmWithCloud 把这次的基线和本地摘要报给服务端，由它回答还成不成立。
 // 服务端说冲突就以它为准——它看得到别的设备，服务端之间才比得准。
-func confirmWithCloud(ctx context.Context, client *apiclient.Client, target syncTarget,
+func confirmWithCloud(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	local packager.Artifact, localHash string, decision syncstate.Decision,
 	dryRun bool) (string, error) {
 
@@ -436,7 +449,7 @@ func confirmWithCloud(ctx context.Context, client *apiclient.Client, target sync
 	}
 	// 幂等键用「skill + 内容摘要 + 基线」：同样的内容重复提交只会有一条记录。
 	response, err := client.SubmitChangeset(ctx, device,
-		idempotencyKey(target.SkillID, localHash, target.BaseHash),
+		IdempotencyKey(target.SkillID, localHash, target.BaseHash),
 		apiclient.SyncChangesetRequest{
 			SkillID:   target.SkillID,
 			Direction: direction,
@@ -454,28 +467,28 @@ func confirmWithCloud(ctx context.Context, client *apiclient.Client, target sync
 		return "", err
 	}
 	if response.Status == "conflict" {
-		return "", fmt.Errorf("%w（%s），不自动覆盖", errConflict, response.Message)
+		return "", fmt.Errorf("%w（%s），不自动覆盖", ErrConflict, response.Message)
 	}
 	return response.ChangesetID, nil
 }
 
-// errConflict 标记「服务端明确判了冲突」。
+// ErrConflict 标记「服务端明确判了冲突」。
 // 服务端出错与「服务端说冲突」是两回事：前者要重试，后者要人来定夺。
-var errConflict = errors.New("云端已判冲突")
+var ErrConflict = errors.New("云端已判冲突")
 
-// idempotencyKey 拼这次提交的幂等键。
+// IdempotencyKey 拼这次提交的幂等键。
 //
 // 键里必须带 skill id：同一台设备上两个 Skill 的内容摘要与基线可能一模一样
 // （同一份模板装到两个目录），不带 id 服务端会把第二个当重复提交吞掉，
 // 第二个 Skill 的变更集就这么没了。
-func idempotencyKey(skillID, localHash, baseHash string) string {
+func IdempotencyKey(skillID, localHash, baseHash string) string {
 	return skillID + "-" + localHash[:16] + "-" + short(baseHash)
 }
 
-// outcomeForError 把提交变更集时的错误归成同步结果。
-func outcomeForError(target syncTarget, err error) syncResult {
-	if errors.Is(err, errConflict) {
-		return syncResult{Name: target.Name, Path: target.Path, Outcome: conflicted,
+// OutcomeForError 把提交变更集时的错误归成同步结果。
+func OutcomeForError(target SyncTarget, err error) syncResult {
+	if errors.Is(err, ErrConflict) {
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: Conflicted,
 			Detail: err.Error()}
 	}
 	return failedResult(target, err.Error())
@@ -490,10 +503,10 @@ func ensureDevice(ctx context.Context, client *apiclient.Client) (string, error)
 	return device.ID, nil
 }
 
-// applyDecision 按判定结果执行。冲突在没有 --resolve 时只报告不动手。
-func applyDecision(ctx context.Context, client *apiclient.Client, target syncTarget,
+// ApplyDecision 按判定结果执行。冲突在没有 --resolve 时只报告不动手。
+func ApplyDecision(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	decision syncstate.Decision, local packager.Artifact, localHash string,
-	skill apiclient.Skill, found bool, options syncOptions) (syncResult, syncstate.Entry, error) {
+	skill apiclient.Skill, found bool, options SyncOptions) (syncResult, syncstate.Entry, error) {
 
 	// 基线先按上次的状态带过来。这次同步没达成新共识时（方向过滤、冲突挡住），
 	// 基线必须原样保留——写成本地当前内容的话，下一轮会把「本地领先」
@@ -514,19 +527,19 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		// 下一次真冲突时就合不了了（设计文档 §6.3 的按文件合并）。
 		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path,
-			Outcome: skipped, Detail: localHash[:12]}, entry, nil
+			Outcome: Skipped, Detail: localHash[:12]}, entry, nil
 
 	case syncstate.Download:
 		if options.Direction == "upload" {
 			// 本次不拉取：云端领先这个事实没变，基线也不动。
-			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
 				Detail: "云端有更新，本次只上传；要拉取用 --direction download"}, entry, nil
 		}
 		if options.DryRun {
-			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
 				Detail: "将拉取云端版本"}, entry, nil
 		}
-		version, err := downloadInto(ctx, client, target, skill)
+		version, err := DownloadInto(ctx, client, target, skill)
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
@@ -543,7 +556,7 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 	default: // Upload
 		if options.Direction == "download" {
 			// 本次不上传：本地领先这个事实没变，基线也不动。
-			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
 				Detail: "本地有更新，本次只下载"}, entry, nil
 		}
 		if options.DryRun {
@@ -553,23 +566,23 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 				detail = fmt.Sprintf("本地删掉了 %d 个文件（%s），"+
 					"不给 --allow-delete 就不会上传", len(deleted), describeDeletes(deleted))
 			}
-			return syncResult{Name: target.Name, Path: target.Path, Outcome: skipped,
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
 				Detail: detail}, entry, nil
 		}
 		if reason := deleteBlocked(target, local, options); reason != "" {
-			return syncResult{Name: target.Name, Path: target.Path, Outcome: pendingDelete,
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: PendingDelete,
 				Detail: reason}, entry, nil
 		}
-		result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+		result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
 			RelPath: filepath.Base(target.Path)},
-			publishOptions{Visibility: syncVisibility,
+			PublishOptions{Visibility: syncVisibility,
 				ExpectedBaseRevision: baselineOf(target.CloudHash)})
 		if err != nil {
 			// 服务端说基线对不上（409）：云端在这期间被别人动过。
 			// 这不是普通失败，是冲突——要人来重新对账，不能进重试队列。
 			if apiclient.CodeOf(err) == "VERSION_CONFLICT" {
-				return outcomeForError(target,
-					fmt.Errorf("%w：%s", errConflict, err.Error())), syncstate.Entry{}, nil
+				return OutcomeForError(target,
+					fmt.Errorf("%w：%s", ErrConflict, err.Error())), syncstate.Entry{}, nil
 			}
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
@@ -582,7 +595,7 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 		entry.BaseHash = localHash
 		saveBaseline(target, &entry)
 		return syncResult{Name: target.Name, Path: target.Path,
-			Outcome: uploaded, Detail: detail}, entry, nil
+			Outcome: Uploaded, Detail: detail}, entry, nil
 	}
 }
 
@@ -592,7 +605,7 @@ func applyDecision(ctx context.Context, client *apiclient.Client, target syncTar
 // 云端那份就跟着消失了。目录扫不到不该等于云端被删（设计文档 §6.3）。
 // 只在「云端没变」时用：那时基线里的文件云端都还在，本地删了就是真删。
 // 返回非空串表示拦下来了，理由就写在这个串里。
-func deleteBlocked(target syncTarget, local packager.Artifact, options syncOptions) string {
+func deleteBlocked(target SyncTarget, local packager.Artifact, options SyncOptions) string {
 	if options.AllowDelete {
 		return ""
 	}
@@ -637,9 +650,9 @@ func describeDeletes(deleted []string) string {
 
 // resolveConflict 处理两边都改过的情况。
 // 没有 --resolve 就只报告——自动覆盖等于替用户做决定（设计文档 §6.3）。
-func resolveConflict(ctx context.Context, client *apiclient.Client, target syncTarget,
+func resolveConflict(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	local packager.Artifact, localHash string, skill apiclient.Skill,
-	options syncOptions) (syncResult, syncstate.Entry, error) {
+	options SyncOptions) (syncResult, syncstate.Entry, error) {
 
 	entry := syncstate.Entry{Name: target.Name, Agent: target.Agent,
 		BaseHash: target.BaseHash, SkillID: target.SkillID,
@@ -649,9 +662,9 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 
 	switch options.Resolve {
 	case "keep-local":
-		result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+		result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
 			RelPath: filepath.Base(target.Path)},
-			publishOptions{Visibility: syncVisibility})
+			PublishOptions{Visibility: syncVisibility})
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
@@ -659,11 +672,11 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 		entry.LastVersion = result.Version
 		// 本地这份已经上传了：它就是新的共同基线。
 		saveBaseline(target, &entry)
-		return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: Uploaded,
 			Detail: "保留本地，已上传 " + result.Version}, entry, nil
 
 	case "keep-cloud":
-		version, err := downloadInto(ctx, client, target, skill)
+		version, err := DownloadInto(ctx, client, target, skill)
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
@@ -680,40 +693,40 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 		if err := installer.InstallAtomic(target.Path, backup, true); err != nil {
 			return failedResult(target, "备份本地版本失败: "+err.Error()), syncstate.Entry{}, nil
 		}
-		result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+		result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
 			RelPath: filepath.Base(target.Path)},
-			publishOptions{Visibility: syncVisibility})
+			PublishOptions{Visibility: syncVisibility})
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
 		entry.SkillID = result.SkillID
 		entry.LastVersion = result.Version
 		saveBaseline(target, &entry)
-		return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: Uploaded,
 			Detail: fmt.Sprintf("本地版本备份到 %s，云端上传 %s", backup, result.Version)}, entry, nil
 
 	default:
 		// 先按文件合一次（设计文档 §6.3）：两边改的不是同一处就合掉，
 		// 真的合不了才落到「冲突副本，等人来定」。
-		base, _ := syncstate.Load(cfg.ConfigDir)
+		base, _ := syncstate.Load(Cfg.ConfigDir)
 		prior, _ := base.Find(target.Name, target.Agent)
-		ok, note, mergeErr := mergeConflict(ctx, client, target, prior, local, skill)
-		outcome := conflicted
+		ok, note, mergeErr := MergeConflict(ctx, client, target, prior, local, skill)
+		outcome := Conflicted
 		switch {
 		case mergeErr != nil:
 			// 合并失败得说实话：报成「冲突」的话，用户只会去 --resolve 白折腾。
 			hint = "按文件合并失败：" + mergeErr.Error()
-			outcome = failed
+			outcome = Failed
 		case ok:
-			if result, err := publishOne(ctx, client, publishTarget{Dir: target.Path,
+			if result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
 				RelPath: filepath.Base(target.Path)},
-				publishOptions{Visibility: syncVisibility}); err == nil {
+				PublishOptions{Visibility: syncVisibility}); err == nil {
 				entry.SkillID = result.SkillID
 				entry.LastVersion = result.Version
 				// 合并改过本地文件：基线按合并后的内容重算，
 				// 不能记合并前那份摘要。
 				saveBaseline(target, &entry)
-				return syncResult{Name: target.Name, Path: target.Path, Outcome: uploaded,
+				return syncResult{Name: target.Name, Path: target.Path, Outcome: Uploaded,
 					Detail: note + "，已上传 " + result.Version}, entry, nil
 			}
 		case note != "":
@@ -729,15 +742,15 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target syncT
 	}
 }
 
-// downloadInto 把云端最新已发布版本装回本机目录。
-func downloadInto(ctx context.Context, client *apiclient.Client, target syncTarget,
+// DownloadInto 把云端最新已发布版本装回本机目录。
+func DownloadInto(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	skill apiclient.Skill) (string, error) {
 
 	versions, err := client.Versions(ctx, skill.ID)
 	if err != nil {
 		return "", err
 	}
-	selected, err := pickVersion(versions, "", false, lockfileEntry(target), false)
+	selected, err := PickVersion(versions, "", false, lockfileEntry(target), false)
 	if err != nil {
 		return "", err
 	}
@@ -759,7 +772,7 @@ func downloadInto(ctx context.Context, client *apiclient.Client, target syncTarg
 	}
 	// 装之前先验签并核对摘要：下载回来的字节未必是云端那一份。
 	// install 那条路有这道闸，同步这条不能没有——不然换个源就能把别的东西装进 Agent 目录。
-	verdict, err := verifyArtifact(ctx, client, selected, skillDir)
+	verdict, err := VerifyArtifact(ctx, client, selected, skillDir)
 	if err != nil {
 		return "", err
 	}
@@ -780,7 +793,7 @@ func downloadInto(ctx context.Context, client *apiclient.Client, target syncTarg
 	return selected.Version, nil
 }
 
-func lockfileEntry(target syncTarget) lockfile.LockedSkill {
+func lockfileEntry(target SyncTarget) lockfile.LockedSkill {
 	return lockfile.LockedSkill{Name: target.Name, SourceID: target.SkillID}
 }
 
@@ -790,7 +803,7 @@ func lockfileEntry(target syncTarget) lockfile.LockedSkill {
 // 逐文件摘要与副本从磁盘现算——它们描述的是「双方认可的那份内容」，
 // 不是某个人以为的内容。读不出清单就什么也不改：基线宁可旧着，
 // 下次合并会老实说「合不了」，总比拿一份对不上的基线去合强。
-func saveBaseline(target syncTarget, entry *syncstate.Entry) {
+func saveBaseline(target SyncTarget, entry *syncstate.Entry) {
 	files, err := skillscan.DirHashes(target.Path)
 	if err != nil {
 		return
@@ -802,20 +815,20 @@ func saveBaseline(target syncTarget, entry *syncstate.Entry) {
 	entry.BaseFiles = hashes
 	entry.BaseHash = localHashOf(hashes)
 
-	snapshot := filepath.Join(cfg.ConfigDir, "sync-base",
+	snapshot := filepath.Join(Cfg.ConfigDir, "sync-base",
 		filepath.Join(target.Agent, target.Name))
 	if err := os.RemoveAll(snapshot); err != nil {
 		return
 	}
 	// 副本只留一份，目录换掉就行；失败就不给基线，下次合并会老实说「合不了」
-	_ = copyTree(target.Path, snapshot)
+	_ = CopyTree(target.Path, snapshot)
 	if _, err := os.Stat(snapshot); err == nil {
 		entry.BaseSnapshot = snapshot
 	}
 }
 
-// copyTree 复制目录内容（跳过隐藏文件，与打包口径一致）。
-func copyTree(from, to string) error {
+// CopyTree 复制目录内容（跳过隐藏文件，与打包口径一致）。
+func CopyTree(from, to string) error {
 	return filepath.Walk(from, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -849,11 +862,11 @@ func localHashOf(files map[string]string) string {
 	return skillscan.Digest(list)
 }
 
-func failedResult(target syncTarget, why string) syncResult {
-	return syncResult{Name: target.Name, Path: target.Path, Outcome: failed, Detail: why}
+func failedResult(target SyncTarget, why string) syncResult {
+	return syncResult{Name: target.Name, Path: target.Path, Outcome: Failed, Detail: why}
 }
 
-func manifestDigest(entries []packager.Entry) string {
+func ManifestDigest(entries []packager.Entry) string {
 	files := make([]skillscan.FileDigest, 0, len(entries))
 	for _, entry := range entries {
 		files = append(files, skillscan.FileDigest{Path: entry.Path, SHA256: entry.SHA256})
@@ -941,16 +954,16 @@ func reportSync(results []syncResult, queue syncqueue.Queue) error {
 		return err
 	}
 	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，冲突 %d，待确认 %d，失败 %d\n",
-		counts[skipped], counts[uploaded], counts[fetched], counts[conflicted],
-		counts[pendingDelete], counts[failed])
-	if counts[conflicted] > 0 {
-		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[conflicted])
+		counts[Skipped], counts[Uploaded], counts[fetched], counts[Conflicted],
+		counts[PendingDelete], counts[Failed])
+	if counts[Conflicted] > 0 {
+		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[Conflicted])
 	}
-	if counts[pendingDelete] > 0 {
-		return fmt.Errorf("%d 个有本地删除待确认，需要 --allow-delete", counts[pendingDelete])
+	if counts[PendingDelete] > 0 {
+		return fmt.Errorf("%d 个有本地删除待确认，需要 --allow-delete", counts[PendingDelete])
 	}
-	if counts[failed] > 0 {
-		return fmt.Errorf("%d 个同步失败", counts[failed])
+	if counts[Failed] > 0 {
+		return fmt.Errorf("%d 个同步失败", counts[Failed])
 	}
 	return nil
 }

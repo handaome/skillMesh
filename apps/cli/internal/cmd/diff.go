@@ -27,8 +27,8 @@ type fileChange struct {
 	Truncated bool // 差异过大，只报了文件级
 }
 
-// diffTrees 比两个目录树，列出新增、修改、删除的文件。
-func diffTrees(localDir, remoteDir string) ([]fileChange, error) {
+// DiffTrees 比两个目录树，列出新增、修改、删除的文件。
+func DiffTrees(localDir, remoteDir string) ([]fileChange, error) {
 	local, err := skillscan.DirHashes(localDir)
 	if err != nil {
 		return nil, err

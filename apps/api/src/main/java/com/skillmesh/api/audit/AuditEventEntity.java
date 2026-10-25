@@ -42,6 +42,23 @@ public class AuditEventEntity {
     @Column(name = "request_id")
     private String requestId;
 
+    /** 发起这次动作的设备（同步/安装场景下才有）。 */
+    @Column(name = "device_id")
+    private UUID deviceId;
+
+    /**
+     * 来源 IP。审计要能回答「从哪来的」。
+     *
+     * 存文本而不是 PG 的 inet：审计只记录、不拿它做运算，
+     * 而 inet 列在 JDBC 侧没有对应类型，得多带一个驱动依赖。
+     */
+    @Column(name = "ip_address", length = 64)
+    private String ipAddress;
+
+    /** 客户端标识。 */
+    @Column(name = "user_agent")
+    private String userAgent;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "details_json", columnDefinition = "jsonb", nullable = false)
     private Map<String, Object> detailsJson;
@@ -108,6 +125,30 @@ public class AuditEventEntity {
 
     public void setRequestId(String requestId) {
         this.requestId = requestId;
+    }
+
+    public UUID getDeviceId() {
+        return deviceId;
+    }
+
+    public void setDeviceId(UUID deviceId) {
+        this.deviceId = deviceId;
+    }
+
+    public String getIpAddress() {
+        return ipAddress;
+    }
+
+    public void setIpAddress(String ipAddress) {
+        this.ipAddress = ipAddress;
+    }
+
+    public String getUserAgent() {
+        return userAgent;
+    }
+
+    public void setUserAgent(String userAgent) {
+        this.userAgent = userAgent;
     }
 
     public Map<String, Object> getDetailsJson() {

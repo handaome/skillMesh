@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ApiError, getSkill, getVersions, searchSkills } from '../api'
+import { ApiError, downloadArtifact, getSkill, getVersions, searchSkills } from '../api'
 import { useSkillList } from '../composables/useSkillList'
 import type { Skill, SkillVersion } from '../types'
 import { formatDateTime } from '../utils/format'
@@ -13,6 +13,8 @@ const router = useRouter()
 
 const query = ref('')
 const searched = ref(false)
+/** 可见性筛选。空串表示不过滤（看全部能看见的）。 */
+const visibility = ref('')
 
 /** 列表。服务端按游标翻页，超过一页的这里能接着往下取。 */
 const {
@@ -45,6 +47,35 @@ const VISIBILITY_TEXT: Record<string, string> = {
 }
 
 /**
+ * 下载这一版的制品。
+ *
+ * 走服务端的受控下载（先授权再给流），不把带长期权限的地址留在页面上
+ * （设计文档 §12）。
+ */
+async function download(version: SkillVersion) {
+  if (!version.artifact) return
+  try {
+    const blob = await downloadArtifact(version.artifact.id)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${version.skill_id}-${version.version}.zip`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    error.value = errorText(e)
+  }
+}
+
+/** 扫描结论的读法。服务端给的是状态词，这里翻成人话。 */
+function scanText(status: string): string {
+  if (status === 'passed') return '通过'
+  if (status === 'warning') return '有告警'
+  if (status === 'failed') return '未通过'
+  return status
+}
+
+/**
  * 搜索。
  *
  * 响应回来时输入框里的词已经变了，这份结果就丢掉：不丢的话列表显示的是旧词的
@@ -53,7 +84,9 @@ const VISIBILITY_TEXT: Record<string, string> = {
  */
 async function search() {
   const q = query.value
-  await loadPage(q)
+  const filters: Record<string, string> = {}
+  if (visibility.value) filters.visibility = visibility.value
+  await loadPage(q, filters)
   if (query.value !== q || error.value) return
   searched.value = true
 }
@@ -175,6 +208,7 @@ onMounted(search)
               <th>版本</th>
               <th>状态</th>
               <th>通道</th>
+              <th>扫描</th>
               <th>提交</th>
               <th>摘要</th>
               <th class="sm-num">创建时间</th>
@@ -186,6 +220,16 @@ onMounted(search)
               <td class="sm-mono">{{ version.version }}</td>
               <td>{{ version.status }}</td>
               <td>{{ version.channel }}</td>
+              <td>
+                <span
+                  v-if="version.scan"
+                  :class="version.scan.status === 'passed' ? 'sm-pill sm-pill-pos' : 'sm-pill sm-pill-neg'"
+                  :title="version.scan.summary"
+                >
+                  {{ scanText(version.scan.status) }}
+                </span>
+                <span v-else class="sm-muted">未扫描</span>
+              </td>
               <td class="sm-mono sm-break">{{ version.source_commit ?? '—' }}</td>
               <td class="sm-mono">{{ version.artifact?.sha256.slice(0, 12) ?? '—' }}</td>
               <td class="sm-num" data-test="version-time">{{ formatDateTime(version.created_at) }}</td>
@@ -197,6 +241,14 @@ onMounted(search)
                   @click="browseVersion = browseVersion === version.version ? '' : version.version"
                 >
                   {{ browseVersion === version.version ? '收起' : '浏览文件' }}
+                </button>
+                <button
+                  v-if="version.artifact"
+                  class="sm-btn sm-btn--quiet sm-btn--sm"
+                  data-test="download-artifact"
+                  @click="download(version)"
+                >
+                  下载
                 </button>
               </td>
             </tr>
@@ -241,6 +293,22 @@ onMounted(search)
       <button class="sm-btn sm-btn--primary" data-test="search" @click="search">
         搜索
       </button>
+      <!--
+        可见性筛选。服务端支持 visibility 参数（设计文档 §12），
+        页面上不给控件就等于这个能力不存在。
+      -->
+      <select
+        v-model="visibility"
+        class="sm-select"
+        data-test="visibility-filter"
+        @change="search"
+      >
+        <option value="">全部可见性</option>
+        <option value="public">公开</option>
+        <option value="organization">组织可见</option>
+        <option value="team">团队可见</option>
+        <option value="private">私有</option>
+      </select>
       <span class="sm-spacer" />
       <span v-if="searched" class="sm-muted sm-sm sm-num" data-test="count">
         {{ countText }}

@@ -18,7 +18,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
      *
      * 发版要更新 latest_version：不锁的话两个并发发布会各读各的
      * latest_version，后写的把先写的顶掉——latest 退回到旧版本。
-     * 锁的顺序是「先版本行、后 Skill 行」，两条路径一致才不会死锁。
+     * 锁的顺序全局统一为「先 Skill 行、后版本行」，两条路径一致才不会死锁。
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from SkillEntity s where s.id = :id")
@@ -53,7 +53,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
           and (cast(:q as text) is null or lower(s.name) like :q
                or lower(s.slug) like :q or lower(s.description) like :q)
           and (cast(:visibility as text) is null or s.visibility = :visibility)
-          and (cast(:tag as text) is null or :tag = any(s.tags))
+          and (cast(:tag as text) is null or s.tags @> ARRAY[cast(:tag as text)])
           and (not cast(:mine as boolean) or s.owner_user_id = :owner)
           and s.status = 'active'
           and (cast(:cursorTime as timestamptz) is null

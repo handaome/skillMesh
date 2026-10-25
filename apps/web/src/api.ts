@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail, AuditEvent, RecycleFile } from './types'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
 export class ApiError extends Error {
@@ -76,10 +76,15 @@ async function request<T>(
  * 超过 100 条时服务端在 next_cursor 里给出下一页的起点，has_more 说清还有没有——
  * 调用方得把它接上，只拉一页就显示「N 个」的话，那个数是假的。
  */
-export function searchSkills(q: string, cursor?: string): Promise<SkillPage> {
+export function searchSkills(
+  q: string, cursor?: string, filters?: Record<string, string>,
+): Promise<SkillPage> {
   const params = new URLSearchParams({ limit: '100' })
   if (q) params.set('q', q)
   if (cursor) params.set('cursor', cursor)
+  for (const [key, value] of Object.entries(filters ?? {})) {
+    if (value) params.set(key, value)
+  }
   return request<SkillPage>(`/skills?${params}`, 'GET')
 }
 
@@ -247,6 +252,18 @@ export function updateOrgRole(organizationId: string, userId: string, role: stri
   return request<void>(`/organizations/${organizationId}/members/${userId}`, 'PATCH', { role })
 }
 
+/**
+ * 禁用或启用一个成员。
+ *
+ * 禁用的是账号（users.status），不是移出花名册：人还在组织里，
+ * 只是登不进来、也不能发布。被禁用的人仍占着成员位置，恢复后不用重新邀请。
+ */
+export function updateMemberStatus(
+  organizationId: string, userId: string, status: 'active' | 'disabled',
+): Promise<void> {
+  return request<void>(`/organizations/${organizationId}/members/${userId}`, 'PATCH', { status })
+}
+
 /** 公开：没登录的人也要看得懂这份邀请是什么。 */
 export function getInvitation(token: string): Promise<InvitationSummary> {
   return request<InvitationSummary>(`/invitations/${encodeURIComponent(token)}`)
@@ -291,4 +308,55 @@ export function rejectVersion(skillId: string, version: string, comment = ''): P
 export function updateTeamRole(organizationId: string, teamId: string, userId: string, role: string): Promise<void> {
   return request<void>(
     `/organizations/${organizationId}/teams/${teamId}/members/${userId}`, 'PATCH', { role })
+}
+
+/**
+ * 制品下载地址。
+ *
+ * 服务端先授权再给地址——不返回含长期权限的公开 URL（设计文档 §12）。
+ * 带令牌取认证流，避免把带权限的地址留在浏览器历史里。
+ */
+export async function downloadArtifact(artifactId: string): Promise<Blob> {
+  // 不能走 request()：它总是按 JSON 解析响应，制品是二进制流。
+  const bearer = session.accessToken
+  const response = await fetch(
+    `${API_BASE}/artifacts/${artifactId}/download?disposition=stream`,
+    { headers: bearer ? { Authorization: `Bearer ${bearer}` } : {} },
+  )
+  if (!response.ok) {
+    throw new Error(`下载制品失败：HTTP ${response.status}`)
+  }
+  return response.blob()
+}
+
+/**
+ * 我可见的审计流水（设计文档 §4 审计）。
+ *
+ * 服务端只返回我能看见的 Skill 的事件——审计不是所有人都能翻的。
+ */
+export function listAuditEvents(action?: string, limit = 100): Promise<AuditEvent[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (action) params.set('action', action)
+  return request<AuditEvent[]>(`/audit-events?${params}`, 'GET')
+}
+
+/**
+ * 某个 Skill 的回收站：被删掉的文件。
+ *
+ * 回收期内能恢复（恢复会产出新版本）——设计文档 §6.4「删除传播：软删除、回收期、支持恢复」。
+ */
+export function listRecycleFiles(skillId: string): Promise<RecycleFile[]> {
+  return request<RecycleFile[]>(`/skills/${skillId}/recycle`, 'GET')
+}
+
+/**
+ * 恢复一个被删掉的文件。
+ *
+ * 恢复不改旧版本——它产出**新版本**（版本不可变，设计文档 §2）。
+ */
+export function restoreRecycleFile(
+  skillId: string, path: string,
+): Promise<EditFileResult> {
+  return request<EditFileResult>(
+    `/skills/${skillId}/recycle/restore`, 'POST', { path })
 }

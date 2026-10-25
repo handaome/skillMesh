@@ -7,6 +7,9 @@
 
 ```bash
 # 登录（浏览器授权码 + PKCE，令牌存进系统凭据管理器）
+# 位置参数是服务端地址，OIDC issuer 从它的公开配置里取
+./skillmesh.exe login http://127.0.0.1:8080/api/v1
+# 也可以直接指定 issuer
 ./skillmesh.exe login --issuer http://127.0.0.1:8180/kc/realms/skillmesh
 
 # 搜索与查看（search 最后一列是完整 ID，直接喂给 install）
@@ -16,7 +19,7 @@
 # 从 Git 仓库安装（来源必须是远程地址）
 ./skillmesh.exe source resolve git@github.com:owner/agent-skills
 ./skillmesh.exe add git@github.com:owner/agent-skills.git \
-  --path skills/java-debug --agent claude-code --scope user --install
+  --path skills/java-debug --agent claude-code --scope user
 
 # 从注册中心安装（SkillMesh 云端已发布的版本）
 ./skillmesh.exe install <skill-id> --agent claude-code --scope user
@@ -63,7 +66,7 @@ skills/redis-cache   有
 
 ```bash
 ./skillmesh.exe add git@github.com:owner/agent-skills.git \
-  --path skills/java-debug --agent claude-code --scope user --install
+  --path skills/java-debug --agent claude-code --scope user
 ```
 
 | 参数 | 作用 |
@@ -71,15 +74,15 @@ skills/redis-cache   有
 | `<repo-url>` | 仓库地址。**必须是远程地址**——`NormalizeURL` 按设计拒绝 `file://` 和本地路径。支持 `git@owner:repo.git`、`ssh://`、`https://` 三种形式，**不能混写**（`git@` 形式不能带 `https://` 前缀） |
 | `--path` | 仓库里哪个子目录是 Skill。**只有候选恰好一个时才能省略**；有多个会报错并列出候选让你挑 |
 | `--all` | 装仓库里的**全部** Skill。与 `--path` 互斥 |
-| `--agent` | 装给哪个 Agent。`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/`，用本机真实存在的那个 |
+| `--agent` | 装给哪个 Agent，可重复指定；`all` 表示所有已启用的适配器。`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/`，用本机真实存在的那个（默认关着，要在 config.yaml 里打开） |
 | `--scope` | `user` 装到用户级（你所有项目都能用）；`project` 装到当前项目里（提交进版本控制，团队共享） |
 | `--ref` | 分支、标签或 commit。不填用仓库默认分支 |
-| `--install` | **关键开关**。不加只「登记」来源，不碰 Agent 目录；加了才真正安装 |
+| `--ref-type` | `--ref` 的类型：`branch` / `tag` / `commit` / `default`。不填时自己判断（查仓库里有没有同名 tag） |
 | `--dry-run` | 只列出会装什么，不实际安装 |
 | `--replace` | 目标位置已有同名目录时强制覆盖（见下方「同名目录不覆盖」） |
 | `--credential-ref` | 私有仓库用本机凭据管理器里的凭据引用，**不接受明文令牌** |
 
-执行的步骤：
+执行的步骤（加 `--dry-run` 就只走前两步，不装不写）：
 
 ```text
 clone 到临时目录
@@ -111,7 +114,7 @@ Skill java-debug
 ./skillmesh.exe add https://github.com/phuryn/pm-skills --all --agent claude-code --scope user --dry-run
 
 # 确认后真装
-./skillmesh.exe add https://github.com/phuryn/pm-skills --all --agent claude-code --scope user --install
+./skillmesh.exe add https://github.com/phuryn/pm-skills --all --agent claude-code --scope user
 ```
 
 批量安装的规则：
@@ -328,7 +331,7 @@ skillmesh recycle list --skill demo        # 不在 Skill 目录里时用 --skil
 | 只有云端变了 | 拉回云端版本 |
 | 两边都变了 | **冲突**，不自动覆盖，等 `--resolve` |
 
-**能合就合，合不了才问你**：冲突时先按文件来——本机改了 A、云端改了 B，两边都要；同一个文件两边都改，会做**行级三方文本合并**，合得上直接合，合不上的才生成冲突副本等你定夺（设计文档 §6.3）。合并需要上次同步时的基线（逐文件摘要 + 内容副本，存在配置目录的 `sync-base/`），没有基线就老实说合不了，不会瞎合。
+**能合就合，合不了才问你**：冲突时先按文件来——本机改了 A、云端改了 B，两边都要；同一个文件两边都改，会做**行级三方文本合并**，合得上直接合，合不上的才生成冲突副本等你定夺（设计文档 §6.3）。冲突副本落在 Skill 目录旁的隐藏目录 `.名字.conflict-<摘要>/`，里面是带 `<<<<<<< 本地` 标记的内容——本机和云端各改成什么样一眼看得见。隐藏目录不会被扫成 Skill，也不会传到云端。合并需要上次同步时的基线（逐文件摘要 + 内容副本，存在配置目录的 `sync-base/`），没有基线就老实说合不了，不会瞎合。
 
 云端也会再判一次（`POST /api/v1/sync/changesets`，带幂等键）：别的设备在两次请求之间动过内容的话，它会直接回冲突。断网失败的任务进持久队列，指数退避（1 分钟起步、翻倍、封顶 30 分钟），重试 5 次后标记放弃但仍留在队列里可查。
 
@@ -421,5 +424,14 @@ agents:
   codex:
     enabled: true
     user_skills_dir: ~/.codex/skills
+
+# 额外要扫描的目录：项目级、自定义目录。
+# Agent 适配器给出的用户级目录默认就扫；这里放的是别的地方。
+sync:
+  extra_dirs:
+    - ~/projects/app/.claude/skills
+    - /srv/shared/skills
 ```
+
+`sync` 与 `watch` 都会扫 `extra_dirs` 里的目录——放了目录，变更一样会被同步。
 

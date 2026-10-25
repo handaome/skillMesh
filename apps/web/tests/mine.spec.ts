@@ -97,6 +97,42 @@ describe('MySkillsPage', () => {
    * 每敲一个字符打一次搜索，绝大多数响应落地时词已经变了——白花带宽。
    * 刷新列表也不该顺带把版本列表也拉一遍。
    */
+  it('回收站列出被删的文件并能恢复', async () => {
+    const RECYCLE = [{
+      path: 'old/notes.md', sha256: 'c'.repeat(64), size_bytes: 42,
+      source_version: '1.1.0', created_at: '2026-10-20T00:00:00Z',
+      expires_at: '2026-11-20T00:00:00Z',
+    }]
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && String(url).includes('/recycle/restore')) {
+        return jsonResponse({ base_version: '1.2.0', new_version: '1.3.0', changed: true })
+      }
+      if (String(url).includes('/recycle')) return jsonResponse(RECYCLE)
+      if (String(url).includes('/versions')) {
+        return jsonResponse({ items: [VERSION], next_cursor: null, has_more: false })
+      }
+      return jsonResponse({ items: [SKILL], next_cursor: null, has_more: false })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountMine()
+
+    // 先点开 Skill 才加载版本与回收站
+    await wrapper.find('[data-test="mine-item"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('old/notes.md')
+    expect(wrapper.text()).toContain('回收站')
+
+    const restore = wrapper.find('[data-test="restore-file"]')
+    await restore.trigger('click')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(([url, init]) =>
+      init?.method === 'POST' && String(url).includes('/recycle/restore'))
+    expect(post).toBeTruthy()
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ path: 'old/notes.md' })
+  })
+
   it('连着敲键只发一次搜索', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).includes('/versions')) {

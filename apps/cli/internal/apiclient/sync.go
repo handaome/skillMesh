@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/verify"
 )
@@ -60,11 +61,11 @@ func (c *Client) DeviceID(ctx context.Context) (string, error) {
 	return device.ID, err
 }
 
-func (c *Client) SubmitChangeset(ctx context.Context, deviceID, idempotencyKey string,
+func (c *Client) SubmitChangeset(ctx context.Context, deviceID, IdempotencyKey string,
 	req SyncChangesetRequest) (SyncChangesetResponse, error) {
 
 	var out SyncChangesetResponse
-	headers := map[string]string{"X-Device-Id": deviceID, "Idempotency-Key": idempotencyKey}
+	headers := map[string]string{"X-Device-Id": deviceID, "Idempotency-Key": IdempotencyKey}
 	if err := c.doWith(ctx, http.MethodPost, "/sync/changesets", nil, req, &out, headers); err != nil {
 		return SyncChangesetResponse{}, err
 	}
@@ -113,6 +114,28 @@ func (r Report) Failed() (bool, string) { return !r.ok, r.note }
 func (c *Client) VerifyKey(ctx context.Context) (verify.PublicKey, error) {
 	var out verify.PublicKey
 	if err := c.doWith(ctx, http.MethodGet, "/keys/verify", nil, nil, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// PublicConfig 是服务端公开的登录配置（GET /api/v1/config/public）。
+//
+// issuer 与 client_id 由服务端给：换 IdP 不用改客户端代码。
+type PublicConfig struct {
+	Issuer   string `json:"issuer"`
+	ClientID string `json:"client_id"`
+}
+
+// FetchPublicConfig 取服务端公开配置。不用令牌——登录前就要拿到它。
+func FetchPublicConfig(ctx context.Context, server string) (PublicConfig, error) {
+	var out PublicConfig
+	base := strings.TrimRight(server, "/")
+	if !strings.HasSuffix(base, "/api/v1") {
+		base += "/api/v1"
+	}
+	client := New(base, "", 0)
+	if err := client.doWith(ctx, http.MethodGet, "/config/public", nil, nil, &out); err != nil {
 		return out, err
 	}
 	return out, nil

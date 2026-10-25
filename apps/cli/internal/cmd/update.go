@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,8 +35,8 @@ type UpdateInfo struct {
 	Provider     string
 }
 
-// lsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
-var lsRemote = gitx.LsRemote
+// LsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
+var LsRemote = gitx.LsRemote
 
 // autoSafe 数一数有多少个来源声明了「无本地改动时自动更新」。
 func autoSafe(lock lockfile.Lock) int {
@@ -48,37 +49,71 @@ func autoSafe(lock lockfile.Lock) int {
 	return count
 }
 
-// filterAutoSafe 只保留 auto_safe 的来源，其余交给用户显式处理。
-func filterAutoSafe(lock lockfile.Lock, updates []UpdateInfo) []UpdateInfo {
-	policies := map[string]string{}
+// policyOf 取一个来源的更新策略。没登记过按 notify 算——
+// notify 是文档里的默认值（设计文档 §7.2）。
+func policyOf(lock lockfile.Lock, name string) string {
 	for _, entry := range lock.Skills {
-		policies[entry.Name] = entry.UpdatePolicy
+		if entry.Name == name {
+			if entry.UpdatePolicy == "" {
+				return "notify"
+			}
+			return entry.UpdatePolicy
+		}
 	}
+	return "notify"
+}
+
+// FilterByPolicy 按更新策略筛更新项（设计文档 §7.2）。
+//
+// manual —— 不该出现在后台检查里：策略是「不自动检查或应用」。
+// notify —— 后台查、报差异，但不自动应用（用户确认后才应用）。
+// auto_safe —— 后台可以自动应用。
+func FilterByPolicy(lock lockfile.Lock, updates []UpdateInfo, want string) []UpdateInfo {
 	var kept []UpdateInfo
 	for _, update := range updates {
-		if policies[update.Name] == "auto_safe" {
+		if policyOf(lock, update.Name) == want {
 			kept = append(kept, update)
 		}
 	}
 	return kept
 }
 
+// FilterAutoSafe 只保留 auto_safe 的来源，其余交给用户显式处理。
+func FilterAutoSafe(lock lockfile.Lock, updates []UpdateInfo) []UpdateInfo {
+	return FilterByPolicy(lock, updates, "auto_safe")
+}
+
 // CheckUpdates 只调 git ls-remote，不下载内容（详细设计 §3.7）。
 //
 // 一个仓库里可能装了几十个 Skill（--all 装的），但远端 commit 只有一个：
 // 所以按「仓库 + ref」缓存，每个仓库只查一次。
+//
+// skipManual 为真时不查 manual 策略的来源：策略是「不自动检查或应用」，
+// 后台探测它就违背了用户的意图（设计文档 §7.2）。
 func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error) {
+	return checkUpdates(ctx, lock, false)
+}
+
+// CheckUpdatesBackground 是后台巡检用的检查：跳过 manual 策略的来源。
+func CheckUpdatesBackground(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error) {
+	return checkUpdates(ctx, lock, true)
+}
+
+func checkUpdates(ctx context.Context, lock lockfile.Lock, skipManual bool) ([]UpdateInfo, error) {
 	remoteCache := map[string]string{}
 	var updates []UpdateInfo
 	for _, skill := range lock.Skills {
 		if skill.Repository == "" {
 			continue
 		}
+		if skipManual && policyOf(lock, skill.Name) == "manual" {
+			continue
+		}
 		key := skill.Repository + "\x00" + skill.Ref
 		remote, cached := remoteCache[key]
 		if !cached {
 			var err error
-			remote, err = lsRemote(ctx, skill.Repository, skill.Ref)
+			remote, err = LsRemote(ctx, skill.Repository, skill.Ref)
 			if err != nil {
 				return nil, fmt.Errorf("检查 %s 失败: %w", skill.Name, err)
 			}
@@ -104,7 +139,7 @@ func CheckUpdates(ctx context.Context, lock lockfile.Lock) ([]UpdateInfo, error)
 	return updates, nil
 }
 
-func newUpdateCmd() *cobra.Command {
+func NewUpdateCmd() *cobra.Command {
 	var checkOnly, all, dryRun, auto bool
 	cmd := &cobra.Command{
 		Use:   "update [skill-name]",
@@ -116,15 +151,18 @@ func newUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// 指定名字时只查它一个，但保存时仍用完整的锁文件：
+			// 把 lock 换成单条会让其余条目在 Save 时消失（设计文档 §9.1）。
+			check := lock
 			if len(args) == 1 {
 				skill, ok := lock.Find(args[0])
 				if !ok {
 					return fmt.Errorf("锁文件中没有 %s", args[0])
 				}
-				lock = lockfile.Lock{Version: lock.Version, Skills: []lockfile.LockedSkill{skill}}
+				check = lockfile.Lock{Version: lock.Version, Skills: []lockfile.LockedSkill{skill}}
 			}
 
-			updates, err := CheckUpdates(cmd.Context(), lock)
+			updates, err := CheckUpdates(cmd.Context(), check)
 			if err != nil {
 				return err
 			}
@@ -152,7 +190,7 @@ func newUpdateCmd() *cobra.Command {
 			// 只给了 --auto 时，只动 auto_safe 的来源；手动指定的名字/--all 照旧全量
 			selected := updates
 			if auto {
-				selected = filterAutoSafe(lock, updates)
+				selected = FilterAutoSafe(lock, updates)
 				if len(selected) == 0 {
 					fmt.Println("没有标记 auto_safe 的来源，跳过。")
 					return nil
@@ -216,7 +254,7 @@ func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock,
 				previewUpdate(root, projectRoot, update)
 				continue
 			}
-			if err := applyOne(ctx, root, projectRoot, lock, update, commit); err != nil {
+			if err := ApplyOne(ctx, root, projectRoot, lock, update, commit); err != nil {
 				fmt.Fprintf(os.Stderr, "更新 %s 失败: %v\n", update.Name, err)
 			}
 		}
@@ -230,7 +268,7 @@ func installedDir(projectRoot string, update UpdateInfo) (string, error) {
 	if len(update.Agents) == 0 {
 		return "", fmt.Errorf("%s 没有登记 Agent 目录", update.Name)
 	}
-	base, err := agent.Dir(cfg, update.Agents[0], scopeOf(update.Scope, projectRoot), projectRoot)
+	base, err := agent.Dir(Cfg, update.Agents[0], scopeOf(update.Scope, projectRoot), projectRoot)
 	if err != nil {
 		return "", err
 	}
@@ -246,12 +284,12 @@ func locallyModified(projectRoot string, update UpdateInfo) (bool, error) {
 	if _, err := os.Stat(dir); err != nil {
 		return false, nil // 没装过，谈不上本地改动
 	}
-	return contentChanged(dir, update.InstalledHash), nil
+	return ContentChanged(dir, update.InstalledHash), nil
 }
 
-// contentChanged 比对现场内容和安装时记下的摘要。
+// ContentChanged 比对现场内容和安装时记下的摘要。
 // 锁文件里没有 installed_hash 的老记录一律放行——不能因为缺字段就拦住用户。
-func contentChanged(dir, installedHash string) bool {
+func ContentChanged(dir, installedHash string) bool {
 	if installedHash == "" {
 		return false
 	}
@@ -270,7 +308,7 @@ func previewUpdate(root, projectRoot string, update UpdateInfo) {
 		fmt.Printf("%s —— 本地还没装，无法预览差异\n", update.Name)
 		return
 	}
-	changes, err := diffTrees(local, remote)
+	changes, err := DiffTrees(local, remote)
 	if err != nil || len(changes) == 0 {
 		// 拿不到差异就退化成只报 commit，不该让整批预览失败。
 		fmt.Printf("%s —— 只知道 commit 从 %s 变到 %s，看不到文件差异\n",
@@ -281,12 +319,23 @@ func previewUpdate(root, projectRoot string, update UpdateInfo) {
 		update.Name, len(changes), describeChanges(changes))
 }
 
-// applyOne 走「校验 → 原子替换」，失败保留当前可用版本。
-func applyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock,
+// ApplyOne 走「校验 → 原子替换」，失败保留当前可用版本。
+func ApplyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock,
 	update UpdateInfo, commit string) error {
 	skillDir := filepath.Join(root, filepath.FromSlash(update.Path))
 	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
 		return err
+	}
+	// 更新也要扫密钥：上游新推的内容里带真凭据时，
+	// 自动更新会把它直接装进 Agent 目录（设计文档 §13「阻止自动更新」）。
+	// 发布路径扫的是同一套规则，这里不能放过。
+	findings, err := skillscan.ScanSecrets(skillDir)
+	if err != nil {
+		return err
+	}
+	if len(findings) > 0 {
+		return errors.New("上游版本含疑似凭据，已拒绝更新：\n" +
+			skillscan.FormatFindings(findings))
 	}
 	name, err := skillDirName(skillDir)
 	if err != nil {
@@ -294,7 +343,7 @@ func applyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 	}
 
 	for _, agentName := range update.Agents {
-		base, err := agent.Dir(cfg, agentName, scopeOf(update.Scope, projectRoot), projectRoot)
+		base, err := agent.Dir(Cfg, agentName, scopeOf(update.Scope, projectRoot), projectRoot)
 		if err != nil {
 			return err
 		}
@@ -315,7 +364,7 @@ func applyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 		Name:           update.Name,
 		Repository:     update.Repository,
 		Path:           update.Path,
-		RefType:        refTypeOf(update.Ref),
+		RefType:        RefTypeOf(update.Ref),
 		Ref:            update.Ref,
 		ResolvedCommit: commit,
 		Scope:          scopeOf(update.Scope, projectRoot),
@@ -354,10 +403,10 @@ func installOverwrite(skillDir, name, target string) error {
 // 用拷的而不是搬的：搬走会让目标目录空着，装砸了还得再搬回来；
 // 拷贝跨盘也行，装的时候由 installer 的原子替换兜底。
 func backupInstalled(name, target string) (trash.Item, error) {
-	if err := os.MkdirAll(cfg.ConfigDir, 0o755); err != nil {
+	if err := os.MkdirAll(Cfg.ConfigDir, 0o755); err != nil {
 		return trash.Item{}, err
 	}
-	staging, err := os.MkdirTemp(cfg.ConfigDir, "skillmesh-backup-*")
+	staging, err := os.MkdirTemp(Cfg.ConfigDir, "skillmesh-backup-*")
 	if err != nil {
 		return trash.Item{}, err
 	}
@@ -367,7 +416,7 @@ func backupInstalled(name, target string) (trash.Item, error) {
 		return trash.Item{}, fmt.Errorf("备份旧版本失败: %w", err)
 	}
 	// 从同盘移进回收站：os.Rename 跨盘搬不动。
-	return trash.NewStore(cfg.ConfigDir).Move(name, copied)
+	return trash.NewStore(Cfg.ConfigDir).Move(name, copied)
 }
 
 // copyDir 整棵复制目录。隐藏文件也要拷：备份里的 .skillmesh-install 标记

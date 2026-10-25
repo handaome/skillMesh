@@ -44,7 +44,7 @@ func newRollbackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, err := pickVersion(versions, to, false, entry, false)
+			target, err := PickVersion(versions, to, false, entry, false)
 			if err != nil {
 				return err
 			}

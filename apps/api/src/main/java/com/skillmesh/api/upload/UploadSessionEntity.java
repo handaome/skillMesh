@@ -14,6 +14,11 @@ import org.hibernate.type.SqlTypes;
 @Table(name = "upload_sessions")
 public class UploadSessionEntity {
 
+    /** 同步文件上传。另一路是 skill_artifact（整包制品）。 */
+    public static final String PURPOSE_SYNC_FILE = "sync_file";
+    /** 整包制品上传。 */
+    public static final String PURPOSE_SKILL_ARTIFACT = "skill_artifact";
+
     @Id
     private UUID id;
 

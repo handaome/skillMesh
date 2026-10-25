@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,24 +21,24 @@ import (
 type fileAction string
 
 const (
-	// actionKeepLocal 本机改了、云端没动 → 保留本机。
-	actionKeepLocal fileAction = "保留本机"
-	// actionTakeCloud 云端改了、本机没动 → 用云端的。
-	actionTakeCloud fileAction = "采用云端"
-	// actionMergeLocal 同一文件两边都改 → 三方文本合并。
-	actionMergeLocal fileAction = "三方合并"
-	// actionConflict 同一文件两边改到同一处且合不了 → 冲突。
-	actionConflict fileAction = "冲突"
-	// actionDeleted 本机删掉了、云端还在 → 删除待确认，不自动拉回。
-	actionDeleted fileAction = "本机已删除"
+	// ActionKeepLocal 本机改了、云端没动 → 保留本机。
+	ActionKeepLocal fileAction = "保留本机"
+	// ActionTakeCloud 云端改了、本机没动 → 用云端的。
+	ActionTakeCloud fileAction = "采用云端"
+	// ActionMergeLocal 同一文件两边都改 → 三方文本合并。
+	ActionMergeLocal fileAction = "三方合并"
+	// ActionConflict 同一文件两边改到同一处且合不了 → 冲突。
+	ActionConflict fileAction = "冲突"
+	// ActionDeleted 本机删掉了、云端还在 → 删除待确认，不自动拉回。
+	ActionDeleted fileAction = "本机已删除"
 )
 
-// mergePlan 逐文件决定怎么合。这是纯函数：只看三份摘要，不碰磁盘和网络。
+// MergePlan 逐文件决定怎么合。这是纯函数：只看三份摘要，不碰磁盘和网络。
 //
 // base 是上次同步时的摘要，local 是本机现状，cloud 是云端现状。
 // 本机删掉、云端还在的文件不进合并结果——删除传播要人确认（§6.3 最后一行），
 // 它们被标成「本机已删除」，由人来定夺。
-func mergePlan(base, local, cloud map[string]string) map[string]fileAction {
+func MergePlan(base, local, cloud map[string]string) map[string]fileAction {
 	plan := map[string]fileAction{}
 	for path, cloudSum := range cloud {
 		localSum, inLocal := local[path]
@@ -45,33 +47,33 @@ func mergePlan(base, local, cloud map[string]string) map[string]fileAction {
 		case !inLocal && hadBase:
 			// 本机删掉的文件：不从云端拉回来。删除要不要传到云端得人确认
 			// （设计文档 §6.3：本地删除 → 删除待确认/回收流程）。
-			plan[path] = actionDeleted
+			plan[path] = ActionDeleted
 		case !inLocal:
 			// 云端新增的文件：拉下来
-			plan[path] = actionTakeCloud
+			plan[path] = ActionTakeCloud
 		case hadBase && localSum == baseSum && cloudSum != baseSum:
 			// 只有云端动过
-			plan[path] = actionTakeCloud
+			plan[path] = ActionTakeCloud
 		case hadBase && localSum != baseSum && cloudSum == baseSum:
 			// 只有本机动过
-			plan[path] = actionKeepLocal
+			plan[path] = ActionKeepLocal
 		case hadBase && localSum != baseSum && cloudSum != baseSum:
 			if localSum == cloudSum {
 				continue // 两边改成一样，不用管
 			}
-			plan[path] = actionMergeLocal
+			plan[path] = ActionMergeLocal
 		default:
 			// 没有基线：两边都只能算「改过」，只能试文本合并
 			if localSum == cloudSum {
 				continue
 			}
-			plan[path] = actionMergeLocal
+			plan[path] = ActionMergeLocal
 		}
 	}
 	return plan
 }
 
-// mergeConflict 按文件合并一次冲突（设计文档 §6.3）。
+// MergeConflict 按文件合并一次冲突（设计文档 §6.3）。
 //
 //	本地改了 A、云端改了 B      → 两边都要，合完直接上传
 //	同一个文件两边都改且能文本合 → 合完上传
@@ -81,9 +83,9 @@ func mergePlan(base, local, cloud map[string]string) map[string]fileAction {
 // 中途失败不能留下「改了一半」的目录——基线没更新，下一轮又判冲突。
 //
 // 只写合并涉及的文件，不整目录换入：整目录换入会把本机目录里的符号链接
-// 一并换掉（copyTree 只拷普通文件），也会把整个目录拷两遍——
+// 一并换掉（CopyTree 只拷普通文件），也会把整个目录拷两遍——
 // 带 .git 的大目录能明显变慢。本机目录里没被碰过的文件原样留着。
-func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTarget,
+func MergeConflict(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	entry syncstate.Entry, local packager.Artifact, skill apiclient.Skill) (bool, string, error) {
 
 	localFiles, err := skillscan.DirHashes(target.Path)
@@ -97,8 +99,8 @@ func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTar
 	if len(entry.BaseFiles) == 0 {
 		return false, "本机没有上次同步的基线，按文件合不了", nil
 	}
-	hashes := toHashMap(localFiles)
-	plan := mergePlan(entry.BaseFiles, hashes, cloudFiles)
+	hashes := ToHashMap(localFiles)
+	plan := MergePlan(entry.BaseFiles, hashes, cloudFiles)
 
 	// 云端独有的内容先解到临时目录，否则合并结果会丢掉它们
 	cloudDir, cleanup, err := materialiseCloud(ctx, client, artifactID)
@@ -117,8 +119,15 @@ func mergeConflict(ctx context.Context, client *apiclient.Client, target syncTar
 	if len(staged.conflicted) > 0 || len(staged.deleted) > 0 {
 		var notes []string
 		if len(staged.conflicted) > 0 {
-			notes = append(notes, fmt.Sprintf("%d 个文件两边改到同一处合不了：%v",
-				len(staged.conflicted), staged.conflicted))
+			// 冲突副本落到 Skill 目录旁的隐藏目录：内容带着冲突标记，
+			// 用户能直接看到两边各改成什么样（设计文档 §6.3「生成冲突副本」）。
+			conflictDir, err := saveConflictCopies(target.Path, staged)
+			if err != nil {
+				return false, "写冲突副本失败：" + err.Error(), err
+			}
+			notes = append(notes, fmt.Sprintf("%d 个文件两边改到同一处合不了，"+
+				"冲突副本在 %s：%v",
+				len(staged.conflicted), conflictDir, staged.conflicted))
 		}
 		if len(staged.deleted) > 0 {
 			notes = append(notes, fmt.Sprintf("%d 个文件本机已删除、云端还在，"+
@@ -166,7 +175,7 @@ func stageMerged(localDir, cloudDir, baseSnapshot string, plan map[string]fileAc
 
 	for _, path := range sortedPaths(plan) {
 		switch plan[path] {
-		case actionTakeCloud:
+		case ActionTakeCloud:
 			// 云端独有或只有云端改过：直接用云端那份。
 			src := filepath.Join(cloudDir, filepath.FromSlash(path))
 			dst := filepath.Join(work, filepath.FromSlash(path))
@@ -179,13 +188,27 @@ func stageMerged(localDir, cloudDir, baseSnapshot string, plan map[string]fileAc
 				result.modes[path] = info.Mode().Perm()
 			}
 			result.merged = append(result.merged, path)
-		case actionMergeLocal:
-			merged, ok, mergeErr := mergeFile(baseSnapshot, localDir, cloudDir, path)
+		case ActionMergeLocal:
+			merged, ok, mergeErr := MergeFile(baseSnapshot, localDir, cloudDir, path)
 			if mergeErr != nil {
 				cleanup()
 				return result, fmt.Errorf("三方合并失败 %s：%w", path, mergeErr)
 			}
 			if !ok {
+				// 合不了：内容带着冲突标记，先存进冲突副本目录。
+				// 直接丢掉的话，用户只看到一句「合不了」，
+				// 两边改了什么得自己去翻 git（设计文档 §6.3 要求生成冲突副本）。
+				if len(merged) > 0 {
+					dst := filepath.Join(work, "冲突", filepath.FromSlash(path))
+					if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+						cleanup()
+						return result, fmt.Errorf("写冲突副本失败 %s：%w", path, err)
+					}
+					if err := os.WriteFile(dst, merged, 0o644); err != nil {
+						cleanup()
+						return result, fmt.Errorf("写冲突副本失败 %s：%w", path, err)
+					}
+				}
 				result.conflicted = append(result.conflicted, path)
 				continue
 			}
@@ -200,12 +223,39 @@ func stageMerged(localDir, cloudDir, baseSnapshot string, plan map[string]fileAc
 				return result, fmt.Errorf("暂存合并结果失败 %s：%w", path, err)
 			}
 			result.merged = append(result.merged, path)
-		case actionDeleted:
+		case ActionDeleted:
 			// 本机删掉的：不拉回来，交给人确认删除要不要传上去。
 			result.deleted = append(result.deleted, path)
 		}
 	}
 	return result, nil
+}
+
+// saveConflictCopies 把合不上的文件落成冲突副本，返回副本目录。
+//
+// 放在 Skill 目录旁的隐藏目录：隐藏目录不会被扫成 Skill，
+// 也不会被当成「本地新增的 Skill」传上云端。
+// 目录名带摘要，同一份内容反复冲突时不会覆盖上一次的副本。
+func saveConflictCopies(skillPath string, staged mergeResult) (string, error) {
+	if len(staged.conflicted) == 0 {
+		return "", nil
+	}
+	source := filepath.Join(staged.staged, "冲突")
+	// 没有可留的内容（比如基线副本读不到）：不建空目录。
+	if _, err := os.Stat(source); err != nil {
+		return "", nil
+	}
+	// 摘要取自冲突文件的清单：同一批冲突重试多少次，落到的都是同一个目录。
+	sum := sha256.Sum256([]byte(strings.Join(staged.conflicted, "\n")))
+	dest := filepath.Join(filepath.Dir(skillPath),
+		"."+filepath.Base(skillPath)+".conflict-"+hex.EncodeToString(sum[:4]))
+	if err := os.RemoveAll(dest); err != nil {
+		return "", err
+	}
+	if err := copyDir(source, dest); err != nil {
+		return "", err
+	}
+	return dest, nil
 }
 
 // writeBack 把合并结果写回本机目录。
@@ -328,11 +378,11 @@ func sortedPaths(plan map[string]fileAction) []string {
 	return paths
 }
 
-// mergeFile 对单个文件做三方文本合并。
+// MergeFile 对单个文件做三方文本合并。
 //
 // 合不了就返回 ok=false；合得了就返回合并后的内容，**不写盘**——
 // 写盘由调用方决定（合并结果要先落到暂存目录，全部合成了才写回本机）。
-func mergeFile(baseSnapshot, localDir, cloudDir, path string) (data []byte, ok bool, err error) {
+func MergeFile(baseSnapshot, localDir, cloudDir, path string) (data []byte, ok bool, err error) {
 	localPath := filepath.Join(localDir, filepath.FromSlash(path))
 	cloudPath := filepath.Join(cloudDir, filepath.FromSlash(path))
 	localData, err := os.ReadFile(localPath)
@@ -350,7 +400,9 @@ func mergeFile(baseSnapshot, localDir, cloudDir, path string) (data []byte, ok b
 	}
 	merged, ok := skillscan.Merge3(baseData, localData, cloudData)
 	if !ok {
-		return nil, false, nil
+		// 合不了时把带冲突标记的内容也返回：调用方拿它生成冲突副本。
+		// 丢掉的话，用户只看到一句「合不了」，两边改了什么得自己去找。
+		return merged, false, nil
 	}
 	return merged, true, nil
 }
@@ -390,7 +442,7 @@ func cloudManifest(ctx context.Context, client *apiclient.Client, skillID string
 	if err != nil {
 		return nil, "", err
 	}
-	selected, err := pickVersion(versions, "", false, lockfileEntry(syncTarget{SkillID: skillID}), false)
+	selected, err := PickVersion(versions, "", false, lockfileEntry(SyncTarget{SkillID: skillID}), false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -405,7 +457,7 @@ func cloudManifest(ctx context.Context, client *apiclient.Client, skillID string
 	return files, artifactID, nil
 }
 
-func toHashMap(files []skillscan.FileDigest) map[string]string {
+func ToHashMap(files []skillscan.FileDigest) map[string]string {
 	hashes := make(map[string]string, len(files))
 	for _, file := range files {
 		hashes[file.Path] = file.SHA256

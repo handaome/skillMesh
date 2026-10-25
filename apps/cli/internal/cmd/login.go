@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/auth"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
@@ -26,23 +27,36 @@ func newLoginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login [服务端地址]",
 		Short: "通过浏览器授权码 + PKCE 登录",
-		Long: "登录 SkillMesh。地址可以写成位置参数（设计文档 §7.4 的用法）、" +
-			"--issuer，或环境变量 SM_KEYCLOAK_ISSUER。",
+		Long: "登录 SkillMesh。位置参数是服务端地址（设计文档 §7.4 的用法），\n" +
+			"登录所需的 OIDC issuer 从服务端的公开配置里取；\n" +
+			"也可以用 --issuer 或环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 位置参数优先，其次 --issuer，最后环境变量
 			issuerURL := issuer
+			clientID := Cfg.ClientID
 			if len(args) == 1 {
-				issuerURL = args[0]
+				// 位置参数是服务端地址：从它的公开配置里取 issuer。
+				// 设计文档 §7.4 写的是 `login https://skills.example.com`——
+				// 那是服务端，不是 issuer，混用会连错地方。
+				server := strings.TrimRight(args[0], "/")
+				cfg, err := apiclient.FetchPublicConfig(cmd.Context(), server)
+				if err != nil {
+					return fmt.Errorf("取服务端公开配置失败（%s）：%w；"+
+						"也可以用 --issuer 直接指定 issuer", server, err)
+				}
+				issuerURL = cfg.Issuer
+				if cfg.ClientID != "" {
+					clientID = cfg.ClientID
+				}
 			}
 			if issuerURL == "" {
 				issuerURL = os.Getenv("SM_KEYCLOAK_ISSUER")
 			}
 			if issuerURL == "" {
-				return fmt.Errorf("缺少地址：skillmesh login <服务端地址>，" +
+				return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
 					"或用 --issuer / SM_KEYCLOAK_ISSUER")
 			}
-			tokens, err := runPkceFlow(cmd.Context(), issuerURL, cfg.ClientID)
+			tokens, err := runPkceFlow(cmd.Context(), issuerURL, clientID)
 			if err != nil {
 				return err
 			}

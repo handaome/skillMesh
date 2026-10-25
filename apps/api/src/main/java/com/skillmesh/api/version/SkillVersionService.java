@@ -66,7 +66,8 @@ public class SkillVersionService {
         // 只判可见性的话，团队的普通成员也能往待审队列里塞一版内容。
         skillService.requirePublishRight(user, skill);
         // 锁住 Skill 行：基线校验、版本号查重、落版本都要与并发的发布串行。
-        // 锁的顺序是「先版本行、后 Skill 行」——这里不碰别人的版本行，只锁 Skill 行。
+        // 锁的顺序全局统一为「先 Skill 行、后版本行」（转正路径 UploadService.complete
+        // 也是这个顺序）——两条路径一致才不会死锁。
         skills.findByIdForUpdate(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
         // 基线前置条件：客户端做决策时看到的云端摘要必须还对得上。
         requireBaseRevision(skillId, req.expected_base_revision());
@@ -93,10 +94,12 @@ public class SkillVersionService {
         versions.save(version);
 
         String tempKey = artifacts.tempKey(skillId, version.getId());
+        // 顺手清过期会话：对象存储的临时对象会自动过期，这张表不跟着清就一直涨。
+        uploads.deleteExpired(now);
         UploadSessionEntity session = new UploadSessionEntity();
         session.setId(UUID.randomUUID());
         session.setActorUserId(user.id());
-        session.setPurpose("skill_artifact");
+        session.setPurpose(UploadSessionEntity.PURPOSE_SKILL_ARTIFACT);
         session.setSkillVersionId(version.getId());
         session.setExpectedSha256(req.sha256());
         session.setExpectedSizeBytes(req.size_bytes());

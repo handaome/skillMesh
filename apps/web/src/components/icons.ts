@@ -9,6 +9,7 @@ export type IconName =
   | 'box'
   | 'users'
   | 'review'
+  | 'audit'
   | 'menu'
   | 'close'
   | 'check'
@@ -29,6 +30,10 @@ export const PATHS: Record<IconName, string[]> = {
   review: [
     'M8 2.2h4.2L14.5 4.5v9.3h-13V2.2z',
     'M8 2.2v2.3h4.2M5.5 8.5l1.8 1.8 3.4-3.6',
+  ],
+  audit: [
+    'M3 2.6h10v10.8H3z',
+    'M5.2 5.2h5.6M5.2 8h5.6M5.2 10.8h3.2',
   ],
   menu: ['M2.5 4.5h11M2.5 8h11M2.5 11.5h11'],
   close: ['M3.5 3.5l9 9M12.5 3.5l-9 9'],

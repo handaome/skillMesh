@@ -19,8 +19,8 @@ import (
 // team / organization 需要组织与成员概念，v2 起可用。
 var publishVisibility = []string{"private", "public", "team", "organization"}
 
-// publishTarget 是待发布的一个 Skill。
-type publishTarget struct {
+// PublishTarget 是待发布的一个 Skill。
+type PublishTarget struct {
 	Dir     string
 	RelPath string
 }
@@ -45,10 +45,10 @@ func newPublishCmd() *cobra.Command {
 			if cmd.Flags().Changed("visibility") {
 				requested = visibility
 			}
-			if err := checkScopeFlags(orgSlug, teamSlug); err != nil {
+			if err := CheckScopeFlags(orgSlug, teamSlug); err != nil {
 				return err
 			}
-			if err := checkVisibilityFlag(orgSlug, teamSlug, requested); err != nil {
+			if err := CheckVisibilityFlag(orgSlug, teamSlug, requested); err != nil {
 				return err
 			}
 			targets, err := locatePublishTargets(args[0], all)
@@ -59,11 +59,11 @@ func newPublishCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			scope, err := loadPublishScope(cmd.Context(), client, orgSlug, teamSlug, visibility)
+			scope, err := LoadPublishScope(cmd.Context(), client, orgSlug, teamSlug, visibility)
 			if err != nil {
 				return err
 			}
-			options := publishOptions{
+			options := PublishOptions{
 				Version:             version,
 				Visibility:          visibility,
 				Channel:             channel,
@@ -75,21 +75,21 @@ func newPublishCmd() *cobra.Command {
 				Scope:               scope,
 				RequestedVisibility: requested,
 			}
-			published, failed := 0, 0
+			published, Failed := 0, 0
 			for _, target := range targets {
-				result, err := publishOne(cmd.Context(), client, target, options)
+				result, err := PublishOne(cmd.Context(), client, target, options)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "发布 %s 失败: %v\n", target.RelPath, err)
-					failed++
+					Failed++
 					continue
 				}
 				fmt.Printf("%s %s -> %s（%s，%d 字节）\n",
 					result.Action, result.Name, result.SkillID, result.Version, result.SizeBytes)
 				published++
 			}
-			fmt.Printf("\n%s %d 个，失败 %d 个\n", map[bool]string{true: "演练", false: "已发布"}[dryRun], published, failed)
-			if failed > 0 {
-				return fmt.Errorf("%d 个发布失败", failed)
+			fmt.Printf("\n%s %d 个，失败 %d 个\n", map[bool]string{true: "演练", false: "已发布"}[dryRun], published, Failed)
+			if Failed > 0 {
+				return fmt.Errorf("%d 个发布失败", Failed)
 			}
 			return nil
 		},
@@ -109,8 +109,8 @@ func newPublishCmd() *cobra.Command {
 	return cmd
 }
 
-// publishOptions 是发布时的可调项。
-type publishOptions struct {
+// PublishOptions 是发布时的可调项。
+type PublishOptions struct {
 	Version        string
 	Visibility     string
 	Channel        string
@@ -119,7 +119,7 @@ type publishOptions struct {
 	Description    string
 	DryRun         bool
 	SkipSecretScan bool
-	Scope          publishScope
+	Scope          PublishScope
 	// RequestedVisibility 是用户显式给的 --visibility，没给就是空串。
 	// 已有 Skill 的可见性改不动，带着这个去发布要报错，而不是假装生效。
 	RequestedVisibility string
@@ -128,10 +128,10 @@ type publishOptions struct {
 	ExpectedBaseRevision string
 }
 
-// visibilityFor 定出这次发布的可见性。
+// VisibilityFor 定出这次发布的可见性。
 // 指定了 --org/--team 时 Scope 里已经定了（可能是 team / organization）；
 // sync 这类内部调用不给 Scope，就用原来的 Visibility。
-func (o publishOptions) visibilityFor() string {
+func (o PublishOptions) VisibilityFor() string {
 	if o.Scope.Visibility != "" {
 		return o.Scope.Visibility
 	}
@@ -151,7 +151,7 @@ type publishResult struct {
 // --all 时扫整棵目录树，否则就 path 本身这一个。
 // 路径先转绝对路径：在 Skill 目录里敲 publish . 时，Base(".") 是 "."，
 // 拿它当 slug 会被规则挡下来。
-func locatePublishTargets(path string, all bool) ([]publishTarget, error) {
+func locatePublishTargets(path string, all bool) ([]PublishTarget, error) {
 	dir, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func locatePublishTargets(path string, all bool) ([]publishTarget, error) {
 		return nil, fmt.Errorf("只能发布目录（Skill 是一个目录）：%s", path)
 	}
 	if !all {
-		return []publishTarget{{Dir: dir, RelPath: filepath.Base(dir)}}, nil
+		return []PublishTarget{{Dir: dir, RelPath: filepath.Base(dir)}}, nil
 	}
 	candidates, err := skillscan.Candidates(dir)
 	if err != nil {
@@ -173,20 +173,20 @@ func locatePublishTargets(path string, all bool) ([]publishTarget, error) {
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%s 下没有找到含 SKILL.md 的目录", path)
 	}
-	targets := make([]publishTarget, 0, len(candidates))
+	targets := make([]PublishTarget, 0, len(candidates))
 	for _, candidate := range candidates {
 		rel, err := filepath.Rel(dir, candidate.Dir)
 		if err != nil {
 			rel = candidate.Dir
 		}
-		targets = append(targets, publishTarget{Dir: candidate.Dir, RelPath: filepath.ToSlash(rel)})
+		targets = append(targets, PublishTarget{Dir: candidate.Dir, RelPath: filepath.ToSlash(rel)})
 	}
 	return targets, nil
 }
 
-// publishOne 发布一个 Skill：打包 → 建/复用 Skill 元数据 → 建版本 → 直传 → 服务端校验。
-func publishOne(ctx context.Context, client *apiclient.Client, target publishTarget,
-	options publishOptions) (publishResult, error) {
+// PublishOne 发布一个 Skill：打包 → 建/复用 Skill 元数据 → 建版本 → 直传 → 服务端校验。
+func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTarget,
+	options PublishOptions) (publishResult, error) {
 
 	if err := skillscan.ValidateDir(target.Dir, skillscan.DefaultLimits); err != nil {
 		return publishResult{}, err
@@ -249,7 +249,7 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 		if err != nil {
 			return publishResult{}, err
 		}
-	} else if err := checkExistingSkill(skill, options.Scope, options.RequestedVisibility); err != nil {
+	} else if err := CheckExistingSkill(skill, options.Scope, options.RequestedVisibility); err != nil {
 		// 已有 Skill 的归属与可见性都改不动：带着新要求发布只会让人以为生效了。
 		return publishResult{}, err
 	}
@@ -264,7 +264,7 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 		for _, item := range existing.Items {
 			names = append(names, item.Version)
 		}
-		version, err = nextVersion(names)
+		version, err = NextVersion(names)
 		if err != nil {
 			return publishResult{}, err
 		}
@@ -337,13 +337,13 @@ func publishOne(ctx context.Context, client *apiclient.Client, target publishTar
 // source 是来源元数据（设计文档 §7.1）：从 Git 装的 Skill 要记上仓库与 commit，
 // 服务端只拿得到这些——本机才知道自己从哪儿装的。
 func createSkill(ctx context.Context, client *apiclient.Client, slug, displayName, description string,
-	options publishOptions, source *apiclient.SkillSource) (apiclient.Skill, error) {
+	options PublishOptions, source *apiclient.SkillSource) (apiclient.Skill, error) {
 
 	skill, err := client.CreateSkill(ctx, apiclient.CreateSkillRequest{
 		Slug:           slug,
 		Name:           displayName,
 		Description:    description,
-		Visibility:     options.visibilityFor(),
+		Visibility:     options.VisibilityFor(),
 		OrganizationID: optionalString(options.Scope.OrganizationID),
 		OwnerTeamID:    optionalString(options.Scope.TeamID),
 		Source:         source,
@@ -356,7 +356,7 @@ func createSkill(ctx context.Context, client *apiclient.Client, slug, displayNam
 
 // explainSlugTaken 把服务端的 SLUG_TAKEN 翻译成人能看懂的话：
 // 团队可见的 Skill 你可能根本看不见（不是团队成员），撞名只能由服务端说。
-func explainSlugTaken(err error, slug string, scope publishScope) error {
+func explainSlugTaken(err error, slug string, scope PublishScope) error {
 	if apiclient.CodeOf(err) != "SLUG_TAKEN" {
 		return err
 	}

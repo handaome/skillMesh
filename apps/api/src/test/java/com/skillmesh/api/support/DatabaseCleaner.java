@@ -16,8 +16,14 @@ public class DatabaseCleaner {
         this.jdbc = jdbc;
     }
 
+    /**
+     * 清空业务数据，保留 Flyway 建的表结构。
+     *
+     * 一条 TRUNCATE ... CASCADE：级联由 PG 按依赖顺序处理，
+     * skills.latest_version 与 skill_versions 的循环外键（可延迟）也由它摆平。
+     * 分成多条 DELETE 反而会撞上 skills.latest_version 这个循环外键。
+     */
     public void clean() {
-        // artifacts 是 skill_versions 的父表，级联方向相反，单独清。
         jdbc.execute("truncate table artifacts, users cascade");
     }
 }

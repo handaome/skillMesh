@@ -31,7 +31,7 @@ func scopeOf(scope, projectRoot string) string {
 
 // agentDirFor 解析某个 Agent 在当前项目下的安装目录。
 func agentDirFor(name string, entry lockfile.LockedSkill, projectRoot string) (string, error) {
-	return agent.Dir(cfg, name, scopeOf(entry.Scope, projectRoot), projectRoot)
+	return agent.Dir(Cfg, name, scopeOf(entry.Scope, projectRoot), projectRoot)
 }
 
 func newListCmd() *cobra.Command {
@@ -71,7 +71,7 @@ func newListCmd() *cobra.Command {
 						managed = "是"
 					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-						skill.Name, agentName, resolvedLabel(skill), target, managed)
+						skill.Name, agentName, ResolvedLabel(skill), target, managed)
 				}
 			}
 			if err := w.Flush(); err != nil {
@@ -107,7 +107,7 @@ func warnRevoked(ctx context.Context, client *apiclient.Client, lock lockfile.Lo
 		if err != nil {
 			continue // 查不到就当没事，别在 list 里制造噪音
 		}
-		status, found := versionStatus(versions, entry.Version)
+		status, found := VersionStatus(versions, entry.Version)
 		if !found || status == "published" {
 			continue
 		}
@@ -116,8 +116,8 @@ func warnRevoked(ctx context.Context, client *apiclient.Client, lock lockfile.Lo
 	}
 }
 
-// resolvedLabel 显示锁住的东西：Git 来源锁的是 commit，注册中心来源锁的是版本号。
-func resolvedLabel(skill lockfile.LockedSkill) string {
+// ResolvedLabel 显示锁住的东西：Git 来源锁的是 commit，注册中心来源锁的是版本号。
+func ResolvedLabel(skill lockfile.LockedSkill) string {
 	if skill.ResolvedCommit != "" {
 		return short(skill.ResolvedCommit)
 	}
@@ -188,7 +188,7 @@ func newUninstallCmd() *cobra.Command {
 					fmt.Printf("已移除 %s\n", target)
 				default:
 					// 默认进回收站：卸载还能找回来（设计文档 §6.4、§15.1）
-					item, err := trash.NewStore(cfg.ConfigDir).Move(entry.Name, target)
+					item, err := trash.NewStore(Cfg.ConfigDir).Move(entry.Name, target)
 					if err != nil {
 						return err
 					}

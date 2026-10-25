@@ -47,7 +47,7 @@ func newInstallCmd() *cobra.Command {
 			if version == "" && !(locked && hasLock) {
 				latest = registryLatestVersion(cmd.Context(), client, args[0])
 			}
-			target, err := selectVersion(versions, version, locked, fromLock, hasLock, latest)
+			target, err := SelectVersion(versions, version, locked, fromLock, hasLock, latest)
 			if err != nil {
 				return err
 			}
@@ -118,7 +118,7 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 	}
 	warnRisks(skillDir)
 	warnRisksOnly(skillDir)
-	verdict, err := verifyArtifact(ctx, client, req.Version, skillDir)
+	verdict, err := VerifyArtifact(ctx, client, req.Version, skillDir)
 	if err != nil {
 		// 验签不通过就不装：装下去的是不是服务端说的那份，验不过就不能进 Agent 目录。
 		return err
@@ -130,13 +130,16 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		return err
 	}
 
+	// 装到多个 Agent 时记第一个的路径：锁文件一条对应一个安装，
+	// 目标路径记主要那个（设计文档 §9.1）。
+	installedPath := ""
 	for _, agentName := range req.Agents {
-		base, err := agent.Dir(cfg, agentName, req.Scope, projectRoot)
+		base, err := agent.Dir(Cfg, agentName, req.Scope, projectRoot)
 		if err != nil {
 			return err
 		}
 		installPath := filepath.Join(base, name)
-		if err := checkTarget(installPath, req.Replace); err != nil {
+		if err := CheckTarget(installPath, req.Replace); err != nil {
 			return err
 		}
 		if err := installer.InstallAtomic(skillDir, installPath, true); err != nil {
@@ -145,13 +148,24 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		if err := installer.MarkInstalled(installPath, "skillmesh:"+req.SkillID); err != nil {
 			return err
 		}
+		if installedPath == "" {
+			installedPath = installPath
+		}
 		// 登记到注册中心：回答「我在哪些机器上装了什么」。
 		// 不登记的话 installations 永远是空的，这个功能等于没有。
 		reportInstallation(ctx, client, req, agentName, installPath)
 		fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
 	}
-	if err := recordInstall(projectRoot, name, req.SkillID, req.Version, req.Scope, req.Agents,
-		installedDigest(skillDir)); err != nil {
+	if err := RecordInstall(InstallRecord{
+		ProjectRoot:   projectRoot,
+		Name:          name,
+		SkillID:       req.SkillID,
+		Target:        req.Version,
+		Scope:         req.Scope,
+		Agents:        req.Agents,
+		InstalledHash: InstalledDigest(skillDir),
+		TargetPath:    installedPath,
+	}); err != nil {
 		return err
 	}
 	// 上报安装完成：服务端只记自己知道的特权动作，本地发生了什么它看不见。
@@ -191,34 +205,48 @@ func artifactSHA256(version apiclient.SkillVersion) string {
 	return version.Artifact.SHA256
 }
 
-// recordInstall 把注册中心安装写进锁文件。
+// RecordInstall 把注册中心安装写进锁文件。
 // 不写的话 list 看不到它，CI 的 --locked 也无从校验（设计文档 §9.2）。
-func recordInstall(projectRoot, name, skillID string, target apiclient.SkillVersion,
-	scope string, agents []string, installedHash string) error {
+// InstallRecord 是一次安装要记进锁文件的内容。
+type InstallRecord struct {
+	ProjectRoot   string
+	Name          string
+	SkillID       string
+	Target        apiclient.SkillVersion
+	Scope         string
+	Agents        []string
+	InstalledHash string
+	// TargetPath 是装到哪：Agent 目录改了以后，按配置重算的位置
+	// 与当初装的对不上（设计文档 §9.1 要求记「目标路径」）。
+	TargetPath string
+}
 
-	lock, err := lockfile.Load(projectRoot)
+// RecordInstall 把这次安装写进锁文件。
+func RecordInstall(record InstallRecord) error {
+	lock, err := lockfile.Load(record.ProjectRoot)
 	if err != nil {
 		return err
 	}
 	entry := lockfile.LockedSkill{
-		Name:          name,
-		SourceID:      skillID,
+		Name:          record.Name,
+		SourceID:      record.SkillID,
 		RefType:       "version",
-		Ref:           target.Version,
-		Version:       target.Version,
-		Scope:         scope,
-		InstalledHash: installedHash,
-		Agents:        agents,
+		Ref:           record.Target.Version,
+		Version:       record.Target.Version,
+		Scope:         record.Scope,
+		InstalledHash: record.InstalledHash,
+		Agents:        record.Agents,
+		TargetPath:    record.TargetPath,
 	}
-	if target.Artifact != nil {
-		entry.SHA256 = target.Artifact.SHA256
+	if record.Target.Artifact != nil {
+		entry.SHA256 = record.Target.Artifact.SHA256
 	}
 	lock.Upsert(entry)
-	return lock.Save(projectRoot)
+	return lock.Save(record.ProjectRoot)
 }
 
-// versionStatus 查一个版本的状态；版本不存在返回空串。
-func versionStatus(versions apiclient.VersionPage, want string) (string, bool) {
+// VersionStatus 查一个版本的状态；版本不存在返回空串。
+func VersionStatus(versions apiclient.VersionPage, want string) (string, bool) {
 	for _, candidate := range versions.Items {
 		if candidate.Version == want {
 			return candidate.Status, true
@@ -227,19 +255,19 @@ func versionStatus(versions apiclient.VersionPage, want string) (string, bool) {
 	return "", false
 }
 
-// pickVersion 选要装的版本。restore/sync/conflict/rollback 还在用它：
+// PickVersion 选要装的版本。restore/sync/conflict/rollback 还在用它：
 // 它们拿不到注册中心的 latest_version，「最新」按版本号算。
-func pickVersion(versions apiclient.VersionPage, want string, locked bool,
+func PickVersion(versions apiclient.VersionPage, want string, locked bool,
 	fromLock lockfile.LockedSkill, hasLock bool) (apiclient.SkillVersion, error) {
-	return selectVersion(versions, want, locked, fromLock, hasLock, "")
+	return SelectVersion(versions, want, locked, fromLock, hasLock, "")
 }
 
-// selectVersion 选要装的版本。--locked 时必须与锁文件完全一致，
+// SelectVersion 选要装的版本。--locked 时必须与锁文件完全一致，
 // 否则 CI 会静默装到漂移的版本（详细设计 §3.10）。
 //
 // latest 是注册中心给的 latest_version（空串表示没拿到）：「最新」优先用它，
 // 拿不到就按版本号取最大的——与注册中心同一个「最新」口径。
-func selectVersion(versions apiclient.VersionPage, want string, locked bool,
+func SelectVersion(versions apiclient.VersionPage, want string, locked bool,
 	fromLock lockfile.LockedSkill, hasLock bool, latest string) (apiclient.SkillVersion, error) {
 	if locked && hasLock {
 		want = fromLock.Version
@@ -262,7 +290,7 @@ func selectVersion(versions apiclient.VersionPage, want string, locked bool,
 		}
 		return candidate, nil
 	}
-	if status, revoked := versionStatus(versions, want); revoked {
+	if status, revoked := VersionStatus(versions, want); revoked {
 		return apiclient.SkillVersion{}, fmt.Errorf("版本 %s 已被撤回，不能安装（当前状态 %s）", want, status)
 	}
 	return apiclient.SkillVersion{}, fmt.Errorf("找不到已发布的版本: %s", want)
@@ -291,7 +319,7 @@ func pickLatestPublished(versions apiclient.VersionPage, latest string) (apiclie
 		if candidate.Status != "published" || candidate.Artifact == nil {
 			continue
 		}
-		if !found || versionGreater(candidate.Version, best.Version) {
+		if !found || VersionGreater(candidate.Version, best.Version) {
 			best, found = candidate, true
 		}
 	}
@@ -313,9 +341,9 @@ func registryLatestVersion(ctx context.Context, client *apiclient.Client, skillI
 	return *skill.LatestVersion
 }
 
-// versionGreater 版本号比大小：对齐服务端 VersionOrder.isGreater——
+// VersionGreater 版本号比大小：对齐服务端 VersionOrder.isGreater——
 // 点分字段按数字比（1.10.0 > 1.9.0），缺的字段当 0，字段不是数字就按字典序比。
-func versionGreater(candidate, current string) bool {
+func VersionGreater(candidate, current string) bool {
 	if candidate == "" {
 		return false
 	}

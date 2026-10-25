@@ -20,9 +20,9 @@ func newDoctorCmd() *cobra.Command {
 		Short: "诊断配置、目录权限、认证状态与 Git 可用性",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Printf("服务端   %s\n", cfg.Server)
-			fmt.Printf("配置目录 %s\n", cfg.ConfigDir)
-			fmt.Printf("缓存目录 %s\n", cfg.CacheDir)
+			fmt.Printf("服务端   %s\n", Cfg.Server)
+			fmt.Printf("配置目录 %s\n", Cfg.ConfigDir)
+			fmt.Printf("缓存目录 %s\n", Cfg.CacheDir)
 
 			if gitPath, err := exec.LookPath("git"); err != nil {
 				fmt.Println("git      未找到，来源解析不可用")
@@ -43,7 +43,7 @@ func newDoctorCmd() *cobra.Command {
 			}
 
 			for _, name := range sortedAgentNames() {
-				agentCfg := cfg.Agents[name]
+				agentCfg := Cfg.Agents[name]
 				if !agentCfg.Enabled {
 					fmt.Printf("agent %-12s 未启用\n", name)
 					continue
@@ -62,7 +62,7 @@ func newDoctorCmd() *cobra.Command {
 
 // reportSyncHealth 报同步队列概况（设计文档 §13：doctor 要能诊断同步队列）。
 func reportSyncHealth() {
-	queue, err := syncqueue.Load(cfg.ConfigDir)
+	queue, err := syncqueue.Load(Cfg.ConfigDir)
 	if err != nil {
 		fmt.Printf("同步队列 读取失败: %v\n", err)
 		return
@@ -104,7 +104,7 @@ func newAgentsCmd() *cobra.Command {
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "AGENT\t启用\t用户目录\t项目目录\t目录状态")
 			for _, name := range agent.Supported {
-				agentCfg, ok := cfg.Agents[name]
+				agentCfg, ok := Cfg.Agents[name]
 				if !ok {
 					fmt.Fprintf(w, "%s\t无配置\t-\t-\t-\n", name)
 					continue
@@ -128,8 +128,8 @@ func newAgentsCmd() *cobra.Command {
 }
 
 func sortedAgentNames() []string {
-	names := make([]string, 0, len(cfg.Agents))
-	for name := range cfg.Agents {
+	names := make([]string, 0, len(Cfg.Agents))
+	for name := range Cfg.Agents {
 		names = append(names, name)
 	}
 	sort.Strings(names)

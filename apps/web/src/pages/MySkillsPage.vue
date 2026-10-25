@@ -4,12 +4,14 @@ import {
   ApiError,
   createSkill,
   getVersions,
+  listRecycleFiles,
   revokeVersion,
+  restoreRecycleFile,
   searchMySkills,
   updateSkill,
 } from '../api'
 import { useSkillList } from '../composables/useSkillList'
-import type { Skill, SkillVersion } from '../types'
+import type { RecycleFile, Skill, SkillVersion } from '../types'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
@@ -43,6 +45,11 @@ const versionsLoading = ref(false)
 const versionsError = ref('')
 const actionError = ref('')
 const notice = ref('')
+
+/** 回收站里的文件。空数组表示没查过或没有。 */
+const recycle = ref<RecycleFile[]>([])
+const recycleLoading = ref(false)
+const recycleError = ref('')
 
 /** 正在浏览哪个版本的文件。空串表示没展开。 */
 const browseVersion = ref('')
@@ -146,6 +153,48 @@ async function select(skill: Skill) {
   } finally {
     if (selected.value?.id === skill.id) versionsLoading.value = false
   }
+  await loadRecycle(skill.id)
+}
+
+/**
+ * 读回收站。
+ *
+ * 回收站是按 Skill 查的（/skills/{id}/recycle）——被删掉的文件属于那个 Skill。
+ */
+async function loadRecycle(skillId: string) {
+  recycleLoading.value = true
+  recycleError.value = ''
+  try {
+    const files = await listRecycleFiles(skillId)
+    if (selected.value?.id !== skillId) return
+    recycle.value = files
+  } catch (e) {
+    if (selected.value?.id !== skillId) return
+    recycleError.value = errorText(e)
+  } finally {
+    if (selected.value?.id === skillId) recycleLoading.value = false
+  }
+}
+
+/**
+ * 恢复一个被删掉的文件。
+ *
+ * 恢复不改旧版本——它产出新版本（版本不可变）。
+ */
+async function restoreFile(file: RecycleFile) {
+  const skill = selected.value
+  if (!skill) return
+  actionError.value = ''
+  try {
+    await restoreRecycleFile(skill.id, file.path)
+  } catch (e) {
+    actionError.value = errorText(e)
+    return
+  }
+  notice.value = `${file.path} 已恢复，发出了新版本。`
+  await loadRecycle(skill.id)
+  const page = await getVersions(skill.id)
+  versions.value = page.items
 }
 
 function clearSelection() {
@@ -459,6 +508,50 @@ onUnmounted(() => {
                     撤回
                   </button>
                 </div>
+              </li>
+            </ul>
+          </div>
+
+          <!--
+            回收站：发新版时被删掉的文件。删掉不是抹掉——
+            回收期内能找回来（设计文档 §6.4）。
+          -->
+          <div class="sm-panel">
+            <div class="sm-panel-head">
+              <h2 class="sm-section">回收站</h2>
+              <span class="sm-meta">{{ recycle.length }} 个文件</span>
+            </div>
+
+            <p v-if="recycleError" class="sm-note sm-note--error sm-mb-12" data-test="recycle-error">
+              {{ recycleError }}
+            </p>
+
+            <div v-if="recycleLoading" class="sm-empty">加载中…</div>
+
+            <EmptyState
+              v-else-if="!recycleError && !recycle.length"
+              text="回收站是空的。发新版时删掉的文件会先放到这儿，过期才清掉。"
+            />
+
+            <ul v-else class="sm-list">
+              <li v-for="file in recycle" :key="file.path" class="sm-item sm-item-static">
+                <div class="sm-grow">
+                  <div class="sm-item-head">
+                    <strong class="sm-mono sm-break">{{ file.path }}</strong>
+                  </div>
+                  <p class="sm-muted sm-sm">
+                    来自 {{ file.source_version }}
+                    · {{ file.size_bytes }} 字节
+                    · {{ formatDateTime(file.created_at) }} 删除
+                  </p>
+                </div>
+                <button
+                  class="sm-btn sm-btn--quiet sm-btn--sm"
+                  data-test="restore-file"
+                  @click="restoreFile(file)"
+                >
+                  恢复
+                </button>
               </li>
             </ul>
           </div>

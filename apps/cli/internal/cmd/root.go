@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var cfg config.Config
+var Cfg config.Config
 
 func newRootCmd() *cobra.Command {
 	var server string
@@ -28,9 +28,9 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg = loaded
+			Cfg = loaded
 			if server != "" {
-				cfg.Server = server
+				Cfg.Server = server
 			}
 			return nil
 		},
@@ -40,11 +40,11 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newLoginCmd(), newLogoutCmd(),
 		newSearchCmd(), newInfoCmd(),
-		newSourceCmd(), newAddCmd(), newInstallCmd(), newPublishCmd(), newRollbackCmd(),
+		newSourceCmd(), NewAddCmd(), newInstallCmd(), newPublishCmd(), newRollbackCmd(),
 		newReviewCmd(),
 		newListCmd(), newStatusCmd(), newUninstallCmd(), newInstallationsCmd(),
 		newScanCmd(), newSyncCmd(), newRestoreCmd(),
-		newDoctorCmd(), newAgentsCmd(), newUpdateCmd(), newLockCmd(), newTrashCmd(),
+		newDoctorCmd(), newAgentsCmd(), NewUpdateCmd(), newLockCmd(), newTrashCmd(),
 		newRecycleCmd(),
 		newWatchCmd(), newDaemonCmd(),
 	)
@@ -66,9 +66,9 @@ func Execute() error {
 // 只能靠环境变量传令牌。交互场景仍走 `skillmesh login` 存进凭据管理器，
 // 不受这个变量影响。
 func newClient(ctx context.Context) (*apiclient.Client, error) {
-	timeout := time.Duration(cfg.Network.TimeoutSeconds) * time.Second
+	timeout := time.Duration(Cfg.Network.TimeoutSeconds) * time.Second
 	if envToken := os.Getenv("SKILLMESH_TOKEN"); envToken != "" {
-		return apiclient.New(cfg.Server, envToken, timeout), nil
+		return apiclient.New(Cfg.Server, envToken, timeout), nil
 	}
 	tokens, err := auth.LoadTokens(tokenPath())
 	if err != nil {
@@ -80,7 +80,7 @@ func newClient(ctx context.Context) (*apiclient.Client, error) {
 			return nil, err
 		}
 	}
-	return apiclient.New(cfg.Server, tokens.AccessToken, timeout), nil
+	return apiclient.New(Cfg.Server, tokens.AccessToken, timeout), nil
 }
 
 // refreshTokens 令牌过期时用 refresh token 换新的，并把新令牌存回去。
@@ -90,14 +90,14 @@ func newClient(ctx context.Context) (*apiclient.Client, error) {
 func refreshTokens(ctx context.Context, tokens auth.Tokens) (auth.Tokens, error) {
 	// 令牌端点不按规矩回话时不能无限挂着：watch/daemon 会卡在这儿，
 	// 既不听文件变化也不同步——正是这个功能要解决的那类停摆。给续期一个上限。
-	timeout := time.Duration(cfg.Network.TimeoutSeconds) * time.Second
+	timeout := time.Duration(Cfg.Network.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	fresh, err := renewedTokens(ctx, tokens, cfg.ClientID)
+	fresh, err := RenewedTokens(ctx, tokens, Cfg.ClientID)
 	if err != nil {
 		return tokens, err
 	}
@@ -107,11 +107,11 @@ func refreshTokens(ctx context.Context, tokens auth.Tokens) (auth.Tokens, error)
 	return fresh, nil
 }
 
-// renewedTokens 是续期这件事本身：换一个新的 access token 回来。
+// RenewedTokens 是续期这件事本身：换一个新的 access token 回来。
 //
 // 单独拆出来是为了能测——它不碰凭据管理器，也不依赖全局配置。
 // issuer 从 access token 的 iss 声明里取：登录时没把它存下来，但令牌自己知道是哪个 realm 签的。
-func renewedTokens(ctx context.Context, tokens auth.Tokens, clientID string) (auth.Tokens, error) {
+func RenewedTokens(ctx context.Context, tokens auth.Tokens, clientID string) (auth.Tokens, error) {
 	if tokens.RefreshToken == "" {
 		return tokens, fmt.Errorf("令牌已过期，请先执行 skillmesh login")
 	}
@@ -130,7 +130,7 @@ func renewedTokens(ctx context.Context, tokens auth.Tokens, clientID string) (au
 }
 
 func tokenPath() string {
-	return filepath.Join(cfg.ConfigDir, "tokens.json")
+	return filepath.Join(Cfg.ConfigDir, "tokens.json")
 }
 
 // mustGetwd 返回当前目录，失败时返回空串（调用方据此判定无项目根）。

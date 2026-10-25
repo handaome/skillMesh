@@ -14,9 +14,9 @@ func orDefaultVersion(version string) string {
 	return version
 }
 
-// nextVersion 在已有版本上累加 patch 位。
+// NextVersion 在已有版本上累加 patch 位。
 // 第一个版本是 1.0.0。已有版本不是语义化版本时报错，让人用 --version 显式指定。
-func nextVersion(existing []string) (string, error) {
+func NextVersion(existing []string) (string, error) {
 	if len(existing) == 0 {
 		return "1.0.0", nil
 	}

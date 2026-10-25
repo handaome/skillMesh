@@ -41,7 +41,7 @@ func warnRisksOnly(skillDir string) {
 	fmt.Println(skillscan.FormatRisks(risks))
 }
 
-// verifyArtifact 验签这一份制品，并对一遍本地算出的摘要。
+// VerifyArtifact 验签这一份制品，并对一遍本地算出的摘要。
 //
 // 两件事都要做：签名验的是「服务端说的摘要没被换」，
 // 本地对摘要验的是「装下来的东西就是那个摘要」。
@@ -49,7 +49,7 @@ func warnRisksOnly(skillDir string) {
 // 第二个返回值是 error：**不通过就是 error**，调用方必须中止安装。
 // 只打印一句「验签失败」然后照样装，等于没有闸门——
 // spec §11 里「不符就拒装」说的就是这里。
-func verifyArtifact(ctx context.Context, client *apiclient.Client, target apiclient.SkillVersion,
+func VerifyArtifact(ctx context.Context, client *apiclient.Client, target apiclient.SkillVersion,
 	skillDir string) (string, error) {
 
 	if target.Artifact == nil || target.Artifact.ContentDigest == "" {
@@ -61,10 +61,10 @@ func verifyArtifact(ctx context.Context, client *apiclient.Client, target apicli
 	}
 	// 钉了公钥就以本地这份为准：注册中心换了密钥而你没更新配置，
 	// 这里必须硬失败，不能只看「签名能不能验过」（设计文档 §10 信任根）。
-	if cfg.Verify.Pinned() {
-		if key.KeyID != cfg.Verify.PinnedKeyID || key.PublicKey != cfg.Verify.PinnedPublicKey {
+	if Cfg.Verify.Pinned() {
+		if key.KeyID != Cfg.Verify.PinnedKeyID || key.PublicKey != Cfg.Verify.PinnedPublicKey {
 			msg := string(verify.Invalid) + "：签名密钥与本地钉住的不一致（服务端 " +
-				key.KeyID + "，本地 " + cfg.Verify.PinnedKeyID + "）"
+				key.KeyID + "，本地 " + Cfg.Verify.PinnedKeyID + "）"
 			return msg, errors.New(msg)
 		}
 	} else if !key.Enabled || key.PublicKey == "" {

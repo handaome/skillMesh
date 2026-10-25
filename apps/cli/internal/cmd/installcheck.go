@@ -16,8 +16,8 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 )
 
-// installFacts 判定一条安装记录要的全部事实。
-type installFacts struct {
+// InstallFacts 判定一条安装记录要的全部事实。
+type InstallFacts struct {
 	Exists   bool   // 目标目录还在不在
 	HasSkill bool   // 目录里还有没有 SKILL.md
 	Digest   string // 本机内容摘要
@@ -53,15 +53,15 @@ func inspectInstall(ctx context.Context, client *apiclient.Client,
 		}
 		readCloudFacts(&facts, versions, row)
 	}
-	return judgeInstall(facts), nil
+	return JudgeInstall(facts), nil
 }
 
 // readInstallFacts 读本机目录：还在不在、Skill 内容还在不在、内容摘要多少。
 //
 // 摘要按 skillscan 的口径算（跳过隐藏文件与凭据文件），跟制品清单一个算法，
 // 两边才可比。
-func readInstallFacts(path string) installFacts {
-	facts := installFacts{}
+func readInstallFacts(path string) InstallFacts {
+	facts := InstallFacts{}
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
 		return facts
@@ -79,7 +79,7 @@ func readInstallFacts(path string) installFacts {
 //
 // 基线取「服务端记的那一版」：本机内容跟它对不上，就是本地被改过。
 // 另外记下最新已发布版：它跟基线不一样，说明云端也动了。
-func readCloudFacts(facts *installFacts, versions apiclient.VersionPage,
+func readCloudFacts(facts *InstallFacts, versions apiclient.VersionPage,
 	row apiclient.Installation) {
 
 	if recorded := recordedVersion(versions, row); recorded != nil {
@@ -89,7 +89,7 @@ func readCloudFacts(facts *installFacts, versions apiclient.VersionPage,
 		facts.Baseline = contentDigest(*recorded)
 	}
 	// 最新已发布版按 install 选版本的口径取（版本号最大的已发布版）。
-	if latest, err := pickVersion(versions, "", false, lockfile.LockedSkill{}, false); err == nil {
+	if latest, err := PickVersion(versions, "", false, lockfile.LockedSkill{}, false); err == nil {
 		facts.LatestVersion = latest.Version
 		facts.LatestDigest = contentDigest(latest)
 	}
@@ -116,7 +116,7 @@ func diskVersionOf(versions apiclient.VersionPage, diskDigest string) string {
 		if item.Status != "published" || contentDigest(item) != diskDigest {
 			continue
 		}
-		if match == "" || versionGreater(item.Version, match) {
+		if match == "" || VersionGreater(item.Version, match) {
 			match = item.Version
 		}
 	}
@@ -142,13 +142,13 @@ func recordedVersion(versions apiclient.VersionPage,
 	return nil
 }
 
-// judgeInstall 按事实判定一条安装记录的真实状态。
+// JudgeInstall 按事实判定一条安装记录的真实状态。
 //
 // 本机磁盘是硬事实：目录没了就是 uninstalled，SKILL.md 没了就是 missing。
 // 本机内容跟服务端记的那一版对不上，就是本地改过（local_modified）；
 // 云端同时还有内容不同的已发布版本，就是两边都动了（conflict）。
 // 服务端记的那一版在云端已经不能用了，就是 blocked。
-func judgeInstall(facts installFacts) installOutcome {
+func JudgeInstall(facts InstallFacts) installOutcome {
 	out := installOutcome{Status: "active"}
 	switch {
 	case !facts.Exists:
@@ -198,11 +198,11 @@ func boolPointer(value bool) *bool {
 	return &value
 }
 
-// checkInstallations 巡检本机的安装记录，把真实状态写回服务端。
+// CheckInstallations 巡检本机的安装记录，把真实状态写回服务端。
 //
 // 只动本机的记录：别的机器上的目录在这台机器上根本不存在，
 // 按「目录不在」去判会把别人的记录写成已卸载。
-func checkInstallations(ctx context.Context, client *apiclient.Client,
+func CheckInstallations(ctx context.Context, client *apiclient.Client,
 	rows []apiclient.Installation) ([]apiclient.Installation, []string) {
 
 	notes := []string{}

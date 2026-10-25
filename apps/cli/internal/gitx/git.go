@@ -31,9 +31,11 @@ func NormalizeURL(raw string) (string, error) {
 		return "", fmt.Errorf("拒绝本地路径作为来源，请用远程仓库地址")
 	}
 	switch parsed.Scheme {
-	case "https", "ssh", "git", "":
+	case "https", "ssh", "":
 	default:
-		return "", fmt.Errorf("只允许 https/ssh/git，实际为 %s", parsed.Scheme)
+		// git:// 是明文协议，凭据与内容都不加密——设计文档 §7.3
+		// 「默认仅允许 HTTPS/SSH」。要连自建 Git 服务就用 ssh:// 或 https://。
+		return "", fmt.Errorf("只允许 https/ssh，实际为 %s", parsed.Scheme)
 	}
 	// ssh://git@github.com/owner/repo.git 里的 git 是用户名不是凭据，
 	// 只有带了密码/token 才该拒。
@@ -54,7 +56,7 @@ func Clone(ctx context.Context, repo, ref, dest string) (string, error) {
 		cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", gitError(args, err, string(out))
+			return "", GitError(args, err, string(out))
 		}
 		return strings.TrimSpace(string(out)), nil
 	}
@@ -96,7 +98,7 @@ func LsRemote(ctx context.Context, repo, ref string) (string, error) {
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", gitError(args, err, string(out))
+		return "", GitError(args, err, string(out))
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
@@ -112,4 +114,14 @@ func parentOf(path string) string {
 		return path[:idx]
 	}
 	return "."
+}
+
+// HasTag 报本地克隆里有没有这个 tag。
+//
+// clone --branch <tag> 会把 tag ref 一并带下来，所以查本地就够——
+// 不用再问一次远端（省一次网络往返）。
+func HasTag(repoDir, tag string) bool {
+	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--verify", "--quiet", "refs/tags/"+tag)
+	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return cmd.Run() == nil
 }

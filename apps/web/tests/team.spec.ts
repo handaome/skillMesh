@@ -153,6 +153,32 @@ describe('TeamPage', () => {
       .toBe('publisher')
   })
 
+  it('禁用成员会 PATCH 账号状态', async () => {
+    session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
+    let status = MEMBER.status ?? 'active'
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        status = JSON.parse(String(init.body)).status
+        return noContent()
+      }
+      if (url.includes('/members')) return jsonResponse([{ ...MEMBER, status }])
+      if (url.includes('/invitations')) return invitationPage([INVITATION])
+      return jsonResponse([TEAM])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountTeam()
+
+    const toggle = wrapper.find('button[data-test="member-status-toggle"]')
+    await toggle.trigger('click')
+    await flushPromises()
+
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')
+    expect(patch?.[0]).toBe('/api/v1/organizations/org1/members/u1')
+    expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ status: 'disabled' })
+    // PATCH 之后重读列表，界面上的状态才是服务端确认过的值
+    expect(wrapper.find('button[data-test="member-status-toggle"]').text()).toBe('启用')
+  })
+
   it('改角色失败时显示服务端错误码', async () => {
     session.organizations = [{ id: 'org1', slug: 'acme', name: 'Acme', role: 'owner' }]
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {

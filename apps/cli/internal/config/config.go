@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultServer   = "http://localhost:8080/api/v1"
-	defaultClientID = "skillmesh-cli"
+	DefaultServer   = "http://localhost:8080/api/v1"
+	DefaultClientID = "skillmesh-cli"
 )
 
 // Config 是 CLI 配置。字段与 config.yaml 对应。
@@ -22,9 +22,20 @@ type Config struct {
 	Network  NetworkConfig    `yaml:"network"`
 	Agents   map[string]Agent `yaml:"agents"`
 	Verify   VerifyConfig     `yaml:"verify"`
+	Sync     SyncConfig       `yaml:"sync"`
 
 	ConfigDir string `yaml:"-"`
 	CacheDir  string `yaml:"-"`
+}
+
+// SyncConfig 是本地同步的设置。
+type SyncConfig struct {
+	// ExtraDirs 是额外要扫描的目录（项目级、自定义目录）。
+	//
+	// Agent 适配器给出的用户级目录默认就扫；这里放的是**别的**地方——
+	// 比如某个项目里的 .claude/skills，或团队约定的共享目录。
+	// 设计文档 §6.1：支持用户级目录、项目级目录和自定义目录。
+	ExtraDirs []string `yaml:"extra_dirs"`
 }
 
 // VerifyConfig 是钉住的验签公钥（信任根）。
@@ -69,8 +80,8 @@ func dirExists(path string) bool {
 func defaults() Config {
 	configDir, cacheDir := DefaultPaths()
 	return Config{
-		Server:   defaultServer,
-		ClientID: defaultClientID,
+		Server:   DefaultServer,
+		ClientID: DefaultClientID,
 		Network:  NetworkConfig{TimeoutSeconds: 30, MaxRetries: 5},
 		Verify:   VerifyConfig{},
 		Agents: map[string]Agent{
@@ -87,8 +98,12 @@ func defaults() Config {
 			// Cursor 有两个候选用户级路径（设计文档 §8）：
 			// ~/.cursor/skills 与 ~/.agents/skills。启动时探测哪个真的存在，
 			// 探测到就用它，并在 agents detect 里说明用的是哪一个。
+			//
+			// 默认关着：设计文档 §4 把 Cursor 列在「后续增强」里（首期是
+			// Claude Code 与 Codex），目录约定还没在真实安装上验证过。
+			// 要用就在 config.yaml 里打开。
 			"cursor": {
-				Enabled:       true,
+				Enabled:       false,
 				UserSkillsDir: detectCursorDir(),
 				ProjectSkills: filepath.Join(".cursor", "skills"),
 			},
@@ -114,48 +129,48 @@ func detectCursorDir() string {
 }
 
 // markDetected 记录实际存在哪些 Agent 目录，供 agents detect 如实展示。
-func markDetected(cfg *Config) {
-	for name, agentCfg := range cfg.Agents {
+func markDetected(Cfg *Config) {
+	for name, agentCfg := range Cfg.Agents {
 		if dirExists(agentCfg.UserSkillsDir) {
 			agentCfg.DetectedDir = agentCfg.UserSkillsDir
-			cfg.Agents[name] = agentCfg
+			Cfg.Agents[name] = agentCfg
 		}
 	}
 }
 
 // Load 按 环境变量 > 配置文件 > 默认值 的优先级读取配置。
 func Load() (Config, error) {
-	cfg := defaults()
+	Cfg := defaults()
 	if v := os.Getenv("SKILLMESH_SERVER"); v != "" {
-		cfg.Server = v
+		Cfg.Server = v
 	}
 	if v := os.Getenv("SKILLMESH_CLIENT_ID"); v != "" {
-		cfg.ClientID = v
+		Cfg.ClientID = v
 	}
 
-	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "config.yaml"))
+	data, err := os.ReadFile(filepath.Join(Cfg.ConfigDir, "config.yaml"))
 	if os.IsNotExist(err) {
-		markDetected(&cfg) // 没配置文件也要探测：Cursor 路径本来就靠探测定
-		return cfg, nil
+		markDetected(&Cfg) // 没配置文件也要探测：Cursor 路径本来就靠探测定
+		return Cfg, nil
 	}
 	if err != nil {
-		return cfg, fmt.Errorf("读取 config.yaml: %w", err)
+		return Cfg, fmt.Errorf("读取 config.yaml: %w", err)
 	}
 	var file Config
 	if err := yaml.Unmarshal(data, &file); err != nil {
-		return cfg, fmt.Errorf("解析 config.yaml: %w", err)
+		return Cfg, fmt.Errorf("解析 config.yaml: %w", err)
 	}
 	if file.Server != "" {
-		cfg.Server = file.Server
+		Cfg.Server = file.Server
 	}
 	if file.ClientID != "" {
-		cfg.ClientID = file.ClientID
+		Cfg.ClientID = file.ClientID
 	}
 	if file.Network.TimeoutSeconds > 0 {
-		cfg.Network = file.Network
+		Cfg.Network = file.Network
 	}
 	for name, agent := range file.Agents {
-		existing := cfg.Agents[name]
+		existing := Cfg.Agents[name]
 		existing.Enabled = agent.Enabled
 		if agent.UserSkillsDir != "" {
 			existing.UserSkillsDir = expandHome(agent.UserSkillsDir)
@@ -163,15 +178,21 @@ func Load() (Config, error) {
 		if agent.ProjectSkills != "" {
 			existing.ProjectSkills = agent.ProjectSkills
 		}
-		cfg.Agents[name] = existing
+		Cfg.Agents[name] = existing
 	}
 	// 钉住的验签公钥是信任根：读进来才叫钉住。
-	// 漏了这一行，cfg.Verify 永远是零值，Pinned() 恒为 false——
+	// 漏了这一行，Cfg.Verify 永远是零值，Pinned() 恒为 false——
 	// 注册中心换把钥匙照样验签通过，信任根形同虚设。
-	cfg.Verify = file.Verify
-	cfg.Server = strings.TrimRight(cfg.Server, "/")
-	markDetected(&cfg)
-	return cfg, nil
+	Cfg.Verify = file.Verify
+	// 额外扫描的目录：路径里的 ~ 要展开，跟 Agent 目录一样。
+	for _, dir := range file.Sync.ExtraDirs {
+		if dir != "" {
+			Cfg.Sync.ExtraDirs = append(Cfg.Sync.ExtraDirs, expandHome(dir))
+		}
+	}
+	Cfg.Server = strings.TrimRight(Cfg.Server, "/")
+	markDetected(&Cfg)
+	return Cfg, nil
 }
 
 func expandHome(path string) string {

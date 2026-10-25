@@ -316,15 +316,11 @@ func watchEvents(ctx context.Context) (*dirWatcher, error) {
 	}, nil
 }
 
-// watchedDirs 列出该监听的目录：Agent 根目录 + 其中每个 Skill 目录。
+// watchedDirs 列出该监听的目录：Agent 根目录 + 其中每个 Skill 目录 + 额外配置的目录。
 func watchedDirs() []string {
 	var dirs []string
 	seen := map[string]bool{}
-	for _, agentName := range syncAgentNames(nil) {
-		root, err := agent.Dir(cfg, agentName, "user", "")
-		if err != nil {
-			continue
-		}
+	add := func(root string) {
 		for _, dir := range append([]string{root}, localSkills(root)...) {
 			if seen[dir] {
 				continue
@@ -332,6 +328,17 @@ func watchedDirs() []string {
 			seen[dir] = true
 			dirs = append(dirs, dir)
 		}
+	}
+	for _, agentName := range syncAgentNames(nil) {
+		root, err := agent.Dir(Cfg, agentName, "user", "")
+		if err != nil {
+			continue
+		}
+		add(root)
+	}
+	// 额外配置的目录（项目级、自定义目录）同样要盯着（设计文档 §6.1）。
+	for _, dir := range Cfg.Sync.ExtraDirs {
+		add(dir)
 	}
 	return dirs
 }
@@ -351,7 +358,7 @@ func sleepQuiet(ctx context.Context, d time.Duration) bool {
 // reconcile 跑一轮完整同步，并把 auto_safe 的 Git 来源也更新掉
 // （设计文档 §7.2：自动更新只在「无本地冲突且策略允许」时发生）。
 func reconcile(ctx context.Context) error {
-	results, _, err := runSync(ctx, syncOptions{})
+	results, _, err := runSync(ctx, SyncOptions{})
 	if err != nil {
 		return err
 	}
@@ -359,7 +366,7 @@ func reconcile(ctx context.Context) error {
 		logf("自动更新失败: %v", err)
 	}
 	for _, result := range results {
-		if result.Outcome == failed || result.Outcome == conflicted {
+		if result.Outcome == Failed || result.Outcome == Conflicted {
 			logf("%s %s：%s", result.Name, result.Outcome, oneLine(result.Detail))
 			continue
 		}
@@ -370,31 +377,51 @@ func reconcile(ctx context.Context) error {
 
 // applyAutoSafeUpdates 更新标记了 auto_safe 的 Git 来源。
 // 本地有改动的那些由 applyUpdates 里的守卫挡掉，不会被覆盖。
+//
+// notify 策略的来源只提示差异、不自动应用——
+// 用户确认后才应用是 notify 的语义（设计文档 §7.2）。
+// manual 的来源连查都不查。
 func applyAutoSafeUpdates(ctx context.Context) error {
 	projectRoot := mustGetwd()
 	lock, err := lockfile.Load(projectRoot)
 	if err != nil {
 		return err
 	}
-	if autoSafe(lock) == 0 {
+	if autoSafe(lock) == 0 && countByPolicy(lock, "notify") == 0 {
 		return nil
 	}
-	updates, err := CheckUpdates(ctx, lock)
+	updates, err := CheckUpdatesBackground(ctx, lock)
 	if err != nil {
 		return err
 	}
-	selected := filterAutoSafe(lock, updates)
+	// notify：只报差异，让用户自己决定。
+	for _, update := range FilterByPolicy(lock, updates, "notify") {
+		logf("%s 有新版本可用（本地 %s → 远端 %s）：skillmesh update %s",
+			update.Name, short(update.LocalCommit), short(update.RemoteCommit), update.Name)
+	}
+	selected := FilterAutoSafe(lock, updates)
 	if len(selected) == 0 {
 		return nil
 	}
 	return applyUpdates(ctx, projectRoot, &lock, selected, false)
 }
 
+// countByPolicy 数一数有多少个来源声明了某个更新策略。
+func countByPolicy(lock lockfile.Lock, policy string) int {
+	count := 0
+	for _, entry := range lock.Skills {
+		if entry.Repository != "" && policyOf(lock, entry.Name) == policy {
+			count++
+		}
+	}
+	return count
+}
+
 // skillSnapshot 拍一张「每个 Skill 的内容摘要」快照。
 func skillSnapshot() map[string]string {
 	snapshot := map[string]string{}
 	for _, agentName := range syncAgentNames(nil) {
-		dir, err := agent.Dir(cfg, agentName, "user", "")
+		dir, err := agent.Dir(Cfg, agentName, "user", "")
 		if err != nil {
 			continue
 		}
@@ -421,9 +448,9 @@ func sameSnapshot(a, b map[string]string) bool {
 	return true
 }
 
-func watchPidPath() string   { return filepath.Join(cfg.ConfigDir, pidFileName) }
-func watchPausePath() string { return filepath.Join(cfg.ConfigDir, pauseFileName) }
-func watchLogPath() string   { return filepath.Join(cfg.CacheDir, logFileName) }
+func watchPidPath() string   { return filepath.Join(Cfg.ConfigDir, pidFileName) }
+func watchPausePath() string { return filepath.Join(Cfg.ConfigDir, pauseFileName) }
+func watchLogPath() string   { return filepath.Join(Cfg.CacheDir, logFileName) }
 
 // watchRunning 看 PID 文件里的进程还活着没。
 func watchRunning() (int, bool) {

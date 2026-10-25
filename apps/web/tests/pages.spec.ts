@@ -93,6 +93,58 @@ describe('MarketPage', () => {
     expect(urls.some((u) => u.includes('q=rust'))).toBe(true)
   })
 
+  it('版本表展示扫描结论', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/versions')) {
+        return jsonResponse({
+          items: [{
+            id: 'v1', skill_id: 's1', version: '1.0.0', channel: 'stable',
+            status: 'published', source_commit: 'abc',
+            artifact: { id: 'a1', sha256: 'b'.repeat(64), size_bytes: 10, content_type: 'application/zip' },
+            published_at: null, created_at: '2026-10-20T00:00:00Z',
+            scan: {
+              scanner_name: 'builtin', scanner_version: '0.1.0', status: 'passed',
+              summary: '未发现问题', completed_at: null, findings: [],
+            },
+          }],
+          next_cursor: null, has_more: false,
+        })
+      }
+      return jsonResponse({
+        items: [{
+          id: 's1', slug: 'java-debug', name: 'Java Debug', description: '调试',
+          visibility: 'public', status: 'active', tags: [],
+          latest_version: '1.0.0',
+          created_at: '2026-10-20T00:00:00Z', updated_at: '2026-10-20T00:00:00Z',
+        }],
+        next_cursor: null, has_more: false,
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountMarket()
+    // 先搜出列表，才点得开 Skill
+    await wrapper.find('[data-test="search"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="skill-item"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('通过')
+  })
+
+  it('可见性筛选放进查询参数', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ items: [], next_cursor: null, has_more: false }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountMarket()
+    const filter = wrapper.find('select[data-test="visibility-filter"]')
+    await filter.setValue('public')
+    await flushPromises()
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url))
+    expect(urls.some((u) => u.includes('visibility=public'))).toBe(true)
+  })
+
   it('失败时展示错误码而不是静默失败', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(problemResponse(401, 'UNAUTHORIZED', '令牌无效')))
     const wrapper = await mountMarket()

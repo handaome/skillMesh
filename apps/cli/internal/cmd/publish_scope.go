@@ -12,9 +12,9 @@ import (
 // errTeamNeedsOrg 是「给了 --team 没给 --org」的错误。
 var errTeamNeedsOrg = errors.New("指定 --team 时必须同时指定 --org")
 
-// publishScope 是发布到组织/团队时要带的 id 与可见性。
+// PublishScope 是发布到组织/团队时要带的 id 与可见性。
 // slug 一起带着：报错时要说的是「组织 acme」而不是一串 UUID。
-type publishScope struct {
+type PublishScope struct {
 	OrganizationID   string
 	OrganizationSlug string
 	TeamID           string
@@ -25,8 +25,8 @@ type publishScope struct {
 	Teams []apiclient.Team
 }
 
-// findOrganization 按 slug 找组织。
-func findOrganization(orgs []apiclient.OrgMembership, slug string) (*apiclient.OrgMembership, error) {
+// FindOrganization 按 slug 找组织。
+func FindOrganization(orgs []apiclient.OrgMembership, slug string) (*apiclient.OrgMembership, error) {
 	for i := range orgs {
 		if orgs[i].Slug == slug {
 			return &orgs[i], nil
@@ -55,17 +55,17 @@ func findTeam(teams []apiclient.Team, orgSlug, slug string) (*apiclient.Team, er
 		slug, orgSlug, strings.Join(slugs, " / "))
 }
 
-// checkScopeFlags 校验 --org / --team 的组合：给了团队就必须同时给组织。
-func checkScopeFlags(orgSlug, teamSlug string) error {
+// CheckScopeFlags 校验 --org / --team 的组合：给了团队就必须同时给组织。
+func CheckScopeFlags(orgSlug, teamSlug string) error {
 	if orgSlug == "" && teamSlug != "" {
 		return errTeamNeedsOrg
 	}
 	return nil
 }
 
-// checkVisibilityFlag 校验显式给的 --visibility 与 --org/--team 是否自洽。
+// CheckVisibilityFlag 校验显式给的 --visibility 与 --org/--team 是否自洽。
 // requested 是用户显式给的 --visibility，没给就是空串（默认值不算）。
-func checkVisibilityFlag(orgSlug, teamSlug, requested string) error {
+func CheckVisibilityFlag(orgSlug, teamSlug, requested string) error {
 	if requested == "" {
 		return nil
 	}
@@ -88,34 +88,34 @@ func checkVisibilityFlag(orgSlug, teamSlug, requested string) error {
 	return nil
 }
 
-// resolvePublishScope 定出发布范围：org 已经查好，teams 是该组织的团队列表。
+// ResolvePublishScope 定出发布范围：org 已经查好，teams 是该组织的团队列表。
 //
 // 指定团队 → visibility=team（组织与团队 id 都要带）；
 // 只指定组织 → visibility=organization；都不指定 → 用原可见性。
-func resolvePublishScope(org *apiclient.OrgMembership, teams []apiclient.Team,
-	teamSlug, visibility string) (publishScope, error) {
+func ResolvePublishScope(org *apiclient.OrgMembership, teams []apiclient.Team,
+	teamSlug, visibility string) (PublishScope, error) {
 
 	if org == nil {
 		if teamSlug != "" {
-			return publishScope{}, errTeamNeedsOrg
+			return PublishScope{}, errTeamNeedsOrg
 		}
-		return publishScope{Visibility: visibility}, nil
+		return PublishScope{Visibility: visibility}, nil
 	}
-	if !roleAtLeast(org.Role, "publisher") {
-		return publishScope{}, fmt.Errorf(
+	if !RoleAtLeast(org.Role, "publisher") {
+		return PublishScope{}, fmt.Errorf(
 			"你在组织 %q 的角色是 %s，发布到组织/团队需要 publisher 及以上", org.Slug, org.Role)
 	}
-	scope := publishScope{OrganizationID: org.ID, OrganizationSlug: org.Slug,
+	scope := PublishScope{OrganizationID: org.ID, OrganizationSlug: org.Slug,
 		Visibility: "organization", Teams: teams}
 	if teamSlug == "" {
 		return scope, nil
 	}
 	team, err := findTeam(teams, org.Slug, teamSlug)
 	if err != nil {
-		return publishScope{}, err
+		return PublishScope{}, err
 	}
 	if team.Status != "active" {
-		return publishScope{}, fmt.Errorf("团队 %q 不是 active 状态（当前 %q），不能作为发布目标",
+		return PublishScope{}, fmt.Errorf("团队 %q 不是 active 状态（当前 %q），不能作为发布目标",
 			teamSlug, team.Status)
 	}
 	scope.TeamID = team.ID
@@ -124,23 +124,23 @@ func resolvePublishScope(org *apiclient.OrgMembership, teams []apiclient.Team,
 	return scope, nil
 }
 
-// loadPublishScope 取我可见的组织与团队，再解析成发布范围。
-func loadPublishScope(ctx context.Context, client *apiclient.Client,
-	orgSlug, teamSlug, visibility string) (publishScope, error) {
+// LoadPublishScope 取我可见的组织与团队，再解析成发布范围。
+func LoadPublishScope(ctx context.Context, client *apiclient.Client,
+	orgSlug, teamSlug, visibility string) (PublishScope, error) {
 
-	if err := checkScopeFlags(orgSlug, teamSlug); err != nil {
-		return publishScope{}, err
+	if err := CheckScopeFlags(orgSlug, teamSlug); err != nil {
+		return PublishScope{}, err
 	}
 	if orgSlug == "" {
-		return publishScope{Visibility: visibility}, nil
+		return PublishScope{Visibility: visibility}, nil
 	}
 	me, err := client.Me(ctx)
 	if err != nil {
-		return publishScope{}, err
+		return PublishScope{}, err
 	}
-	org, err := findOrganization(me.Organizations, orgSlug)
+	org, err := FindOrganization(me.Organizations, orgSlug)
 	if err != nil {
-		return publishScope{}, err
+		return PublishScope{}, err
 	}
 	var teams []apiclient.Team
 	if teamSlug != "" {
@@ -148,19 +148,19 @@ func loadPublishScope(ctx context.Context, client *apiclient.Client,
 		// 团队接口挂了也不该把「发到组织」一起拖下水。
 		teams, err = client.Teams(ctx, org.ID)
 		if err != nil {
-			return publishScope{}, err
+			return PublishScope{}, err
 		}
 	}
-	return resolvePublishScope(org, teams, teamSlug, visibility)
+	return ResolvePublishScope(org, teams, teamSlug, visibility)
 }
 
-// checkExistingSkill 已有 Skill 的归属与可见性都改不动——
+// CheckExistingSkill 已有 Skill 的归属与可见性都改不动——
 // 服务端 PATCH /skills/{id} 只收名称、描述、标签，slug 与可见性不收。
 // 带着新要求去发布只会让人以为生效了，直接说清楚。
 //
 // 但「重申同一个归属」不是改归属：发 v2 时再带上一样的 --org/--team 是主流程，
 // 只有归属对不上才拦。不带 scope 时一律放行——那是「沿用已登记的归属」。
-func checkExistingSkill(skill apiclient.Skill, scope publishScope, requested string) error {
+func CheckExistingSkill(skill apiclient.Skill, scope PublishScope, requested string) error {
 	if scope.OrganizationID != "" || scope.TeamID != "" {
 		actual := ownerScope(skill, scope)
 		if actual.OrganizationID != scope.OrganizationID || actual.TeamID != scope.TeamID {
@@ -177,8 +177,8 @@ func checkExistingSkill(skill apiclient.Skill, scope publishScope, requested str
 
 // ownerScope 说这个 Skill 已登记的归属：slug 能对上就说 slug，对不上才退回 id。
 // 同一组织的 slug 就是 scope 里的那个；团队靠 scope 已解析的团队列表反查。
-func ownerScope(skill apiclient.Skill, scope publishScope) publishScope {
-	owner := publishScope{OrganizationID: skill.OrganizationID, TeamID: skill.OwnerTeamID}
+func ownerScope(skill apiclient.Skill, scope PublishScope) PublishScope {
+	owner := PublishScope{OrganizationID: skill.OrganizationID, TeamID: skill.OwnerTeamID}
 	if owner.OrganizationID == scope.OrganizationID {
 		owner.OrganizationSlug = scope.OrganizationSlug
 	}
@@ -191,7 +191,7 @@ func ownerScope(skill apiclient.Skill, scope publishScope) publishScope {
 }
 
 // describe 说清一段归属：组织与团队（或个人）。没有 slug 就退回 id。
-func (s publishScope) describe() string {
+func (s PublishScope) describe() string {
 	org := s.OrganizationSlug
 	if org == "" {
 		org = s.OrganizationID

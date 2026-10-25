@@ -214,7 +214,9 @@ public class InstallationController {
 
     public record RegisterInstallationRequest(
         @NotNull UUID skill_id,
-        UUID device_id,
+        // 设备必须明确：判重靠 (user_id, device_id, target_path, skill_id)，
+        // device_id 缺省时这个条件恒不成立，重复登记会插出多行。
+        @NotNull UUID device_id,
         @NotBlank String agent,
         @NotBlank @Pattern(regexp = "user|project|custom") String install_scope,
         String project_root,

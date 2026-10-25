@@ -99,6 +99,8 @@ public class SyncUploadService {
                 "一次最多上传 " + MAX_FILES + " 个文件");
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        // 顺手清过期会话：对象存储的临时对象会自动过期，这张表不跟着清就一直涨。
+        uploads.deleteExpired(now);
         List<UploadSlot> slots = new ArrayList<>();
         Set<String> paths = new HashSet<>();
         for (FileSpec file : files) {
@@ -113,7 +115,7 @@ public class SyncUploadService {
             session.setId(UUID.randomUUID());
             session.setActorUserId(user.id());
             session.setDeviceId(changeset.getDeviceId());
-            session.setPurpose("sync_file");
+            session.setPurpose(UploadSessionEntity.PURPOSE_SYNC_FILE);
             session.setChangesetId(changesetId);
             session.setRelativePath(file.path());
             session.setTemporaryStorageKey(tempKey(changesetId, file.path()));
@@ -155,7 +157,8 @@ public class SyncUploadService {
         skillService.requirePublishRight(user, skill);
         // 锁住 Skill 行再读基线、算版本号：并发提交会排队，
         // 不会各读各的基线后各写一版，撞 UNIQUE(skill_id, version) 变成 500。
-        // 锁的顺序是「先版本行、后 Skill 行」——这里不锁别人的版本行，只锁 Skill 行。
+        // 锁的顺序全局统一为「先 Skill 行、后版本行」（转正路径 UploadService.complete
+        // 也是这个顺序）——两条路径一致才不会死锁。
         SkillEntity locked = skills.findByIdForUpdate(changeset.getSkillId()).orElse(skill);
         List<SkillVersionEntity> rows =
             versions.findBySkillIdOrderByCreatedAtDescThenId(changeset.getSkillId());
@@ -269,7 +272,9 @@ public class SyncUploadService {
     private List<UploadedFile> collectUploadedFiles(UUID changesetId) throws IOException {
         List<UploadedFile> files = new ArrayList<>();
         long total = 0;
-        for (UploadSessionEntity session : uploads.findByChangesetIdOrderByRelativePathAsc(changesetId)) {
+        for (UploadSessionEntity session :
+                uploads.findByChangesetIdAndPurposeOrderByRelativePathAsc(
+                    changesetId, UploadSessionEntity.PURPOSE_SYNC_FILE)) {
             if (!"completed".equals(session.getStatus())) {
                 throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                     "还有文件没传完：" + session.getRelativePath());

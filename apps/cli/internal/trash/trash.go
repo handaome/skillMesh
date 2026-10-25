@@ -32,6 +32,9 @@ func NewStore(configDir string) *Store {
 	return &Store{dir: filepath.Join(configDir, "trash")}
 }
 
+// Dir 是回收站所在目录。外部包（如 test/）要用它核对条目。
+func (s *Store) Dir() string { return s.dir }
+
 // Move 把目录移进回收站，返回那条记录。
 func (s *Store) Move(name, from string) (Item, error) {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {

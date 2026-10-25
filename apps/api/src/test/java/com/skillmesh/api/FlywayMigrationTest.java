@@ -33,7 +33,7 @@ class FlywayMigrationTest {
     }
 
     @Test
-    void 迁移建出全部21张表() {
+    void 迁移建出全部20张表() {
         List<String> tables = jdbc.queryForList(
             "select table_name from information_schema.tables "
                 + "where table_schema = current_schema() and table_name not like 'flyway%' "
@@ -42,10 +42,10 @@ class FlywayMigrationTest {
         assertThat(tables).containsExactlyInAnyOrder(
             "users", "organizations", "organization_memberships", "teams", "team_memberships",
             "skills", "skill_sources", "artifacts", "skill_versions", "skill_scans",
-            "skill_reviews", "skill_permissions", "devices", "installations",
+            "skill_reviews", "devices", "installations",
             "sync_states", "sync_changesets", "sync_conflicts", "upload_sessions",
             "audit_events", "org_invitations", "skill_recycle_files");
-        assertThat(tables).hasSize(21);
+        assertThat(tables).hasSize(20);
     }
 
     @Test

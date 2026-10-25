@@ -40,7 +40,7 @@ func newRecycleListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			id, err := resolveSkillID(cmd.Context(), client, skill)
+			id, err := ResolveSkillID(cmd.Context(), client, skill)
 			if err != nil {
 				return err
 			}
@@ -76,7 +76,7 @@ func newRecycleRestoreCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			id, err := resolveSkillID(cmd.Context(), client, skill)
+			id, err := ResolveSkillID(cmd.Context(), client, skill)
 			if err != nil {
 				return err
 			}
@@ -93,11 +93,11 @@ func newRecycleRestoreCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveSkillID 把 slug 或 id 变成 Skill id。
+// ResolveSkillID 把 slug 或 id 变成 Skill id。
 //
 // 不给 --skill 时用当前目录的 Skill——人在哪个 Skill 的目录里，多半就是
 // 想处理哪个。
-func resolveSkillID(ctx context.Context, client *apiclient.Client, given string) (string, error) {
+func ResolveSkillID(ctx context.Context, client *apiclient.Client, given string) (string, error) {
 	if given != "" {
 		// id 是 UUID，slug 规则不接受：先按 id 认，认不出再当 slug 查。
 		if looksLikeUUID(given) {

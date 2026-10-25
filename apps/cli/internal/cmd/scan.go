@@ -60,7 +60,7 @@ func newScanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			state, err := syncstate.Load(cfg.ConfigDir)
+			state, err := syncstate.Load(Cfg.ConfigDir)
 			if err != nil {
 				return err
 			}
@@ -100,14 +100,14 @@ func scanDirs(args []string, path string, agentNames []string, allAgents bool) (
 	if allAgents || len(names) == 0 {
 		names = nil
 		for _, name := range agent.Supported {
-			if agentCfg, ok := cfg.Agents[name]; ok && agentCfg.Enabled {
+			if agentCfg, ok := Cfg.Agents[name]; ok && agentCfg.Enabled {
 				names = append(names, name)
 			}
 		}
 	}
 	var targets []scanTarget
 	for _, name := range names {
-		dir, err := agent.Dir(cfg, name, "user", "")
+		dir, err := agent.Dir(Cfg, name, "user", "")
 		if err != nil {
 			return nil, err
 		}
