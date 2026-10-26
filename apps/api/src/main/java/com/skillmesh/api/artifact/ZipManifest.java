@@ -3,11 +3,13 @@ package com.skillmesh.api.artifact;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.PathOrder;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -78,8 +80,8 @@ public final class ZipManifest {
         } catch (IOException e) {
             throw new IllegalStateException("读 zip 失败", e);
         }
-        manifest.sort((left, right) ->
-            String.valueOf(left.get("path")).compareTo(String.valueOf(right.get("path"))));
+        manifest.sort(Comparator.comparing(left -> String.valueOf(left.get("path")),
+            PathOrder.BY_CODE_POINT));
         return manifest;
     }
 

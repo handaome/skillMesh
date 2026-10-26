@@ -10,6 +10,7 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.PathOrder;
 import com.skillmesh.api.common.SafePath;
 import com.skillmesh.api.device.DeviceService;
 import com.skillmesh.api.recycle.RecycleService;
@@ -30,6 +31,7 @@ import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -323,8 +325,8 @@ public class SyncUploadService {
             item.put("size_bytes", file.data().length);
             manifest.add(item);
         }
-        manifest.sort((left, right) ->
-            String.valueOf(left.get("path")).compareTo(String.valueOf(right.get("path"))));
+        manifest.sort(Comparator.comparing(left -> String.valueOf(left.get("path")),
+            PathOrder.BY_CODE_POINT));
         return manifest;
     }
 
