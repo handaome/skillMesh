@@ -23,16 +23,15 @@ import (
 const loopbackPort = 53682
 
 func newLoginCmd() *cobra.Command {
-	var issuer string
 	cmd := &cobra.Command{
 		Use:   "login [服务端地址]",
 		Short: "通过浏览器授权码 + PKCE 登录",
 		Long: "登录 SkillMesh。位置参数是服务端地址（设计文档 §7.4 的用法），\n" +
 			"登录所需的 OIDC issuer 从服务端的公开配置里取；\n" +
-			"也可以用 --issuer 或环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer。",
+			"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			issuerURL := issuer
+			var issuerURL string
 			clientID := Cfg.ClientID
 			if len(args) == 1 {
 				// 位置参数是服务端地址：从它的公开配置里取 issuer。
@@ -42,7 +41,7 @@ func newLoginCmd() *cobra.Command {
 				cfg, err := apiclient.FetchPublicConfig(cmd.Context(), server)
 				if err != nil {
 					return fmt.Errorf("取服务端公开配置失败（%s）：%w；"+
-						"也可以用 --issuer 直接指定 issuer", server, err)
+						"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer", server, err)
 				}
 				issuerURL = cfg.Issuer
 				if cfg.ClientID != "" {
@@ -54,7 +53,7 @@ func newLoginCmd() *cobra.Command {
 			}
 			if issuerURL == "" {
 				return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
-					"或用 --issuer / SM_KEYCLOAK_ISSUER")
+					"或设环境变量 SM_KEYCLOAK_ISSUER")
 			}
 			tokens, err := runPkceFlow(cmd.Context(), issuerURL, clientID)
 			if err != nil {
@@ -70,7 +69,6 @@ func newLoginCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&issuer, "issuer", "", "OIDC issuer，例如 http://127.0.0.1:8180/kc/realms/skillmesh")
 	return cmd
 }
 
