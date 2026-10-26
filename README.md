@@ -37,7 +37,7 @@ docker-compose.yml/ PostgreSQL + MinIO + Keycloak + API + 前端的容器编排
 | unzip | 任意 | 启动脚本解压 Keycloak |
 | Docker | 24+ | 只在走 compose 路线时需要 |
 
-MinIO 靠源码构建（官方社区版二进制已下架），拉模块走 `GOPROXY=https://goproxy.cn,direct`——直连 `proxy.golang.org` 在国内会超时；要换代理设环境变量 `GOPROXY` 即可。
+Go 拉模块走 `GOPROXY=https://goproxy.cn,direct`——直连 `proxy.golang.org` / `sum.golang.org` 在国内会超时。本机已用 `go env -w GOPROXY=https://goproxy.cn,direct` 写进全局配置；换机器时重设该值即可（`infra/scripts/prepare.sh` 内部也兜了同样的默认值）。
 
 ## 快速开始
 

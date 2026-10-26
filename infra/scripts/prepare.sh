@@ -9,6 +9,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="$ROOT/infra/bin"
 
+# .env 里的 SKILLMESH_GO_BIN、GOPROXY 等在这里也要生效（直接调用本脚本时）
+set -a
+[ -f "$ROOT/.env" ] && . "$ROOT/.env"
+set +a
+
 # MinIO 官方社区版二进制已于 2025-10 下架。
 prepare_minio() {
   local work="${TMPDIR:-/tmp}/skillmesh-minio-build"
