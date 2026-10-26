@@ -74,7 +74,7 @@ func watchStartCmd() *cobra.Command {
 				fmt.Printf("已经在运行（PID %d）。\n", pid)
 				return nil
 			}
-			if _, paused := watchPaused(); paused {
+			if watchPaused() {
 				fmt.Println("当前是暂停状态，先 skillmesh watch resume。")
 				return nil
 			}
@@ -123,7 +123,7 @@ func watchStatusCmd() *cobra.Command {
 			} else {
 				fmt.Println("没在运行")
 			}
-			if _, paused := watchPaused(); paused {
+			if watchPaused() {
 				fmt.Println("已暂停")
 			}
 			fmt.Printf("日志 %s\n", watchLogPath())
@@ -217,7 +217,7 @@ func runWatchLoop(ctx context.Context, interval time.Duration) error {
 			}
 		case <-ticker.C:
 		}
-		if _, paused := watchPaused(); paused {
+		if watchPaused() {
 			continue
 		}
 		current := skillSnapshot()
@@ -465,16 +465,10 @@ func watchRunning() (int, bool) {
 	return pid, processAlive(pid)
 }
 
-func watchPaused() (time.Time, bool) {
-	data, err := os.ReadFile(watchPausePath())
-	if err != nil {
-		return time.Time{}, false
-	}
-	at, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data)))
-	if err != nil {
-		return time.Time{}, true
-	}
-	return at, true
+// watchPaused 现在是不是暂停状态：暂停标记文件在就算暂停，文件内容不参与判断。
+func watchPaused() bool {
+	_, err := os.ReadFile(watchPausePath())
+	return err == nil
 }
 
 func logf(format string, args ...any) {

@@ -94,12 +94,12 @@ func ScanRisks(dir string) ([]Risk, error) {
 			return err
 		}
 		if fi.IsDir() {
-			if path != dir && (isIgnored(fi.Name()) || isHidden(fi.Name())) {
+			if path != dir && IsSkippedDir(fi.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !fi.Mode().IsRegular() || isHidden(fi.Name()) || fi.Size() > maxScanBytes {
+		if !fi.Mode().IsRegular() || IsHiddenFile(fi.Name()) || fi.Size() > maxScanBytes {
 			return nil
 		}
 		rel, relErr := filepath.Rel(dir, path)
@@ -141,7 +141,7 @@ func scanRisksIn(path, rel string) ([]Risk, error) {
 	if err != nil {
 		return nil, err
 	}
-	if isBinaryContent(data) {
+	if IsBinaryContent(data) {
 		return nil, nil
 	}
 	var risks []Risk
@@ -174,12 +174,4 @@ func (r riskRule) appliesTo(rel string) bool {
 		}
 	}
 	return false
-}
-
-func isBinaryContent(data []byte) bool {
-	head := data
-	if len(head) > 8192 {
-		head = head[:8192]
-	}
-	return bytes.IndexByte(head, 0) >= 0
 }

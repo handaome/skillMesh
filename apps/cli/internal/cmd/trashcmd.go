@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/trash"
 	"github.com/spf13/cobra"
@@ -35,7 +34,7 @@ func trashListCmd() *cobra.Command {
 				fmt.Println("回收站是空的。")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "条目\t时间\t大小")
 			for _, item := range items {
 				fmt.Fprintf(w, "%s\t%s\t%d KiB\n", item.Entry,

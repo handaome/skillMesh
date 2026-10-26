@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 )
 
 const (
@@ -59,6 +61,12 @@ func InstallAtomic(src, target string, requireSkillMd bool) error {
 	return nil
 }
 
+// CopyTree 复制目录内容，跳过隐藏目录、噪音目录与隐藏文件。
+//
+// 跳过规则与打包、算摘要、校验目录是同一套（skillscan.IsSkippedDir /
+// IsHiddenFile）：装进去的东西要是和发出去的、和服务端校验的不是同一批，
+// 审核页看到的文件列表就和本机对不上；.cache、.venv 这类目录进了 Agent
+// 目录也只会白占地方。
 func CopyTree(src, dst string) error {
 	return filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -70,16 +78,26 @@ func CopyTree(src, dst string) error {
 		}
 		out := filepath.Join(dst, rel)
 		if fi.IsDir() {
+			if path != src && skillscan.IsSkippedDir(fi.Name()) {
+				return filepath.SkipDir
+			}
 			return os.MkdirAll(out, 0o755)
 		}
 		if !fi.Mode().IsRegular() {
 			return nil // 跳过符号链接等非普通文件
 		}
-		return copyFile(path, out, fi.Mode())
+		if skillscan.IsHiddenFile(fi.Name()) {
+			return nil // 隐藏文件是作者的本地状态，不进安装
+		}
+		return CopyFile(path, out, fi.Mode())
 	})
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
+// CopyFile 复制单个文件，落盘权限取 mode 的权限位。
+//
+// 已存在的目标文件不改权限（O_CREATE 只在创建时用 perm）——要覆盖权限
+// 就先删目标，或复制后自己 chmod。
+func CopyFile(src, dst string, mode os.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -107,15 +125,4 @@ func IsManaged(dir string) bool {
 
 func MarkInstalled(dir, source string) error {
 	return os.WriteFile(filepath.Join(dir, markerFile), []byte(source+"\n"), 0o644)
-}
-
-// RemoveUnmanaged 拒绝删除不受管理的目录，避免误删用户手写的 Skill。
-func RemoveUnmanaged(dir string) error {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil
-	}
-	if !IsManaged(dir) {
-		return fmt.Errorf("%s 不由 SkillMesh 管理，拒绝删除（用 --replace 可覆盖）", dir)
-	}
-	return os.RemoveAll(dir)
 }

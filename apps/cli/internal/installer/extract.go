@@ -57,14 +57,46 @@ func ExtractZip(data []byte, destRoot string) (string, error) {
 	return findSkillRoot(destRoot)
 }
 
+// checkEntryName 拒绝绝对路径条目与路径穿越条目。
+//
+// 穿越只看**整段**是不是 ".."：foo..bar.md、..hidden/x 这类文件名是合法的，
+// 按子串判会把用户的正常文件也拦下来。服务端 SafePath 已经是段级口径，
+// 两边必须一致——不一致的后果是服务端放行、这里再拒一次，装出来的东西少了文件。
+// 真能逃出 destRoot 的情形由 withinRoot 兜底（拼完路径再确认还在 destRoot 里）。
 func checkEntryName(name string) error {
-	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, `\`) {
+	// 与服务端 SafePath 一样先去掉首尾空白：Windows 会把段尾空格裁掉，
+	// ".. " 落到文件系统上就是 ".."。
+	trimmed := strings.TrimFunc(name, func(r rune) bool { return r <= ' ' })
+	if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`) {
 		return fmt.Errorf("制品包含绝对路径条目: %s", name)
 	}
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("制品包含路径穿越条目: %s", name)
+	if isDriveAbsolute(trimmed) {
+		return fmt.Errorf("制品包含绝对路径条目: %s", name)
+	}
+	for _, segment := range strings.FieldsFunc(trimmed, isPathSeparator) {
+		if segment == ".." {
+			return fmt.Errorf("制品包含路径穿越条目: %s", name)
+		}
 	}
 	return nil
+}
+
+// isDriveAbsolute 判断 Windows 盘符绝对路径：C:\x、C:/x。
+// 单字母 + 冒号 + 分隔符才算——C:x 是盘符相对路径（以该盘当前目录为基准），不是绝对路径。
+func isDriveAbsolute(name string) bool {
+	if len(name) < 3 || name[1] != ':' {
+		return false
+	}
+	c := name[0]
+	if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+		return false
+	}
+	return name[2] == '/' || name[2] == '\\'
+}
+
+// isPathSeparator 判断路径分隔符：两种都算，Windows 上反斜杠同样是分隔符。
+func isPathSeparator(r rune) bool {
+	return r == '/' || r == '\\'
 }
 
 func extractFile(entry *zip.File, out string) error {

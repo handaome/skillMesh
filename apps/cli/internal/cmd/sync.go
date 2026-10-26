@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
@@ -808,10 +807,7 @@ func saveBaseline(target SyncTarget, entry *syncstate.Entry) {
 	if err != nil {
 		return
 	}
-	hashes := make(map[string]string, len(files))
-	for _, file := range files {
-		hashes[file.Path] = file.SHA256
-	}
+	hashes := ToHashMap(files)
 	entry.BaseFiles = hashes
 	entry.BaseHash = localHashOf(hashes)
 
@@ -821,38 +817,14 @@ func saveBaseline(target SyncTarget, entry *syncstate.Entry) {
 		return
 	}
 	// 副本只留一份，目录换掉就行；失败就不给基线，下次合并会老实说「合不了」
-	_ = CopyTree(target.Path, snapshot)
+	_ = installer.CopyTree(target.Path, snapshot)
 	if _, err := os.Stat(snapshot); err == nil {
 		entry.BaseSnapshot = snapshot
 	}
 }
 
-// CopyTree 复制目录内容（跳过隐藏文件，与打包口径一致）。
-func CopyTree(from, to string) error {
-	return filepath.Walk(from, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, relErr := filepath.Rel(from, path)
-		if relErr != nil {
-			return relErr
-		}
-		if info.IsDir() {
-			if strings.HasPrefix(info.Name(), ".") && path != from {
-				return filepath.SkipDir
-			}
-			return os.MkdirAll(filepath.Join(to, rel), 0o755)
-		}
-		if strings.HasPrefix(info.Name(), ".") {
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		return os.WriteFile(filepath.Join(to, rel), data, info.Mode().Perm())
-	})
-}
+// 基线快照与安装用的是同一套复制规则（installer.CopyTree）：
+// 快照里有的文件，才是要往云端对账的文件。
 
 func localHashOf(files map[string]string) string {
 	list := make([]skillscan.FileDigest, 0, len(files))
@@ -944,7 +916,7 @@ func reportQueue(queue syncqueue.Queue) {
 
 func reportSync(results []syncResult, queue syncqueue.Queue) error {
 	counts := map[syncOutcome]int{}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := newTable(os.Stdout)
 	fmt.Fprintln(w, "SKILL\t结果\t说明")
 	for _, result := range results {
 		counts[result.Outcome]++

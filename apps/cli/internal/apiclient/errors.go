@@ -1,6 +1,9 @@
 package apiclient
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Problem 对应 problem+json 错误体（详细设计 §2.1）。
 type Problem struct {
@@ -36,18 +39,7 @@ func (e *ProblemError) Error() string {
 		fields = append(fields, fmt.Sprintf("%s: %s", field.Field, field.Message))
 	}
 	return fmt.Sprintf("%s (%d): %s（%s）", e.Problem.Code, e.HTTPStatus,
-		e.Problem.Detail, joinWith(fields, "；"))
-}
-
-func joinWith(items []string, sep string) string {
-	out := ""
-	for i, item := range items {
-		if i > 0 {
-			out += sep
-		}
-		out += item
-	}
-	return out
+		e.Problem.Detail, strings.Join(fields, "；"))
 }
 
 // CodeOf 提取服务端错误码；非 problem 响应返回 HTTP_<status>。

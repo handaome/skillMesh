@@ -26,7 +26,7 @@ func Candidates(root string) ([]Candidate, error) {
 		if !fi.IsDir() {
 			return nil
 		}
-		if path != root && (isIgnored(fi.Name()) || isHidden(fi.Name())) {
+		if path != root && IsSkippedDir(fi.Name()) {
 			// 隐藏目录不是 Skill——冲突备份之类的东西放这里，不该被当成候选同步上去。
 			return filepath.SkipDir
 		}

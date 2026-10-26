@@ -6,12 +6,10 @@
 package syncstate
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/handaome/skillmesh/apps/cli/internal/statefile"
 )
 
 const FileName = "sync-state.yaml"
@@ -45,27 +43,12 @@ func Path(configDir string) string {
 }
 
 func Load(configDir string) (State, error) {
-	var state State
-	data, err := os.ReadFile(Path(configDir))
-	if os.IsNotExist(err) {
-		return State{}, nil
-	}
-	if err != nil {
-		return state, err
-	}
-	if err := yaml.Unmarshal(data, &state); err != nil {
-		return state, fmt.Errorf("解析 %s: %w", FileName, err)
-	}
-	return state, nil
+	return statefile.Load(Path(configDir), FileName, State{})
 }
 
 func (s State) Save(configDir string) error {
 	s.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	data, err := yaml.Marshal(s)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(Path(configDir), data, 0o644)
+	return statefile.Save(Path(configDir), s)
 }
 
 // Find 按名字 + Agent 找基线。同名装给多个 Agent 时各自记一份。

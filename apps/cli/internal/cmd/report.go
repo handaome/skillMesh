@@ -22,15 +22,6 @@ func warnRisks(skillDir string) {
 	fmt.Printf("风险提示：\n%s\n", skillscan.FormatFindings(findings))
 }
 
-// reportQuiet 上报一条审计事件，失败也不声张——主流程更重要。
-func reportQuiet(ctx context.Context, client *apiclient.Client, action, targetID string,
-	details map[string]string) {
-	if client == nil || targetID == "" {
-		return
-	}
-	_ = client.ReportAuditEvent(ctx, action, targetID, "success", details)
-}
-
 // warnRisksOnly 只报可疑内容：脚本、可疑命令、外部下载、依赖（设计文档 §10）。
 // 这类不阻断——脚本里有 curl 不等于它有害，但装之前应该让人看见。
 func warnRisksOnly(skillDir string) {

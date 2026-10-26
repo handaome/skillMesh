@@ -37,8 +37,8 @@ func DiffTrees(localDir, remoteDir string) ([]fileChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	localIndex := index(local)
-	remoteIndex := index(remote)
+	localIndex := ToHashMap(local)
+	remoteIndex := ToHashMap(remote)
 
 	var changes []fileChange
 	for path, sum := range remoteIndex {
@@ -63,14 +63,6 @@ func DiffTrees(localDir, remoteDir string) ([]fileChange, error) {
 	return changes, nil
 }
 
-func index(files []skillscan.FileDigest) map[string]string {
-	out := make(map[string]string, len(files))
-	for _, file := range files {
-		out[file.Path] = file.SHA256
-	}
-	return out
-}
-
 // lineDiff 给出两个文本文件的增删行数。
 // 不是文本、读不了、或者差异大到不值得逐行算，都只报文件级。
 func lineDiff(localPath, remotePath string) (added, removed int, truncated bool) {
@@ -82,7 +74,7 @@ func lineDiff(localPath, remotePath string) (added, removed int, truncated bool)
 	if err != nil {
 		return 0, 0, true
 	}
-	if isBinaryContent(localData) || isBinaryContent(remoteData) {
+	if skillscan.IsBinaryContent(localData) || skillscan.IsBinaryContent(remoteData) {
 		return 0, 0, true
 	}
 	localLines := bytes.Split(localData, []byte("\n"))
@@ -129,14 +121,6 @@ func lcsLineCounts(old, updated [][]byte) (added, removed int) {
 	removed += len(old) - i
 	added += len(updated) - j
 	return added, removed
-}
-
-func isBinaryContent(data []byte) bool {
-	head := data
-	if len(head) > 8192 {
-		head = head[:8192]
-	}
-	return bytes.IndexByte(head, 0) >= 0
 }
 
 // describeChanges 把差异压成给人看的一行行。

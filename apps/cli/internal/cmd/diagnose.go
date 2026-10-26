@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
@@ -119,7 +118,7 @@ func newAgentsCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			projectRoot := mustGetwd()
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "AGENT\t启用\t用户目录\t项目目录\t目录状态")
 			for _, name := range agent.Supported {
 				agentCfg, ok := Cfg.Agents[name]

@@ -34,10 +34,10 @@ func Merge3(base, local, cloud []byte) ([]byte, bool) {
 		// 基线里到下一个改动点之间的行原样保留
 		next := len(baseLines)
 		if localEdit != nil {
-			next = minInt(next, localEdit.baseStart)
+			next = min(next, localEdit.baseStart)
 		}
 		if cloudEdit != nil {
-			next = minInt(next, cloudEdit.baseStart)
+			next = min(next, cloudEdit.baseStart)
 		}
 		out = append(out, baseLines[pos:next]...)
 		if next >= n && !(hasInsertion(localEdit) || hasInsertion(cloudEdit)) {
@@ -49,12 +49,12 @@ func Merge3(base, local, cloud []byte) ([]byte, bool) {
 		hasLocal, hasCloud := false, false
 		if localEdit != nil && localEdit.baseStart == next {
 			localPart = localLines[localEdit.replacementStart:localEdit.replacementEnd]
-			end = maxInt(end, localEdit.baseEnd)
+			end = max(end, localEdit.baseEnd)
 			hasLocal = true
 		}
 		if cloudEdit != nil && cloudEdit.baseStart == next {
 			cloudPart = cloudLines[cloudEdit.replacementStart:cloudEdit.replacementEnd]
-			end = maxInt(end, cloudEdit.baseEnd)
+			end = max(end, cloudEdit.baseEnd)
 			hasCloud = true
 		}
 
@@ -183,18 +183,4 @@ func sameLines(left, right []string) bool {
 		}
 	}
 	return true
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -101,15 +101,6 @@ func (c *Client) ReportAuditEvent(ctx context.Context, action, targetID, outcome
 	return c.doWith(ctx, http.MethodPost, "/audit/events", nil, body, nil)
 }
 
-// Report 是一条上报结果，调用方通常忽略——上报失败不该影响主流程。
-type Report struct {
-	ok   bool
-	note string
-}
-
-// Failed 上报失败了吗（附原因）。
-func (r Report) Failed() (bool, string) { return !r.ok, r.note }
-
 // VerifyKey 取注册中心的验签公钥。
 func (c *Client) VerifyKey(ctx context.Context) (verify.PublicKey, error) {
 	var out verify.PublicKey

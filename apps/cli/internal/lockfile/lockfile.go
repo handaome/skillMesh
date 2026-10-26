@@ -3,12 +3,10 @@
 package lockfile
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/handaome/skillmesh/apps/cli/internal/statefile"
 )
 
 const (
@@ -52,18 +50,7 @@ func Path(projectRoot string) string {
 }
 
 func Load(projectRoot string) (Lock, error) {
-	var lock Lock
-	data, err := os.ReadFile(Path(projectRoot))
-	if os.IsNotExist(err) {
-		return Lock{Version: 1}, nil
-	}
-	if err != nil {
-		return lock, err
-	}
-	if err := yaml.Unmarshal(data, &lock); err != nil {
-		return lock, fmt.Errorf("解析 %s: %w", FileName, err)
-	}
-	return lock, nil
+	return statefile.Load(Path(projectRoot), FileName, Lock{Version: 1})
 }
 
 func (l Lock) Save(projectRoot string) error {
@@ -71,11 +58,7 @@ func (l Lock) Save(projectRoot string) error {
 	if l.ResolvedAt == "" {
 		l.ResolvedAt = time.Now().UTC().Format(time.RFC3339)
 	}
-	data, err := yaml.Marshal(l)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(Path(projectRoot), data, 0o644)
+	return statefile.Save(Path(projectRoot), l)
 }
 
 // Find 按名字或注册中心 id 找一条锁记录。
@@ -86,6 +69,19 @@ func (l Lock) Save(projectRoot string) error {
 func (l Lock) Find(name string) (LockedSkill, bool) {
 	for _, skill := range l.Skills {
 		if skill.Name == name || (skill.SourceID != "" && skill.SourceID == name) {
+			return skill, true
+		}
+	}
+	return LockedSkill{}, false
+}
+
+// FindBySourceID 按注册中心 id 找一条锁记录。
+//
+// 与 Find 的区别：只认注册中心 id，不认本地名字。手里只有注册中心 id
+// 的调用方用它，免得把名字碰巧等于这个 id 的另一条记录认成它。
+func (l Lock) FindBySourceID(sourceID string) (LockedSkill, bool) {
+	for _, skill := range l.Skills {
+		if skill.SourceID == sourceID {
 			return skill, true
 		}
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
@@ -144,7 +143,7 @@ func restoreOne(ctx context.Context, client *apiclient.Client, projectRoot strin
 }
 
 func reportRestore(results []restoreResult) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := newTable(os.Stdout)
 	fmt.Fprintln(w, "SKILL\t结果\t说明")
 	counts := map[string]int{}
 	for _, result := range results {

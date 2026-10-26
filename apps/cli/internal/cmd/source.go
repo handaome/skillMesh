@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
@@ -46,7 +45,7 @@ func newSourceCmd() *cobra.Command {
 				fmt.Println("仓库中没有含 SKILL.md 的目录")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "子目录\tSKILL.md")
 			for _, candidate := range candidates {
 				rel, relErr := filepath.Rel(root, candidate.Dir)

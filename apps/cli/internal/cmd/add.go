@@ -241,7 +241,6 @@ func candidatePaths(root string, candidates []skillscan.Candidate) []string {
 type planItem struct {
 	Candidate skillscan.Candidate
 	Name      string
-	Target    string
 	RelPath   string
 	Risks     []skillscan.Finding
 }
@@ -306,7 +305,7 @@ func PlanInstalls(root string, candidates []skillscan.Candidate, base string, re
 			findings = nil
 		}
 		plan.Install = append(plan.Install, planItem{
-			Candidate: candidate, Name: name, Target: target, RelPath: rel, Risks: findings,
+			Candidate: candidate, Name: name, RelPath: rel, Risks: findings,
 		})
 	}
 	return plan

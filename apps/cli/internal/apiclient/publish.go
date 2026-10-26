@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 )
 
 // CreateSkillRequest 对应 OpenAPI 的 CreateSkillRequest。
@@ -149,8 +148,6 @@ func (c *Client) PutArtifact(ctx context.Context, target UploadTarget, data []by
 	}
 	return nil
 }
-
-var _ = strconv.Itoa
 
 // ReviewVersion 提交审核或给出审核结论（设计文档 §12）。
 func (c *Client) ReviewVersion(ctx context.Context, skillID, version, action,

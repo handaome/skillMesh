@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
@@ -57,7 +56,7 @@ func newListCmd() *cobra.Command {
 				fmt.Println("已发布到云端的 Skill 用 skillmesh search 查。")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "SKILL\tAGENT\t版本/commit\t路径\t受管")
 			for _, skill := range lock.Skills {
 				for _, agentName := range skill.Agents {

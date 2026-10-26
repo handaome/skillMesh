@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
@@ -68,7 +67,7 @@ func printProvenance(skill apiclient.Skill, latest apiclient.SkillVersion) {
 }
 
 func printVersions(versions []apiclient.SkillVersion) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := newTable(os.Stdout)
 	fmt.Fprintln(w, "\n版本\t通道\t状态\t扫描\t签名\tcommit\tSHA256")
 	for _, version := range versions {
 		commit := "-"
@@ -136,10 +135,5 @@ func localEntryByID(skillID string) (lockfile.LockedSkill, bool) {
 	if err != nil {
 		return lockfile.LockedSkill{}, false
 	}
-	for _, entry := range lock.Skills {
-		if entry.SourceID == skillID {
-			return entry, true
-		}
-	}
-	return lockfile.LockedSkill{}, false
+	return lock.FindBySourceID(skillID)
 }

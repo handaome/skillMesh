@@ -9,11 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 )
@@ -78,7 +76,7 @@ func Pack(dir string) (Artifact, error) {
 		if !fi.Mode().IsRegular() {
 			return nil // 跳过符号链接等非普通文件
 		}
-		if strings.HasPrefix(fi.Name(), ".") {
+		if skillscan.IsHiddenFile(fi.Name()) {
 			// 隐藏文件不进包：.skillmesh-install 是本机状态标记，
 			// .git 之类是上游自己的东西，都不该发到云端。
 			return nil
@@ -140,5 +138,3 @@ func Pack(dir string) (Artifact, error) {
 func (a Artifact) Write(path string) error {
 	return os.WriteFile(path, a.Zip, 0o644)
 }
-
-var _ = io.Discard

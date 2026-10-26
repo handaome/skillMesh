@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/spf13/cobra"
@@ -46,7 +45,7 @@ func newInstallationsCmd() *cobra.Command {
 				fmt.Println("注册中心还没有你的安装记录。")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "SKILL\t版本\tAGENT\t设备\t作用域\t状态\t路径")
 			for _, row := range rows {
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",

@@ -3,13 +3,11 @@
 package syncqueue
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/handaome/skillmesh/apps/cli/internal/statefile"
 )
 
 const FileName = "sync-queue.yaml"
@@ -42,18 +40,7 @@ func Path(configDir string) string {
 }
 
 func Load(configDir string) (Queue, error) {
-	var queue Queue
-	data, err := os.ReadFile(Path(configDir))
-	if os.IsNotExist(err) {
-		return Queue{}, nil
-	}
-	if err != nil {
-		return queue, err
-	}
-	if err := yaml.Unmarshal(data, &queue); err != nil {
-		return queue, fmt.Errorf("解析 %s: %w", FileName, err)
-	}
-	return queue, nil
+	return statefile.Load(Path(configDir), FileName, Queue{})
 }
 
 func (q Queue) Save(configDir string) error {
@@ -61,11 +48,7 @@ func (q Queue) Save(configDir string) error {
 	sort.Slice(q.Entries, func(i, j int) bool {
 		return q.Entries[i].NextAttemptAt < q.Entries[j].NextAttemptAt
 	})
-	data, err := yaml.Marshal(q)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(Path(configDir), data, 0o644)
+	return statefile.Save(Path(configDir), q)
 }
 
 // Record 记一次失败并排下一次重试时间。退避按次数翻倍，封顶 30 分钟。

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
@@ -210,7 +209,7 @@ func reportScan(entries []scanEntry) error {
 		fmt.Println("没有发现 Skill。")
 		return nil
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := newTable(os.Stdout)
 	fmt.Fprintln(w, "SKILL\tAGENT\t分类\t说明")
 	for _, entry := range entries {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", entry.Name, orDash(entry.Agent),

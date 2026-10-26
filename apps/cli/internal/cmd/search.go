@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -33,7 +32,7 @@ func newSearchCmd() *cobra.Command {
 				fmt.Println("没有匹配的 Skill")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "SLUG\t名称\t可见性\t最新版本\tID")
 			for _, skill := range page.Items {
 				latest := "-"

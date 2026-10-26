@@ -47,7 +47,7 @@ func DirHashes(dir string) ([]FileDigest, error) {
 			}
 			return nil
 		}
-		if !fi.Mode().IsRegular() || isHidden(fi.Name()) {
+		if !fi.Mode().IsRegular() || IsHiddenFile(fi.Name()) {
 			return nil
 		}
 		rel, err := filepath.Rel(dir, path)
@@ -79,8 +79,6 @@ func DirDigest(dir string) (string, error) {
 	}
 	return Digest(files), nil
 }
-
-func isHidden(name string) bool { return len(name) > 0 && name[0] == '.' }
 
 func fileSHA256(path string) (string, error) {
 	file, err := os.Open(path)

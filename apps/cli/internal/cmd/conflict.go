@@ -179,7 +179,7 @@ func stageMerged(localDir, cloudDir, baseSnapshot string, plan map[string]fileAc
 			// 云端独有或只有云端改过：直接用云端那份。
 			src := filepath.Join(cloudDir, filepath.FromSlash(path))
 			dst := filepath.Join(work, filepath.FromSlash(path))
-			if err := copyFile(src, dst); err != nil {
+			if err := installer.CopyFile(src, dst, 0o644); err != nil {
 				cleanup()
 				return result, fmt.Errorf("写入云端版本失败 %s：%w", path, err)
 			}
@@ -457,6 +457,7 @@ func cloudManifest(ctx context.Context, client *apiclient.Client, skillID string
 	return files, artifactID, nil
 }
 
+// ToHashMap 把文件清单转成「路径 → 摘要」的表。差分、基线、合并都用这一张表。
 func ToHashMap(files []skillscan.FileDigest) map[string]string {
 	hashes := make(map[string]string, len(files))
 	for _, file := range files {
@@ -465,13 +466,5 @@ func ToHashMap(files []skillscan.FileDigest) map[string]string {
 	return hashes
 }
 
-func copyFile(from, to string) error {
-	data, err := os.ReadFile(from)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(to, data, 0o644)
-}
+// 冲突解决写回文件时统一走 installer.CopyFile：权限固定 0644，
+// 源文件的权限另记在 result.modes 里，合并完再 chmod 回去。

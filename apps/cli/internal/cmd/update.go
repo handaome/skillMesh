@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"text/tabwriter"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
@@ -170,7 +169,7 @@ func NewUpdateCmd() *cobra.Command {
 				fmt.Println("全部为最新")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "SKILL\t本地 commit\t远端 commit")
 			for _, update := range updates {
 				fmt.Fprintf(w, "%s\t%s\t%s\n",

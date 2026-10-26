@@ -45,10 +45,26 @@ func IsSensitiveFile(name string) bool {
 
 // IsSkippedDir 判断一个目录要不要整目录跳过：忽略目录与隐藏目录。
 //
-// 打包、算摘要、扫密钥必须用同一套规则：发出去的文件与算摘要的文件不是同一批时，
+// 打包、算摘要、扫密钥、校验目录必须用同一套规则：发出去的文件与算摘要的文件不是同一批时，
 // 审核页看到的文件列表就和作者看到的 diff 对不上，服务端还能扫到本地没扫过的密钥。
 func IsSkippedDir(name string) bool {
-	return isIgnored(name) || isHidden(name)
+	return isIgnored(name) || IsHiddenFile(name)
+}
+
+// IsHiddenFile 判断文件名是不是隐藏文件（以点开头）。
+//
+// 隐藏文件是作者的本地状态（.env、.git 之类），不进包、不进摘要、不进安装。
+func IsHiddenFile(name string) bool {
+	return len(name) > 0 && name[0] == '.'
+}
+
+// isIgnored 是要整目录跳过的噪音目录：版本库、依赖目录、编译缓存、虚拟环境。
+func isIgnored(name string) bool {
+	switch name {
+	case ".git", "node_modules", "__pycache__", ".venv", ".idea":
+		return true
+	}
+	return false
 }
 
 // IgnoreList 是从一个 Skill 目录读出来的排除规则。

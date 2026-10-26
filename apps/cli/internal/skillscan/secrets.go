@@ -83,7 +83,7 @@ func scanFile(path, rel string) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	if isBinary(data) {
+	if IsBinaryContent(data) {
 		return nil, nil
 	}
 	var findings []Finding
@@ -98,13 +98,4 @@ func scanFile(path, rel string) ([]Finding, error) {
 		}
 	}
 	return findings, scanner.Err()
-}
-
-// isBinary 按前 8KB 有没有 NUL 字节判断，跟 git 判二进制一个路子。
-func isBinary(data []byte) bool {
-	head := data
-	if len(head) > 8192 {
-		head = head[:8192]
-	}
-	return bytes.Contains(head, []byte{0})
 }

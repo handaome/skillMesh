@@ -54,7 +54,7 @@ func ValidateDir(dir string, limits Limits) error {
 			return nil
 		}
 		if fi.IsDir() {
-			if path != root && isIgnored(fi.Name()) {
+			if path != root && IsSkippedDir(fi.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -82,12 +82,4 @@ func Within(root, target string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func isIgnored(name string) bool {
-	switch name {
-	case ".git", "node_modules", "__pycache__", ".venv", ".idea":
-		return true
-	}
-	return false
 }
