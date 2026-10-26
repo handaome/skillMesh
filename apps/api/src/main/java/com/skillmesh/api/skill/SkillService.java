@@ -2,6 +2,7 @@ package com.skillmesh.api.skill;
 
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.common.ErrorCodes;
@@ -10,11 +11,9 @@ import com.skillmesh.api.skill.dto.SkillSourceInput;
 import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillPage;
 import com.skillmesh.api.skill.dto.SkillResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -157,9 +156,9 @@ public class SkillService {
         OffsetDateTime cursorTime = null;
         UUID cursorId = null;
         if (cursor != null && !cursor.isBlank()) {
-            String[] parts = new String(decode(cursor), StandardCharsets.UTF_8).split("\\|", 2);
-            cursorTime = OffsetDateTime.parse(parts[0]);
-            cursorId = UUID.fromString(parts[1]);
+            CursorCodec.Cursor decoded = CursorCodec.decode(cursor);
+            cursorTime = decoded.time();
+            cursorId = decoded.id();
         }
         // 团队/组织可见的 Skill：可见性条件交给 SQL 过滤，
         // 别把不该看到的查出来再在内存里筛——那等于没权限控制。
@@ -174,7 +173,7 @@ public class SkillService {
         String next = null;
         if (hasMore && !page.isEmpty()) {
             SkillEntity last = page.get(page.size() - 1);
-            next = encode(last.getUpdatedAt() + "|" + last.getId());
+            next = CursorCodec.encode(last.getUpdatedAt(), last.getId());
         }
         return new SkillPage(items, next, hasMore);
     }
@@ -320,12 +319,4 @@ public class SkillService {
             entity.getCreatedAt(), entity.getUpdatedAt());
     }
 
-    private static byte[] decode(String cursor) {
-        return Base64.getUrlDecoder().decode(cursor);
-    }
-
-    private static String encode(String raw) {
-        return Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
-    }
 }

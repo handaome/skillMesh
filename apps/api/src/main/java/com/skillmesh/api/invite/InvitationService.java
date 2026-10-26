@@ -4,6 +4,7 @@ import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
+import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.invite.dto.InvitationPage;
 import com.skillmesh.api.invite.dto.InvitationSummary;
@@ -13,7 +14,6 @@ import com.skillmesh.api.org.OrganizationEntity;
 import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.org.TeamEntity;
 import com.skillmesh.api.org.TeamRepository;
-import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -186,15 +186,9 @@ public class InvitationService {
         OffsetDateTime cursorTime = null;
         UUID cursorId = null;
         if (cursor != null && !cursor.isBlank()) {
-            String[] parts;
-            try {
-                parts = new String(decode(cursor), StandardCharsets.UTF_8).split("\\|", 2);
-                cursorTime = OffsetDateTime.parse(parts[0]);
-                cursorId = UUID.fromString(parts[1]);
-            } catch (RuntimeException e) {
-                // 游标是客户端给的东西，坏了是调用方的错，不该以 500 的形式暴露。
-                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "cursor 格式不对");
-            }
+            CursorCodec.Cursor decoded = CursorCodec.decode(cursor);
+            cursorTime = decoded.time();
+            cursorId = decoded.id();
         }
         List<InvitationEntity> rows = invitations.pageByOrganizationId(organizationId,
             cursorTime, cursorId, PageRequest.of(0, size + 1));
@@ -214,7 +208,7 @@ public class InvitationService {
         String next = null;
         if (hasMore && !page.isEmpty()) {
             InvitationEntity last = page.get(page.size() - 1);
-            next = encode(last.getCreatedAt() + "|" + last.getId());
+            next = CursorCodec.encode(last.getCreatedAt(), last.getId());
         }
         return new InvitationPage(out, next, hasMore);
     }
@@ -306,16 +300,6 @@ public class InvitationService {
         byte[] bytes = new byte[TOKEN_BYTES];
         random.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    }
-
-    /** 游标：base64 的「创建时间|id」，跟技能列表同一套形状。 */
-    private static String encode(String raw) {
-        return Base64.getUrlEncoder().withoutPadding()
-            .encodeToString(raw.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private static byte[] decode(String cursor) {
-        return Base64.getUrlDecoder().decode(cursor);
     }
 
     private static String orDefault(String value, String fallback) {
