@@ -37,6 +37,8 @@ docker-compose.yml/ PostgreSQL + MinIO + Keycloak + API + 前端的容器编排
 | unzip | 任意 | 启动脚本解压 Keycloak |
 | Docker | 24+ | 只在走 compose 路线时需要 |
 
+MinIO 靠源码构建（官方社区版二进制已下架），拉模块走 `GOPROXY=https://goproxy.cn,direct`——直连 `proxy.golang.org` 在国内会超时；要换代理设环境变量 `GOPROXY` 即可。
+
 ## 快速开始
 
 ### 1. 配置凭据
@@ -86,19 +88,6 @@ cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 ```
 
 前端没有登录页，把 CLI 登录拿到的 access token 粘到顶部输入框即可。
-
-## 测试
-
-```bash
-cd apps/api && ./mvnw test        # 237 个用例：真实 Keycloak token、真实 MinIO、真实 PG
-cd apps/cli && go test ./...      # CLI 各包（测试在 apps/cli/test/<包>/）
-cd apps/web && pnpm test          # 前端组件
-```
-
-Go 的测试放在 `apps/cli/test/<包>/`，用外部测试包（`package cmd_test`）——
-这样测试与实现分开放，被测的符号才需要导出。`go test ./...` 仍会覆盖到它们。
-
-后端测试连的是**独立的 `skillmesh_test` 库**，与应用的 `skill_mesh` 库不共享 schema，测试里的清表操作碰不到应用数据。
 
 ## 端口
 
