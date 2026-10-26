@@ -3,6 +3,7 @@ import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
 import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail, AuditEvent, RecycleFile } from './types'
+import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
 export class ApiError extends Error {
@@ -15,18 +16,24 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
+/**
+ * 发请求，管会话过期。
+ *
+ * 返回原始响应，不解析内容：JSON 与二进制流都从这里出去——制品下载是
+ * 二进制流，按 JSON 解析会炸。
+ */
+async function fetchWithAuth(
   path: string,
   method = 'GET',
   body?: unknown,
   token?: string,
   retried = false,
-): Promise<T> {
+): Promise<Response> {
   const bearer = token ?? session.accessToken
   const response = await fetch(API_BASE + path, {
     method,
     headers: {
-      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+      ...authHeaders(bearer),
       ...(body ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -41,7 +48,7 @@ async function request<T>(
       // 会一直空着，团队页对真正的组织成员说「你还没有加入任何组织」。
       // 只在列表空着时补拉——正常情况下没必要多打一次请求。
       if (!session.organizations.length) void loadMe().catch(() => {})
-      return request<T>(path, method, body, token, true)
+      return fetchWithAuth(path, method, body, token, true)
     }
     // 续不上，或续期后重试仍是 401（令牌被服务端拒了：签发方/受众不符、被吊销、
     // 时钟偏差）：续期救不了这个会话，按续期失败处理——清会话并送回登录页，
@@ -53,6 +60,16 @@ async function request<T>(
       query: { redirect: router.currentRoute.value.fullPath },
     }).catch(() => {})
   }
+  return response
+}
+
+async function request<T>(
+  path: string,
+  method = 'GET',
+  body?: unknown,
+  token?: string,
+): Promise<T> {
+  const response = await fetchWithAuth(path, method, body, token)
   if (!response.ok) {
     let code = `HTTP_${response.status}`
     let message = response.statusText
@@ -318,11 +335,11 @@ export function updateTeamRole(organizationId: string, teamId: string, userId: s
  */
 export async function downloadArtifact(artifactId: string): Promise<Blob> {
   // 不能走 request()：它总是按 JSON 解析响应，制品是二进制流。
-  const bearer = session.accessToken
-  const response = await fetch(
-    `${API_BASE}/artifacts/${artifactId}/download?disposition=stream`,
-    { headers: bearer ? { Authorization: `Bearer ${bearer}` } : {} },
-  )
+  // 但 401 的处理要走同一条路：令牌过期时静默续期再重试一次，
+  // 否则用户点下载只看到一句「HTTP 401」，下载不动。
+  // 续期后重发的是一次全新的请求，下载流不会被读坏。
+  const response = await fetchWithAuth(
+    `/artifacts/${artifactId}/download?disposition=stream`)
   if (!response.ok) {
     throw new Error(`下载制品失败：HTTP ${response.status}`)
   }

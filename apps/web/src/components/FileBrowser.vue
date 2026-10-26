@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { ApiError, editVersionFile, listVersionFiles, readVersionFile } from '../api'
+import { editVersionFile, listVersionFiles, readVersionFile } from '../api'
+import { errorText } from '../utils/errorText'
+import { FILE_BROWSER_STATUS_TEXT } from '../constants/status'
 import { highlight, languageOf } from '../utils/highlight'
 import AppIcon from './AppIcon.vue'
 import EmptyState from './EmptyState.vue'
@@ -161,7 +163,7 @@ async function load() {
     if (first) await open(first.path)
   } catch (e) {
     files.value = null
-    error.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    error.value = errorText(e)
   } finally {
     loading.value = false
   }
@@ -176,7 +178,7 @@ async function open(path: string) {
     current.value = await readVersionFile(props.skillId, baseVersion.value, path)
   } catch (e) {
     current.value = null
-    contentError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    contentError.value = errorText(e)
   } finally {
     contentLoading.value = false
   }
@@ -223,10 +225,10 @@ async function save() {
       changelog: `在控制台修改 ${file.path}`,
     })
     editing.value = false
-    saveNotice.value = `已保存为新版本 ${result.version}（${statusText(result.status)}）。`
+    saveNotice.value = `已保存为新版本 ${result.version}（${FILE_BROWSER_STATUS_TEXT[result.status] ?? result.status}）。`
     await moveBase(result.version, file.path)
   } catch (e) {
-    saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    saveError.value = errorText(e)
   } finally {
     saving.value = false
   }
@@ -269,10 +271,10 @@ async function createFile() {
     creating.value = false
     newPath.value = ''
     newContent.value = ''
-    saveNotice.value = `已新建 ${path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
+    saveNotice.value = `已新建 ${path}，保存为新版本 ${result.version}（${FILE_BROWSER_STATUS_TEXT[result.status] ?? result.status}）。`
     await moveBase(result.version, path)
   } catch (e) {
-    saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    saveError.value = errorText(e)
   } finally {
     saving.value = false
   }
@@ -320,10 +322,10 @@ async function upload() {
     picked.value = null
     uploadPath.value = ''
     uploadExecutable.value = false
-    saveNotice.value = `已上传 ${path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
+    saveNotice.value = `已上传 ${path}，保存为新版本 ${result.version}（${FILE_BROWSER_STATUS_TEXT[result.status] ?? result.status}）。`
     await moveBase(result.version, path)
   } catch (e) {
-    uploadError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    uploadError.value = errorText(e)
   } finally {
     saving.value = false
   }
@@ -388,25 +390,14 @@ async function deleteFile() {
       operation: 'delete',
       changelog: `在控制台删除 ${file.path}`,
     })
-    saveNotice.value = `已删除 ${file.path}，保存为新版本 ${result.version}（${statusText(result.status)}）。`
+    saveNotice.value = `已删除 ${file.path}，保存为新版本 ${result.version}（${FILE_BROWSER_STATUS_TEXT[result.status] ?? result.status}）。`
     current.value = null
     await moveBase(result.version)
   } catch (e) {
-    saveError.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    saveError.value = errorText(e)
   } finally {
     saving.value = false
   }
-}
-
-/** 版本状态的读法。 */
-function statusText(status: string): string {
-  const map: Record<string, string> = {
-    published: '已发布',
-    pending_review: '已提交审核',
-    rejected: '被服务端的制品扫描拦下',
-    quarantined: '被服务端的制品扫描隔离',
-  }
-  return map[status] ?? status
 }
 
 // 切到别的版本就重新拉清单——上一个版本的文件留着是骗人的。

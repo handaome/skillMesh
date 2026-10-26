@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
-import { ApiError } from '../api'
 import type { Skill, SkillPage } from '../types'
+import { errorText } from '../utils/errorText'
 
 /**
  * 取一页：cursor 非空就是接着上一页往后取。
@@ -13,10 +13,6 @@ export type SkillPageFilters = Record<string, string>
 export type SkillPageFetcher = (
   q: string, cursor?: string, filters?: SkillPageFilters,
 ) => Promise<SkillPage>
-
-function errorText(e: unknown): string {
-  return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
-}
 
 /**
  * 游标分页的 Skill 列表。

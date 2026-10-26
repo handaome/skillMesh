@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ApiError, downloadArtifact, getSkill, getVersions, searchSkills } from '../api'
+import { downloadArtifact, getSkill, getVersions, searchSkills } from '../api'
 import { useSkillList } from '../composables/useSkillList'
+import { SCAN_STATUS_TEXT, VERSION_STATUS_TEXT, VISIBILITY_TEXT } from '../constants/status'
 import type { Skill, SkillVersion } from '../types'
+import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
@@ -35,17 +37,6 @@ const versionsLoading = ref(false)
 /** 正在浏览哪个版本的文件。空串表示没展开。 */
 const browseVersion = ref('')
 
-function errorText(e: unknown): string {
-  return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
-}
-
-const VISIBILITY_TEXT: Record<string, string> = {
-  private: '私有',
-  public: '公开',
-  team: '团队可见',
-  organization: '组织可见',
-}
-
 /**
  * 下载这一版的制品。
  *
@@ -65,26 +56,6 @@ async function download(version: SkillVersion) {
   } catch (e) {
     error.value = errorText(e)
   }
-}
-
-/** 版本状态的读法。与「我的 Skill」页同一份词表。 */
-function versionStatusText(status: string): string {
-  if (status === 'draft') return '草稿'
-  if (status === 'scanning') return '扫描中'
-  if (status === 'pending_review') return '待审核'
-  if (status === 'published') return '已发布'
-  if (status === 'rejected') return '已拒绝'
-  if (status === 'quarantined') return '已隔离'
-  if (status === 'revoked') return '已撤回'
-  return status
-}
-
-/** 扫描结论的读法。服务端给的是状态词，这里翻成人话。 */
-function scanText(status: string): string {
-  if (status === 'passed') return '通过'
-  if (status === 'warning') return '有告警'
-  if (status === 'failed') return '未通过'
-  return status
 }
 
 /**
@@ -230,7 +201,7 @@ onMounted(search)
           <tbody>
             <tr v-for="version in versions" :key="version.id">
               <td class="sm-mono">{{ version.version }}</td>
-              <td>{{ versionStatusText(version.status) }}</td>
+              <td>{{ VERSION_STATUS_TEXT[version.status] ?? version.status }}</td>
               <td>{{ version.channel }}</td>
               <td>
                 <span
@@ -238,7 +209,7 @@ onMounted(search)
                   :class="version.scan.status === 'passed' ? 'sm-pill sm-pill-pos' : 'sm-pill sm-pill-neg'"
                   :title="version.scan.summary"
                 >
-                  {{ scanText(version.scan.status) }}
+                  {{ SCAN_STATUS_TEXT[version.scan.status] ?? version.scan.status }}
                 </span>
                 <span v-else class="sm-muted">未扫描</span>
               </td>

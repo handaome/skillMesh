@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ApiError, approveVersion, getReviewDetail, rejectVersion } from '../api'
+import { approveVersion, getReviewDetail, rejectVersion } from '../api'
 import type { ReviewDetail } from '../types'
+import { errorText } from '../utils/errorText'
+import { SCAN_STATUS_TEXT } from '../constants/status'
 import EmptyState from '../components/EmptyState.vue'
 
 const route = useRoute()
@@ -24,7 +26,7 @@ async function load() {
   try {
     detail.value = await getReviewDetail(String(route.params.skillId), String(route.params.version))
   } catch (e) {
-    error.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    error.value = errorText(e)
   }
 }
 
@@ -42,7 +44,7 @@ async function decide(approve: boolean) {
     }
     await load()
   } catch (e) {
-    error.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    error.value = errorText(e)
   } finally {
     busy.value = false
   }
@@ -106,7 +108,7 @@ onMounted(load)
       <div class="sm-panel sm-mb-16">
         <div class="sm-panel-head">
           <h2 class="sm-section">扫描结论</h2>
-          <span class="sm-meta">{{ detail.item.scan.status }}</span>
+          <span class="sm-meta">{{ SCAN_STATUS_TEXT[detail.item.scan.status] ?? detail.item.scan.status }}</span>
         </div>
         <pre class="sm-pre">{{ detail.item.scan.summary || '无' }}</pre>
         <ul v-if="detail.findings.length" class="sm-list sm-mt-12">

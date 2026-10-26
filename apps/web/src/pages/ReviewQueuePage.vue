@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ApiError, listRecentReviews, listReviews } from '../api'
+import { listRecentReviews, listReviews } from '../api'
+import { SCAN_STATUS_TEXT } from '../constants/status'
 import type { PendingReview } from '../types'
+import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -37,7 +39,7 @@ async function load() {
     reviews.value = pending
     recent.value = dedupe(done)
   } catch (e) {
-    error.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    error.value = errorText(e)
   } finally {
     loading.value = false
   }
@@ -45,13 +47,6 @@ async function load() {
 
 function open(review: PendingReview) {
   router.push(`/reviews/${review.skill_id}/${review.version}`)
-}
-
-/** 扫描结论的读法。服务端给的是状态词，这里翻成人话。 */
-function scanText(status: string): string {
-  if (status === 'passed') return '扫描通过'
-  if (status === 'failed') return '扫描未过'
-  return status
 }
 
 onMounted(load)
@@ -114,7 +109,8 @@ onMounted(load)
             class="sm-pill"
             :class="review.scan.status === 'passed' ? 'sm-pill-pos' : 'sm-pill-neg'"
           >
-            {{ scanText(review.scan.status) }}
+            <!-- 「待放行」列表里的药丸说的是扫描结论，不是审核结果：不带「扫描」二字，绿色的「通过」会被读成「审核已通过」。 -->
+            扫描{{ SCAN_STATUS_TEXT[review.scan.status] ?? review.scan.status }}
           </span>
         </button>
       </div>

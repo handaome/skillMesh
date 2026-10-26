@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import {
-  ApiError,
   createInvitation,
   createOrganization,
   createTeam,
@@ -17,6 +16,7 @@ import {
 import { currentOrg } from '../auth/currentOrg'
 import { loadMe, meError } from '../auth/session'
 import type { Invitation, Member, Team } from '../types'
+import { errorText } from '../utils/errorText'
 import EmptyState from '../components/EmptyState.vue'
 
 const org = currentOrg
@@ -88,10 +88,6 @@ const roleMeaning = computed(() =>
     ? '管审核放行权：能不能放行这个团队待审的版本。'
     : '管发布权：能不能发布到组织、能不能建团队与邀请成员。',
 )
-
-function errorText(e: unknown): string {
-  return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
-}
 
 /**
  * 列表里的成员。没选团队就是组织成员；选了团队就是该团队的人。

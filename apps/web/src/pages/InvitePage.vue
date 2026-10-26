@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ApiError, acceptInvitation, getInvitation } from '../api'
+import { acceptInvitation, getInvitation } from '../api'
 import { selectOrganization } from '../auth/currentOrg'
 import { loadMe, session } from '../auth/session'
 import type { InvitationSummary } from '../types'
+import { errorText } from '../utils/errorText'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,10 +14,6 @@ const invitation = ref<InvitationSummary | null>(null)
 const error = ref('')
 const busy = ref(false)
 const done = ref(false)
-
-function errorText(e: unknown): string {
-  return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
-}
 
 async function load() {
   error.value = ''

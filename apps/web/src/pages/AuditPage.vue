@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { ApiError, listAuditEvents } from '../api'
+import { listAuditEvents } from '../api'
 import type { AuditEvent } from '../types'
+import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -72,7 +73,7 @@ async function load() {
   try {
     events.value = await listAuditEvents()
   } catch (e) {
-    error.value = e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
+    error.value = errorText(e)
   } finally {
     loading.value = false
   }

@@ -1,6 +1,7 @@
 import { reactive, ref } from 'vue'
 import { exchangeCode, loadPublicConfig, refreshToken } from './pkce'
 import type { PublicConfig } from '../types'
+import { bearerHeader } from '../utils/auth'
 
 const STORAGE_KEY = 'skillmesh_session'
 /** 提前 30 秒续期，别让请求卡在过期上。 */
@@ -150,7 +151,7 @@ export async function logoutEndingSession() {
 export async function loadMe(apiBase = '/api/v1') {
   const seq = ++meSeq
   const response = await fetch(`${apiBase}/me`, {
-    headers: { Authorization: `Bearer ${session.accessToken}` },
+    headers: bearerHeader(session.accessToken),
   })
   if (!response.ok) {
     const message = `拉取当前用户失败: ${response.status}`

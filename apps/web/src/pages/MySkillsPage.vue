@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
-  ApiError,
   createSkill,
   getVersions,
   listRecycleFiles,
@@ -11,7 +10,9 @@ import {
   updateSkill,
 } from '../api'
 import { useSkillList } from '../composables/useSkillList'
+import { VERSION_STATUS_TEXT, VISIBILITY_TEXT } from '../constants/status'
 import type { RecycleFile, Skill, SkillVersion } from '../types'
+import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
@@ -77,10 +78,6 @@ const dirty = computed(
       editTags.value.join(',') !== selected.value.tags.join(',')),
 )
 
-function errorText(e: unknown): string {
-  return e instanceof ApiError ? `${e.code}: ${e.message}` : String(e)
-}
-
 /** 可见性 → 药丸的颜色。private/public 是个人空间的常态，其余颜色区分。 */
 function visibilityPill(visibility: string): string {
   if (visibility === 'public') return 'sm-pill sm-pill-data'
@@ -96,23 +93,6 @@ function versionPill(status: string): string {
   }
   if (status === 'pending_review') return 'sm-pill sm-pill-warn'
   return 'sm-pill'
-}
-
-const VISIBILITY_TEXT: Record<string, string> = {
-  private: '私有',
-  public: '公开',
-  team: '团队可见',
-  organization: '组织可见',
-}
-
-const STATUS_TEXT: Record<string, string> = {
-  draft: '草稿',
-  scanning: '扫描中',
-  pending_review: '待审核',
-  published: '已发布',
-  rejected: '已拒绝',
-  quarantined: '已隔离',
-  revoked: '已撤回',
 }
 
 /**
@@ -479,7 +459,7 @@ onUnmounted(() => {
                   <div class="sm-item-head">
                     <strong class="sm-mono">{{ version.version }}</strong>
                     <span :class="versionPill(version.status)">
-                      {{ STATUS_TEXT[version.status] ?? version.status }}
+                      {{ VERSION_STATUS_TEXT[version.status] ?? version.status }}
                     </span>
                     <span class="sm-muted sm-sm">{{ version.channel }}</span>
                   </div>
