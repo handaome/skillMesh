@@ -13,7 +13,6 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.scan.ArtifactScanService;
 import com.skillmesh.api.scan.ScanResult;
-import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
@@ -256,17 +255,9 @@ public class UploadService {
             versions.findBySkillIdOrderByCreatedAtDescThenId(version.getSkillId()));
         if (!expected.equals(cloud)) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
-                "云端已被别人改动（你看到的是 " + shortDigest(expected) + "，现在是 "
-                    + shortDigest(cloud) + "），请重新对账");
+                "云端已被别人改动（你看到的是 " + ContentDigest.shortDigest(expected) + "，现在是 "
+                    + ContentDigest.shortDigest(cloud) + "），请重新对账");
         }
-    }
-
-    /** 摘要太长不好看，只留头 8 位。 */
-    private String shortDigest(String digest) {
-        if (digest == null || digest.isEmpty()) {
-            return "空";
-        }
-        return digest.length() > 8 ? digest.substring(0, 8) : digest;
     }
 
     /**
@@ -307,7 +298,7 @@ public class UploadService {
             // 摘要也得对：整包上传那条路会重算并比对（ArtifactService.promote），
             // 这里只比字节数的话，传输损坏或客户端算错都能蒙过去——
             // 而响应里的 verified_sha256 回显的是声明值，从没被验证过。
-            String actual = ArtifactService.sha256(data);
+            String actual = ContentDigest.sha256(data);
             if (session.getExpectedSha256() != null && !session.getExpectedSha256().isBlank()
                 && !actual.equals(session.getExpectedSha256())) {
                 throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,

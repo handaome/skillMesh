@@ -6,6 +6,8 @@ import com.skillmesh.api.auth.UserEntity;
 import com.skillmesh.api.auth.UserRepository;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.org.dto.MemberResponse;
+import com.skillmesh.api.org.dto.OrgMembershipResponse;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -100,42 +102,9 @@ public class OrgService {
     }
 
     /**
-     * 加组织成员。
-     *
-     * 已是成员时保留 joined_at，角色只升不降——
-     * 「加成员」不该顺手削掉别人的权限，要降级走 PATCH /members/{userId} 那个显式端点。
-     */
-    @Transactional
-    public void addOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
-        // 锁必须先拿：owner 计数是「读-判-写」，不串行化就会竞态。
-        lockOrgForRoleChange(organizationId);
-        requireOrgRole(actor, organizationId, Roles.ORG_ADMIN_ROLES);
-        requireRole(role, Roles.ORG_ROLES);
-        requireOwnerToGrantOwner(actor, organizationId, role);
-        MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
-        MembershipEntities.OrgMembership membership = orgMembers.findById(key).orElse(null);
-        // 加成员也可能碰 owner 身份，同样要过 owner 那道闸。
-        requireOwnerChangeAllowed(actor, organizationId,
-            membership == null ? null : membership.getRole(), role);
-        if (membership == null) {
-            membership = new MembershipEntities.OrgMembership();
-            membership.setId(key);
-            membership.setJoinedAt(OffsetDateTime.now(ZoneOffset.UTC));
-            membership.setRole(role);
-        } else if (!roleAtLeast(membership.getRole(), role)) {
-            // 只升不降：静默降级会让「加成员」顺手削掉别人的权限，
-            // 要降级走 PATCH /members/{userId} 那个显式端点。
-            membership.setRole(role);
-        }
-        orgMembers.save(membership);
-        audit.record(actor, "organization.membership.grant", "organization", organizationId,
-            "success", Map.of("user_id", memberId.toString(), "role", role));
-    }
-
-    /**
      * 加团队成员。
      *
-     * 与 addOrgMember 同一口径：已是成员时保留 joined_at，角色只升不降——
+     * 与 upsertOrgMember 同一口径：已是成员时保留 joined_at，角色只升不降——
      * 「加成员」不该顺手削掉别人的权限（那会让人立刻失去审核放行权），
      * 要降级走 PATCH /teams/{teamId}/members/{userId} 那个显式端点。
      */
@@ -179,17 +148,17 @@ public class OrgService {
     }
 
     /** /me 要返回的组织列表。 */
-    public List<Membership> myOrganizations(UUID userId) {
+    public List<OrgMembershipResponse> myOrganizations(UUID userId) {
         List<MembershipEntities.OrgMembership> memberships = orgMembers.findByIdUserId(userId);
         Map<UUID, OrganizationEntity> orgById = orgsById(memberships.stream()
             .map(membership -> membership.getId().getOrganizationId()).toList());
-        List<Membership> result = new ArrayList<>();
+        List<OrgMembershipResponse> result = new ArrayList<>();
         for (MembershipEntities.OrgMembership membership : memberships) {
             OrganizationEntity org = orgById.get(membership.getId().getOrganizationId());
             if (org == null) {
                 continue;
             }
-            result.add(new Membership(org.getId(), org.getSlug(), org.getName(),
+            result.add(new OrgMembershipResponse(org.getId(), org.getSlug(), org.getName(),
                 membership.getRole()));
         }
         return result;
@@ -240,18 +209,6 @@ public class OrgService {
         int have = Roles.ORG_RANK.indexOf(actual);
         int need = Roles.ORG_RANK.indexOf(required);
         return have >= 0 && need >= 0 && have <= need;
-    }
-
-    public List<UUID> myOrganizationIds(UUID userId) {
-        return orgMembers.findByIdUserId(userId).stream()
-            .map(membership -> membership.getId().getOrganizationId())
-            .toList();
-    }
-
-    public List<UUID> myTeamIds(UUID userId) {
-        return teamMembers.findByIdUserId(userId).stream()
-            .map(membership -> membership.getId().getTeamId())
-            .toList();
     }
 
     public List<TeamEntity> teamsOf(UUID organizationId) {
@@ -328,7 +285,7 @@ public class OrgService {
     }
 
     /** 组织成员列表，带上人的显示名。 */
-    public List<Member> orgMembers(UUID organizationId) {
+    public List<MemberResponse> orgMembers(UUID organizationId) {
         List<MembershipEntities.OrgMembership> memberships =
             orgMembers.findByIdOrganizationId(organizationId);
         Map<UUID, UserEntity> userById = usersById(memberships.stream()
@@ -340,7 +297,7 @@ public class OrgService {
     }
 
     /** 团队成员列表。 */
-    public List<Member> teamMembers(UUID teamId) {
+    public List<MemberResponse> teamMembers(UUID teamId) {
         List<MembershipEntities.TeamMembership> memberships =
             teamMembers.findByIdTeamId(teamId);
         Map<UUID, UserEntity> userById = usersById(memberships.stream()
@@ -482,8 +439,8 @@ public class OrgService {
 
     // ponytail: users 一次查齐（见 usersById）——逐个查就是 N+1，
     // 一个组织几十个成员就是几十次往返，本机到远程库一次几十毫秒，这个页面直接卡住。
-    private Member toMember(UserEntity user, UUID userId, String role,
-                            OffsetDateTime joinedAt) {
+    private MemberResponse toMember(UserEntity user, UUID userId, String role,
+                                     OffsetDateTime joinedAt) {
         String displayName = userId.toString();
         String email = null;
         String subject = null;
@@ -494,7 +451,7 @@ public class OrgService {
             subject = user.getOidcSubject();
             status = user.getStatus();
         }
-        return new Member(userId, displayName, email, role, joinedAt, subject, status);
+        return new MemberResponse(userId, displayName, email, role, joinedAt, subject, status);
     }
 
     /**
@@ -609,11 +566,4 @@ public class OrgService {
         // 组织不存在就当没锁住——后面的权限校验会给出 403。
         organizations.findByIdForUpdate(organizationId);
     }
-
-    /** 我在某个组织里的身份。 */
-    public record Membership(UUID id, String slug, String name, String role) {}
-
-    /** 成员列表项。status 是账号状态（active/disabled），来自 users 表。 */
-    public record Member(UUID userId, String displayName, String email, String role,
-                         OffsetDateTime joinedAt, String subject, String status) {}
 }

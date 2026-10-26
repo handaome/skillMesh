@@ -2,6 +2,7 @@ package com.skillmesh.api.auth;
 
 import com.skillmesh.api.auth.dto.MeResponse;
 import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.org.dto.OrgMembershipResponse;
 import java.util.List;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -25,10 +26,7 @@ public class MeController {
     public MeResponse me(@AuthenticationPrincipal Jwt jwt) {
         CurrentUser user = currentUserService.current(jwt);
         // 组织列表带着我的角色——CLI 靠它判断能不能往某个团队发东西
-        List<MeResponse.OrgMembership> memberships = orgs.myOrganizations(user.id()).stream()
-            .map(membership -> new MeResponse.OrgMembership(membership.id(),
-                membership.slug(), membership.name(), membership.role()))
-            .toList();
+        List<OrgMembershipResponse> memberships = orgs.myOrganizations(user.id());
         return new MeResponse(
             new MeResponse.User(user.id(), user.displayName(), user.email(), user.status(),
                 user.subject()),

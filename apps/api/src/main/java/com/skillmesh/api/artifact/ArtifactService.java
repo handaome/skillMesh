@@ -2,15 +2,13 @@ package com.skillmesh.api.artifact;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.Collection;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -104,7 +102,7 @@ public class ArtifactService {
             throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,
                 "制品大小与声明不一致：声明 " + expectedSizeBytes + "，实际 " + bytes.length);
         }
-        String actual = sha256(bytes);
+        String actual = ContentDigest.sha256(bytes);
         if (!actual.equals(expectedSha256)) {
             storage.delete(tempKey);
             throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,
@@ -201,14 +199,6 @@ public class ArtifactService {
 
     public InputStream open(ArtifactEntity artifact) {
         return storage.get(artifact.getStorageKey());
-    }
-
-    public static String sha256(byte[] data) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(data));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 不可用", e);
-        }
     }
 
     /**

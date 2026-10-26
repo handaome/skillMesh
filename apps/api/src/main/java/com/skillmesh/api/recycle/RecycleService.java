@@ -3,8 +3,6 @@ package com.skillmesh.api.recycle;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
-import com.skillmesh.api.skill.SkillEntity;
-import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
@@ -12,10 +10,8 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,14 +34,12 @@ public class RecycleService {
 
     private final RecycleFileRepository files;
     private final SkillVersionRepository versions;
-    private final SkillRepository skills;
     private final SkillService skillService;
 
     public RecycleService(RecycleFileRepository files, SkillVersionRepository versions,
-                          SkillRepository skills, SkillService skillService) {
+                          SkillService skillService) {
         this.files = files;
         this.versions = versions;
-        this.skills = skills;
         this.skillService = skillService;
     }
 
@@ -114,10 +108,7 @@ public class RecycleService {
     /** 回收站里的文件（还没过期的）。 */
     @Transactional
     public List<RecycleFile> list(CurrentUser user, UUID skillId) {
-        SkillEntity skill = skills.findById(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(user, skill)) {
-            throw ApiException.notFound("Skill");
-        }
+        skillService.requireVisibleSkill(user, skillId);
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         // 顺手清掉过了回收期的：没有定时任务，看回收站的时候正是清理的时候。
         files.deleteExpired(now);
@@ -137,10 +128,7 @@ public class RecycleService {
      */
     @Transactional(readOnly = true)
     public RecycleFile require(CurrentUser user, UUID skillId, String path) {
-        SkillEntity skill = skills.findById(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(user, skill)) {
-            throw ApiException.notFound("Skill");
-        }
+        skillService.requireVisibleSkill(user, skillId);
         RecycleFileEntity entity = files.findBySkillIdAndPath(skillId, path)
             .orElseThrow(() -> ApiException.notFound("回收站里的文件 " + path));
         if (entity.getExpiresAt().isBefore(OffsetDateTime.now(ZoneOffset.UTC))) {

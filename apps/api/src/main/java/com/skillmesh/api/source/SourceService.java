@@ -2,6 +2,7 @@ package com.skillmesh.api.source;
 
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.SafePath;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -107,7 +108,12 @@ public class SourceService {
         List<Candidate> found = new ArrayList<>();
         Path scanRoot = root;
         if (subpath != null && !subpath.isBlank()) {
-            scanRoot = root.resolve(subpath.replace("..", "")).normalize();
+            // 越界路径与绝对路径一律拒。目录名里带 ".." 的（my..dir）是合法目录，
+            // 不能把 ".." 子串删掉再拼——那会把目录名改掉，扫到别的目录上去。
+            if (SafePath.escapes(subpath)) {
+                throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "子目录越界");
+            }
+            scanRoot = root.resolve(subpath).normalize();
             if (!scanRoot.startsWith(root)) {
                 throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "子目录越界");
             }

@@ -61,7 +61,7 @@ public class SkillVersionService {
     @Transactional
     public CreateVersionResponse create(CurrentUser user, UUID skillId,
                                         CreateVersionRequest req) {
-        SkillEntity skill = requireVisibleSkill(user, skillId);
+        SkillEntity skill = skillService.requireVisibleSkill(user, skillId);
         // 建版本是发布动作：团队/组织可见的 Skill 要有发布权（组织角色 publisher 及以上）。
         // 只判可见性的话，团队的普通成员也能往待审队列里塞一版内容。
         skillService.requirePublishRight(user, skill);
@@ -130,8 +130,8 @@ public class SkillVersionService {
         String cloud = publishedDigest(skillId);
         if (!expected.equals(cloud)) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
-                "云端已被别人改动（你看到的是 " + shortDigest(expected) + "，现在是 "
-                    + shortDigest(cloud) + "），请重新对账");
+                "云端已被别人改动（你看到的是 " + ContentDigest.shortDigest(expected) + "，现在是 "
+                    + ContentDigest.shortDigest(cloud) + "），请重新对账");
         }
     }
 
@@ -145,14 +145,6 @@ public class SkillVersionService {
         return PublishedDigest.of(versions.findBySkillIdOrderByCreatedAtDescThenId(skillId));
     }
 
-    /** 摘要太长不好看，只留头 8 位。 */
-    private String shortDigest(String digest) {
-        if (digest == null || digest.isEmpty()) {
-            return "空";
-        }
-        return digest.length() > 8 ? digest.substring(0, 8) : digest;
-    }
-
     /** 空串与 null 一回事：没带基线的版本，列上留空。 */
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
@@ -160,7 +152,7 @@ public class SkillVersionService {
 
     @Transactional(readOnly = true)
     public VersionPage list(CurrentUser user, UUID skillId) {
-        requireVisibleSkill(user, skillId);
+        skillService.requireVisibleSkill(user, skillId);
         List<SkillVersionEntity> rows = versions.findBySkillIdOrderByCreatedAtDesc(skillId);
         // 制品与扫描一次批量拿齐：逐个版本查一次，在远程库上就是 2N 次往返
         // （本机到库的往返几十毫秒，一个版本多的 Skill 光这一页就要等好几秒）。
@@ -198,7 +190,7 @@ public class SkillVersionService {
     public SkillVersionResponse detail(CurrentUser user, UUID skillId, String version) {
         // 可见性自己判：原来借 list() 做，顺手把该 Skill 的全部版本都查了一遍
         // （每个版本还要再查一次制品与扫描），看一个版本变成 2N+2 次查询。
-        requireVisibleSkill(user, skillId);
+        skillService.requireVisibleSkill(user, skillId);
         SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
         ArtifactEntity artifact = entity.getArtifactId() == null
@@ -267,7 +259,7 @@ public class SkillVersionService {
      */
     @Transactional
     public Map<String, Object> revoke(CurrentUser user, UUID skillId, String version, String reason) {
-        SkillEntity skill = requireVisibleSkill(user, skillId);
+        SkillEntity skill = skillService.requireVisibleSkill(user, skillId);
         if (!skill.getOwnerUserId().equals(user.id())) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能撤回自己的版本");
         }
@@ -297,11 +289,4 @@ public class SkillVersionService {
             "status", "revoked", "reason", reason == null ? "" : reason);
     }
 
-    SkillEntity requireVisibleSkill(CurrentUser user, UUID skillId) {
-        SkillEntity skill = skills.findById(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(user, skill)) {
-            throw ApiException.notFound("Skill");
-        }
-        return skill;
-    }
 }

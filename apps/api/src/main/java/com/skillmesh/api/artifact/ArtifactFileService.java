@@ -78,8 +78,7 @@ public class ArtifactFileService {
                                String path) {
         byte[] data = readEntry(artifact.getStorageKey(), path);
         if (data == null) {
-            boolean exists = manifest.stream()
-                .anyMatch(item -> path.equals(String.valueOf(item.get("path"))));
+            boolean exists = ZipManifest.find(manifest, path) != null;
             return exists ? Content.oversized() : null;
         }
         return new Content(data, false);

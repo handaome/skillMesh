@@ -1,11 +1,12 @@
 package com.skillmesh.api.auth.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.org.dto.OrgMembershipResponse;
 import java.util.List;
 import java.util.UUID;
 
 /** 对应 OpenAPI 的 MeResponse schema。 */
-public record MeResponse(User user, List<OrgMembership> organizations) {
+public record MeResponse(User user, List<OrgMembershipResponse> organizations) {
 
     /**
      * subject 是 OIDC 的 sub——邀请要绑到某个人时填的就是它。
@@ -18,6 +19,4 @@ public record MeResponse(User user, List<OrgMembership> organizations) {
                        String email,
                        String status,
                        String subject) {}
-
-    public record OrgMembership(UUID id, String slug, String name, String role) {}
 }

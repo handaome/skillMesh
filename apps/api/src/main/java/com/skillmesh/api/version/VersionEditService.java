@@ -2,16 +2,16 @@ package com.skillmesh.api.version;
 
 import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.ArtifactRepository;
-import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.artifact.ArtifactStorage;
 import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.artifact.ZipRewriter;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.SafePath;
 import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.skill.SkillEntity;
-import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.upload.UploadService;
 import com.skillmesh.api.upload.UploadSessionRepository;
@@ -54,7 +54,6 @@ public class VersionEditService {
      */
     public static final int MAX_FILE_BYTES = 1 << 20;
 
-    private final SkillRepository skills;
     private final SkillService skillService;
     private final SkillVersionRepository versions;
     private final SkillVersionService versionService;
@@ -64,12 +63,11 @@ public class VersionEditService {
     private final UploadService uploadService;
     private final RecycleService recycle;
 
-    public VersionEditService(SkillRepository skills, SkillService skillService,
+    public VersionEditService(SkillService skillService,
                               SkillVersionRepository versions, SkillVersionService versionService,
                               ArtifactRepository artifacts, ArtifactStorage storage,
                               UploadSessionRepository uploads, UploadService uploadService,
                               RecycleService recycle) {
-        this.skills = skills;
         this.skillService = skillService;
         this.versions = versions;
         this.versionService = versionService;
@@ -89,11 +87,7 @@ public class VersionEditService {
     @Transactional
     public EditFileResponse edit(CurrentUser user, UUID skillId, String sourceVersion,
                                   EditFileRequest request) {
-        SkillEntity skill = skills.findById(skillId)
-            .orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(user, skill)) {
-            throw ApiException.notFound("Skill");
-        }
+        SkillEntity skill = skillService.requireVisibleSkill(user, skillId);
         skillService.requirePublishRight(user, skill);
 
         SkillVersionEntity source = versions.findBySkillIdAndVersion(skillId, sourceVersion)
@@ -138,7 +132,7 @@ public class VersionEditService {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "改完之后这个 Skill 里一个文件都没有了");
         }
-        String sha256 = ArtifactService.sha256(repacked);
+        String sha256 = ContentDigest.sha256(repacked);
         String version = nextVersion(skillId, request.version());
 
         // 走正常发版：建候选版本 + 上传会话。complete() 再去做扫描、
@@ -173,11 +167,7 @@ public class VersionEditService {
     @Transactional
     public EditFileResponse restore(CurrentUser user, UUID skillId, String path) {
         var recycled = recycle.require(user, skillId, path);
-        SkillEntity skill = skills.findById(skillId)
-            .orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(user, skill)) {
-            throw ApiException.notFound("Skill");
-        }
+        SkillEntity skill = skillService.requireVisibleSkill(user, skillId);
         skillService.requirePublishRight(user, skill);
 
         SkillVersionEntity source = versions.findBySkillIdAndVersion(skillId,
@@ -205,7 +195,7 @@ public class VersionEditService {
             normalized, content, executable);
 
         List<Map<String, Object>> manifest = ZipManifest.of(repacked);
-        String sha256 = ArtifactService.sha256(repacked);
+        String sha256 = ContentDigest.sha256(repacked);
         String version = nextVersion(skillId, null);
 
         var created = versionService.create(user, skillId, new CreateVersionRequest(
@@ -269,10 +259,14 @@ public class VersionEditService {
     }
 
     /**
-     * 路径规整：去掉开头的斜杠，拒绝穿越。
+     * 路径规整：去掉开头的斜杠，拒绝穿越与绝对路径。
      *
      * 路径会进 zip 的 entry 名，而安装器把 entry 名当成目标目录下的相对路径——
      * 放进 ".." 就是往目标目录外写文件。
+     *
+     * 前导斜杠是规整掉而不是拒绝：{@code /a/b.md} 与 {@code a/b.md} 说的是同一件事，
+     * 直接用是合法用法。但规整不掉的是 Windows 盘符——{@code C:/evil.txt} 剥掉斜杠
+     * 还是盘符路径，进了包就是一条装不上去、看着还像绝对路径的 entry，必须拒。
      */
     private String normalizePath(String raw) {
         String path = raw == null ? "" : raw.trim().replace('\\', '/');
@@ -282,9 +276,14 @@ public class VersionEditService {
         if (path.isBlank()) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "文件路径不能为空");
         }
-        if (path.contains("..")) {
+        SafePath.Kind kind = SafePath.classify(path);
+        if (kind == SafePath.Kind.TRAVERSAL) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "文件路径不能包含 ..");
+        }
+        if (kind == SafePath.Kind.ABSOLUTE) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "文件路径不能是绝对路径");
         }
         return path;
     }

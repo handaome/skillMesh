@@ -132,11 +132,22 @@ public class SkillService {
 
     @Transactional(readOnly = true)
     public SkillResponse get(CurrentUser user, UUID id) {
-        SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
+        return toResponse(requireVisibleSkill(user, id));
+    }
+
+    /**
+     * 取 Skill 并判可见性：看不见就当它不存在。
+     *
+     * 版本、审计、安装、同步、回收站这些入口都要过这一道。
+     * 各写各的迟早写出不一样的口径——一处 404 一处 403 就泄露了它存不存在。
+     */
+    public SkillEntity requireVisibleSkill(CurrentUser user, UUID skillId) {
+        SkillEntity entity = skills.findById(skillId)
+            .orElseThrow(() -> ApiException.notFound("Skill"));
         if (!canView(user, entity)) {
             throw ApiException.notFound("Skill");
         }
-        return toResponse(entity);
+        return entity;
     }
 
     @Transactional(readOnly = true)

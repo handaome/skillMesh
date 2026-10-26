@@ -5,8 +5,6 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
-import com.skillmesh.api.skill.SkillEntity;
-import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -47,16 +45,14 @@ public class InstallationController {
         List.of("active", "missing", "conflict", "uninstalled", "blocked");
 
     private final InstallationRepository installations;
-    private final SkillRepository skills;
     private final SkillService skillService;
     private final CurrentUserService currentUserService;
     private final AuditService audit;
 
-    public InstallationController(InstallationRepository installations, SkillRepository skills,
+    public InstallationController(InstallationRepository installations,
                                  SkillService skillService, CurrentUserService currentUserService,
                                  AuditService audit) {
         this.installations = installations;
-        this.skills = skills;
         this.skillService = skillService;
         this.currentUserService = currentUserService;
         this.audit = audit;
@@ -67,11 +63,7 @@ public class InstallationController {
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody RegisterInstallationRequest req) {
         CurrentUser user = currentUserService.current(jwt);
-        SkillEntity skill = skills.findById(req.skill_id())
-            .orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(user, skill)) {
-            throw ApiException.notFound("Skill");
-        }
+        skillService.requireVisibleSkill(user, req.skill_id());
         requireOneOf("install_scope", req.install_scope(), SCOPES);
         requireOneOf("agent", req.agent(), List.of("claude-code", "codex", "cursor", "generic"));
 

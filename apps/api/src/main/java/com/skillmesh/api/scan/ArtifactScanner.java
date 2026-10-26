@@ -1,5 +1,6 @@
 package com.skillmesh.api.scan;
 
+import com.skillmesh.api.common.SafePath;
 import com.skillmesh.api.scan.ScanRule.Severity;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -134,18 +135,20 @@ public class ArtifactScanner {
         try (ZipInputStream zip = new ZipInputStream(artifact)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
+                String path = entry.getName();
+                // 路径判定放在目录条目判断之前：目录条目一样能越界，
+                // 放过它就等于给这道闸留了口子——服务端不拦、别的解包器照单全收。
+                if (SafePath.escapes(path)) {
+                    findings.add(new ScanResult.Finding(path, 0, RULE_PATH_TRAVERSAL,
+                        "制品里出现越界路径，不该发到云端"));
+                    continue;
+                }
                 if (entry.isDirectory()) {
                     continue;
                 }
                 files++;
                 if (files > maxFiles) {
                     return "文件数超过上限 " + maxFiles;
-                }
-                String path = entry.getName();
-                if (path.startsWith("/") || path.contains("..")) {
-                    findings.add(new ScanResult.Finding(path, 0, RULE_PATH_TRAVERSAL,
-                        "制品里出现越界路径，不该发到云端"));
-                    continue;
                 }
                 byte[] data = readEntry(zip, maxFileBytes, path);
                 total += data.length;

@@ -2,8 +2,10 @@ package com.skillmesh.backup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillmesh.api.backup.BackupService;
+import com.skillmesh.api.config.MinioClients;
 import io.minio.MinioClient;
 import java.nio.file.Path;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
@@ -44,14 +46,12 @@ public class BackupTool {
         System.setProperty("spring.main.banner-mode", "off");
         try (ConfigurableApplicationContext ctx = SpringApplication.run(BackupTool.Config.class)) {
             BackupService backup = ctx.getBean(BackupService.class);
-            var manifest = backup.export(dir);
-            var problems = backup.verify(dir);
-            if (!problems.isEmpty()) {
-                System.err.println("备份校验发现 " + problems.size() + " 个问题：" + problems);
+            BackupService.BackupResult result = backup.exportAndVerify(dir);
+            if (!result.ok()) {
+                System.err.println(result.problemSummary());
                 System.exit(1);
             }
-            System.out.println("备份已校验：" + manifest.tables().size() + " 张表、"
-                + manifest.objects().size() + " 个对象 -> " + dir);
+            System.out.println(result.summary());
         } catch (Exception e) {
             System.err.println("备份失败：" + e.getMessage());
             System.exit(1);
@@ -71,16 +71,15 @@ public class BackupTool {
 
         @Bean
         MinioClient minioClient(
-            @org.springframework.beans.factory.annotation.Value("${skillmesh.minio.endpoint}") String endpoint,
-            @org.springframework.beans.factory.annotation.Value("${skillmesh.minio.access-key}") String accessKey,
-            @org.springframework.beans.factory.annotation.Value("${skillmesh.minio.secret-key}") String secretKey) {
-            return MinioClient.builder()
-                .endpoint(endpoint).credentials(accessKey, secretKey).build();
+            @Value("${skillmesh.minio.endpoint}") String endpoint,
+            @Value("${skillmesh.minio.access-key}") String accessKey,
+            @Value("${skillmesh.minio.secret-key}") String secretKey) {
+            return MinioClients.create(endpoint, accessKey, secretKey);
         }
 
         @Bean
         BackupService backupService(JdbcTemplate jdbc, MinioClient minio, ObjectMapper json,
-            @org.springframework.beans.factory.annotation.Value("${skillmesh.minio.bucket}") String bucket) {
+            @Value("${skillmesh.minio.bucket}") String bucket) {
             return new BackupService(jdbc, minio, json, bucket);
         }
     }

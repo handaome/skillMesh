@@ -3,6 +3,7 @@ package com.skillmesh.api.invite;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.invite.dto.InvitationPage;
 import com.skillmesh.api.invite.dto.InvitationSummary;
@@ -13,14 +14,11 @@ import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.org.TeamEntity;
 import com.skillmesh.api.org.TeamRepository;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -103,7 +101,7 @@ public class InvitationService {
         entity.setTeamId(teamId);
         entity.setOrgRole(role);
         entity.setTeamRole(teamRoleValue);
-        entity.setTokenHash(sha256Hex(token));
+        entity.setTokenHash(ContentDigest.sha256(token));
         entity.setStatus("pending");
         entity.setInvitedBy(actor.id());
         entity.setSubject(subject);
@@ -279,13 +277,13 @@ public class InvitationService {
     }
 
     private InvitationEntity require(String rawToken) {
-        return invitations.findByTokenHash(sha256Hex(rawToken))
+        return invitations.findByTokenHash(ContentDigest.sha256(rawToken))
             .orElseThrow(() -> ApiException.notFound("邀请"));
     }
 
     /** 锁住邀请行再读——接受邀请必须走这条。 */
     private InvitationEntity requireForUpdate(String rawToken) {
-        return invitations.findByTokenHashForUpdate(sha256Hex(rawToken))
+        return invitations.findByTokenHashForUpdate(ContentDigest.sha256(rawToken))
             .orElseThrow(() -> ApiException.notFound("邀请"));
     }
 
@@ -318,15 +316,6 @@ public class InvitationService {
 
     private static byte[] decode(String cursor) {
         return Base64.getUrlDecoder().decode(cursor);
-    }
-
-    private static String sha256Hex(String raw) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(raw.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 不可用", e);
-        }
     }
 
     private static String orDefault(String value, String fallback) {

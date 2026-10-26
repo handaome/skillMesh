@@ -46,10 +46,6 @@ public class ArtifactStorage {
         this.tempExpireDays = tempExpireDays;
     }
 
-    public String bucket() {
-        return bucket;
-    }
-
     public void ensureBucket() {
         try {
             if (!client.bucketExists(BucketExistsArgs.builder().bucket(bucket).build())) {

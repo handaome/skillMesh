@@ -3,10 +3,9 @@ package com.skillmesh.api.version;
 import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.ArtifactFileService;
 import com.skillmesh.api.artifact.ArtifactRepository;
+import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
-import com.skillmesh.api.skill.SkillEntity;
-import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.version.dto.VersionFileContentResponse;
 import com.skillmesh.api.version.dto.VersionFilesResponse;
@@ -26,16 +25,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class VersionFileService {
 
-    private final SkillRepository skills;
     private final SkillService skillService;
     private final SkillVersionRepository versions;
     private final ArtifactRepository artifacts;
     private final ArtifactFileService files;
 
-    public VersionFileService(SkillRepository skills, SkillService skillService,
-                              SkillVersionRepository versions, ArtifactRepository artifacts,
-                              ArtifactFileService files) {
-        this.skills = skills;
+    public VersionFileService(SkillService skillService, SkillVersionRepository versions,
+                              ArtifactRepository artifacts, ArtifactFileService files) {
         this.skillService = skillService;
         this.versions = versions;
         this.artifacts = artifacts;
@@ -67,8 +63,11 @@ public class VersionFileService {
         if (content == null) {
             throw ApiException.notFound("文件 " + path);
         }
-        long size = sizeOf(manifest, path);
-        String sha = shaOf(manifest, path);
+        // 条目只查一次：大小与摘要都在同一条目里。
+        Map<String, Object> entry = ZipManifest.find(manifest, path);
+        long size = entry == null ? 0
+            : ((Number) entry.getOrDefault("size_bytes", 0)).longValue();
+        String sha = entry == null ? "" : String.valueOf(entry.get("sha256"));
         // 超大文件读不全：不谎称有正文，只报大小。
         if (content.tooLarge()) {
             return new VersionFileContentResponse(version, path, size, sha, true, null);
@@ -87,10 +86,7 @@ public class VersionFileService {
      * 看不见 Skill 就 404，不泄露它存不存在；版本不存在或还没上传制品同样 404。
      */
     private ArtifactEntity artifactOf(CurrentUser user, UUID skillId, String version) {
-        SkillEntity skill = skills.findById(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(user, skill)) {
-            throw ApiException.notFound("Skill");
-        }
+        skillService.requireVisibleSkill(user, skillId);
         SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
         if (entity.getArtifactId() == null) {
@@ -99,23 +95,5 @@ public class VersionFileService {
         }
         return artifacts.findById(entity.getArtifactId())
             .orElseThrow(() -> ApiException.notFound("制品"));
-    }
-
-    private long sizeOf(List<Map<String, Object>> manifest, String path) {
-        for (Map<String, Object> item : manifest) {
-            if (path.equals(String.valueOf(item.get("path")))) {
-                return ((Number) item.getOrDefault("size_bytes", 0)).longValue();
-            }
-        }
-        return 0;
-    }
-
-    private String shaOf(List<Map<String, Object>> manifest, String path) {
-        for (Map<String, Object> item : manifest) {
-            if (path.equals(String.valueOf(item.get("path")))) {
-                return String.valueOf(item.get("sha256"));
-            }
-        }
-        return "";
     }
 }

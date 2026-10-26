@@ -3,8 +3,6 @@ package com.skillmesh.api.audit;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.auth.CurrentUser;
-import com.skillmesh.api.common.ApiException;
-import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -24,15 +22,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuditController {
 
     private final AuditService audit;
-    private final SkillRepository skills;
     private final SkillService skillService;
     private final CurrentUserService currentUserService;
 
-    public AuditController(AuditService audit, SkillRepository skills,
-                           CurrentUserService currentUserService,
+    public AuditController(AuditService audit, CurrentUserService currentUserService,
                            SkillService skillService) {
         this.audit = audit;
-        this.skills = skills;
         this.currentUserService = currentUserService;
         this.skillService = skillService;
     }
@@ -55,10 +50,7 @@ public class AuditController {
     public List<EventResponse> forSkill(@AuthenticationPrincipal Jwt jwt,
                                         @PathVariable UUID skillId,
                                         @RequestParam(defaultValue = "50") int limit) {
-        var skill = skills.findById(skillId).orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!skillService.canView(currentUserService.current(jwt), skill)) {
-            throw ApiException.notFound("Skill");
-        }
+        skillService.requireVisibleSkill(currentUserService.current(jwt), skillId);
         int capped = Math.clamp(limit, 1, 200);
         return audit.recentForSkill(skillId, capped).stream()
             .map(EventResponse::of)

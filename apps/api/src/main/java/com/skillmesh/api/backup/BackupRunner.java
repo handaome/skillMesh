@@ -32,13 +32,11 @@ public class BackupRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-        var manifest = backup.export(dir);
-        var problems = backup.verify(dir);
-        if (problems.isEmpty()) {
-            log.info("备份已校验：{} 张表、{} 个对象 -> {}", manifest.tables().size(),
-                manifest.objects().size(), dir);
+        BackupService.BackupResult result = backup.exportAndVerify(dir);
+        if (result.ok()) {
+            log.info("{}", result.summary());
             return;
         }
-        log.error("备份校验发现 {} 个问题：{}", problems.size(), problems);
+        log.error("{}", result.problemSummary());
     }
 }

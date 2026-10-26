@@ -12,9 +12,6 @@ public class MinioConfig {
     MinioClient minioClient(@Value("${skillmesh.minio.endpoint}") String endpoint,
                             @Value("${skillmesh.minio.access-key}") String accessKey,
                             @Value("${skillmesh.minio.secret-key}") String secretKey) {
-        return MinioClient.builder()
-            .endpoint(endpoint)
-            .credentials(accessKey, secretKey)
-            .build();
+        return MinioClients.create(endpoint, accessKey, secretKey);
     }
 }

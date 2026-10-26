@@ -87,7 +87,7 @@ public class OrgController {
         if (!orgs.isOrgMember(organizationId, user.id())) {
             throw ApiException.notFound("组织");
         }
-        return orgs.orgMembers(organizationId).stream().map(OrgController::toResponse).toList();
+        return orgs.orgMembers(organizationId);
     }
 
     @GetMapping("/organizations/{organizationId}/teams/{teamId}/members")
@@ -101,7 +101,7 @@ public class OrgController {
             && !orgs.isOrgMember(organizationId, user.id())) {
             throw ApiException.notFound("团队");
         }
-        return orgs.teamMembers(teamId).stream().map(OrgController::toResponse).toList();
+        return orgs.teamMembers(teamId);
     }
 
     @PatchMapping("/organizations/{organizationId}/members/{userId}")
@@ -136,11 +136,6 @@ public class OrgController {
         orgs.requireTeamInOrg(organizationId, teamId);
         orgs.removeTeamMember(currentUserService.current(jwt), teamId, userId);
         return ResponseEntity.noContent().build();
-    }
-
-    private static MemberResponse toResponse(OrgService.Member member) {
-        return new MemberResponse(member.userId(), member.displayName(), member.email(),
-            member.role(), member.joinedAt(), member.subject(), member.status());
     }
 
     private static Map<String, Object> toResponse(OrganizationEntity org) {

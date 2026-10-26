@@ -1,6 +1,7 @@
 package com.skillmesh.api.backup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillmesh.api.common.ContentDigest;
 import io.minio.GetObjectArgs;
 import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
@@ -11,13 +12,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.DigestInputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -58,7 +55,7 @@ public class BackupService {
     }
 
     /** 导出一份备份，返回清单。 */
-    public Manifest export(Path target) throws IOException, Exception {
+    public Manifest export(Path target) throws Exception {
         Path dbDir = target.resolve("db");
         Path objectsDir = target.resolve("objects");
         Files.createDirectories(dbDir);
@@ -133,6 +130,20 @@ public class BackupService {
             }
         }
         return problems;
+    }
+
+    /**
+     * 导出一份备份并当场校验。
+     *
+     * 两个入口——随应用启动跑的 {@code BackupRunner} 与独立跑的
+     * {@code com.skillmesh.backup.BackupTool}——做的是同一件事：导出 → 校验 → 汇总。
+     * 流程收在这里，两边只决定「校验没过怎么办」：备份脚本要退出码，
+     * 随应用启动的那个只要记一条错误日志。
+     */
+    public BackupResult exportAndVerify(Path target) throws Exception {
+        Manifest manifest = export(target);
+        List<String> problems = verify(target);
+        return new BackupResult(target, manifest, problems);
     }
 
     /**
@@ -233,25 +244,39 @@ public class BackupService {
     }
 
     private String sha256(Path file) throws IOException {
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 不可用", e);
+        try (InputStream in = Files.newInputStream(file)) {
+            return ContentDigest.sha256(in);
         }
-        try (InputStream in = Files.newInputStream(file);
-             DigestInputStream digestStream = new DigestInputStream(in, digest)) {
-            byte[] buffer = new byte[8192];
-            while (digestStream.read(buffer) != -1) {
-                // 读干就行，摘要在 close 前从 digest 里取
-            }
-        }
-        return HexFormat.of().formatHex(digest.digest());
     }
 
     /** 表名来自 information_schema，但仍过一遍引号，避免关键字表名。 */
     private String quote(String identifier) {
         return "\"" + identifier.replace("\"", "\"\"") + "\"";
+    }
+
+    /**
+     * 一次备份的结果：备份目录、清单、校验发现的问题。
+     *
+     * 汇总文案也在这里出：两个入口的汇总格式本来就一样，
+     * 收在一处才不会写着写着走偏。
+     */
+    public record BackupResult(Path target, Manifest manifest, List<String> problems) {
+
+        /** 校验是否通过。 */
+        public boolean ok() {
+            return problems.isEmpty();
+        }
+
+        /** 校验通过时的汇总文案。 */
+        public String summary() {
+            return "备份已校验：" + manifest.tables().size() + " 张表、"
+                + manifest.objects().size() + " 个对象 -> " + target;
+        }
+
+        /** 校验没通过时的汇总文案。 */
+        public String problemSummary() {
+            return "备份校验发现 " + problems.size() + " 个问题：" + problems;
+        }
     }
 
     /** 备份清单。 */

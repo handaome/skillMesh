@@ -1,6 +1,7 @@
 package com.skillmesh.api.artifact;
 
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -70,7 +71,7 @@ public final class ZipManifest {
                 total += data.length;
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("path", entry.getName());
-                item.put("sha256", ArtifactService.sha256(data));
+                item.put("sha256", ContentDigest.sha256(data));
                 item.put("size_bytes", (long) data.length);
                 manifest.add(item);
             }
@@ -80,6 +81,21 @@ public final class ZipManifest {
         manifest.sort((left, right) ->
             String.valueOf(left.get("path")).compareTo(String.valueOf(right.get("path"))));
         return manifest;
+    }
+
+    /**
+     * 在清单里按路径找条目。找不到返回 null。
+     *
+     * 路径是清单的主键：一个包里同一路径只对应一个文件（重名 entry 已经被
+     * {@link #of} 拒了）。所有「按路径查条目」的地方都走它，别再各写一遍遍历。
+     */
+    public static Map<String, Object> find(List<Map<String, Object>> manifest, String path) {
+        for (Map<String, Object> item : manifest) {
+            if (path.equals(String.valueOf(item.get("path")))) {
+                return item;
+            }
+        }
+        return null;
     }
 
     /** 读一个 entry 的内容。剩下的额度不够读完就是超限，直接拒。 */

@@ -10,6 +10,7 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.SafePath;
 import com.skillmesh.api.device.DeviceService;
 import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.review.ReviewService;
@@ -26,7 +27,6 @@ import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.VersionOrder;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -171,13 +171,13 @@ public class SyncUploadService {
                 "denied", Map.of("expected", expectedRevision, "cloud", orEmpty(cloud)),
                 changeset.getDeviceId());
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
-                "云端已经变了（期望 " + shortDigest(expectedRevision) + "，实际 "
-                    + shortDigest(cloud) + "），本次提交没生效");
+                "云端已经变了（期望 " + ContentDigest.shortDigest(expectedRevision) + "，实际 "
+                    + ContentDigest.shortDigest(cloud) + "），本次提交没生效");
         }
 
         List<UploadedFile> files = collectUploadedFiles(changesetId);
         byte[] zip = zip(files);
-        String sha256 = ArtifactService.sha256(zip);
+        String sha256 = ContentDigest.sha256(zip);
         // 内容寻址落桶：同一份内容在桶里只留一份。
         // 早先这里按 changeset 拼 key（sync/<changesetId>/<sha>.zip），
         // 每次提交都写一个新对象——两台设备各提交一次同一份内容，
@@ -319,7 +319,7 @@ public class SyncUploadService {
         for (UploadedFile file : files) {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("path", file.path());
-            item.put("sha256", ArtifactService.sha256(file.data()));
+            item.put("sha256", ContentDigest.sha256(file.data()));
             item.put("size_bytes", file.data().length);
             manifest.add(item);
         }
@@ -370,17 +370,10 @@ public class SyncUploadService {
 
     /** 同步路径不能逃出变更集目录。 */
     private void requireSafePath(String path) {
-        if (path == null || path.isBlank() || path.startsWith("/") || path.contains("..")) {
+        if (path == null || path.isBlank() || SafePath.escapes(path)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "相对路径不合法：" + path);
         }
-    }
-
-    private String shortDigest(String digest) {
-        if (digest == null || digest.isEmpty()) {
-            return "空";
-        }
-        return digest.length() > 8 ? digest.substring(0, 8) : digest;
     }
 
     private String orEmpty(String value) {
