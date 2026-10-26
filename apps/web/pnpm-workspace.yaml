@@ -1,0 +1,4 @@
+# pnpm 11 起 allowBuilds 取代了 onlyBuiltDependencies，package.json 里那个字段已经失效，
+# 这里才是唯一生效的地方。esbuild 要执行安装脚本准备平台二进制，否则 Vite 跑不起来。
+allowBuilds:
+  esbuild: true

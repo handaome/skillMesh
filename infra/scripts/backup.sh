@@ -24,10 +24,31 @@ cd "$API_DIR"
 
 if [ ! -d target/classes ]; then
   echo "先编译：cd apps/api && ./mvnw -o compile" >&2
+  echo "（仓库不在默认位置时，先 export MAVEN_REPO=<仓库路径>）" >&2
   exit 1
 fi
 
-M2="${HOME}/.m2/repository"
+# Maven 仓库位置：优先 MAVEN_REPO 环境变量（本脚本会加载根目录 .env，写在那里即可），
+# 其次 .mvn/maven.config 里配的 -Dmaven.repo.local，最后默认 ~/.m2/repository。
+M2="${MAVEN_REPO:-}"
+if [ -z "$M2" ] && [ -f .mvn/maven.config ]; then
+  M2=$(sed -n 's/.*-Dmaven\.repo\.local=\([^[:space:]]*\).*/\1/p' .mvn/maven.config | head -1)
+fi
+[ -n "$M2" ] || M2="$HOME/.m2/repository"
+
+# classpath 分隔符：Windows 用 ;，其余平台用 :
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) CP_SEP=';' ;;
+  *) CP_SEP=':' ;;
+esac
+
+# Windows 上的 java 认 Windows 路径，Git Bash 里的 /d/... 得先转一道
+to_native_path() {
+  case "$CP_SEP" in
+    ';') cygpath -w "$1" 2>/dev/null || echo "$1" ;;
+    *) echo "$1" ;;
+  esac
+}
 
 # Spring Boot 版本从 pom 里读——.m2 里装着别的项目用的新版本（4.x），
 # 挑错会加载不兼容的类。
@@ -50,11 +71,12 @@ esac
 # 同一个库在 .m2 里有多个大版本并存（slf4j 1.7 与 2.0、spring-boot 3.5 与 4.1），
 # 混进来会加载错的那个。
 CP="target/classes"
+MISSING=""
 pick() {
   local dir="$1" version="$2" jar
   local name
   name=$(basename "$dir")
-  [ -d "$dir" ] || return 0
+  [ -d "$dir" ] || { MISSING="$MISSING $name"; return 0; }
   if [ -n "$version" ]; then
     jar=$(find "$dir" -mindepth 2 -maxdepth 2 -name "${name}-${version}*.jar" \
           ! -name "*sources*" ! -name "*javadoc*" 2>/dev/null | sort -V | tail -1)
@@ -63,8 +85,10 @@ pick() {
           ! -name "*sources*" ! -name "*javadoc*" 2>/dev/null | sort -V | tail -1)
   fi
   if [ -n "$jar" ]; then
-    CP="$CP;$(cygpath -w "$jar" 2>/dev/null || echo "$jar")"
+    CP="$CP$CP_SEP$(to_native_path "$jar")"
+    return 0
   fi
+  MISSING="$MISSING $name"
 }
 
 pick "$M2/org/springframework/boot/spring-boot" "$BOOT_VERSION"
@@ -86,6 +110,12 @@ pick "$M2/org/slf4j/slf4j-api" "2."
 pick "$M2/org/yaml/snakeyaml" ""
 pick "$M2/ch/qos/logback/logback-classic" ""
 pick "$M2/ch/qos/logback/logback-core" ""
+
+if [ -n "$MISSING" ]; then
+  echo "Maven 仓库 $M2 里找不到这些依赖：$MISSING" >&2
+  echo "换个仓库位置：把 MAVEN_REPO=<仓库路径> 写进根目录的 .env，或 export 后再跑" >&2
+  exit 1
+fi
 
 echo "导出到 $TARGET ..."
 java -cp "$CP" com.skillmesh.backup.BackupTool "$TARGET"

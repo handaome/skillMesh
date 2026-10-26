@@ -22,11 +22,5 @@
     "vite": "^7.0.0",
     "vitest": "^3.0.0",
     "vue-tsc": "^2.2.0"
-  },
-  "pnpm": {
-    "//": "pnpm 10 默认拦截依赖的构建脚本；esbuild 不装二进制 Vite 就跑不起来。",
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }
