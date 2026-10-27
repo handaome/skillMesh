@@ -129,8 +129,7 @@ public class SyncUploadService {
             uploads.save(session);
 
             slots.add(new UploadSlot(file.path(), session.getId().toString(),
-                storage.presignedPut(session.getTemporaryStorageKey(),
-                    ArtifactService.UPLOAD_TTL),
+                "/uploads/" + session.getId(),
                 Map.of("content-type", file.contentType() == null ? "application/octet-stream"
                     : file.contentType())));
         }

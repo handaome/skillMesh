@@ -164,6 +164,24 @@ public class ArtifactStorage {
         }
     }
 
+    /**
+     * 流式写入。上传经 API 中转时不能把整个包读进堆：
+     * 一个 Skill 包可能几十 MB，并发几个就把内存吃满。
+     *
+     * size 必须是实际字节数；未知时调用方应先用 size(key) 或声明值补齐。
+     */
+    public void putStream(String key, InputStream in, long size, String contentType) {
+        try {
+            client.putObject(PutObjectArgs.builder()
+                .bucket(bucket).object(key)
+                .stream(in, size, -1)
+                .contentType(contentType)
+                .build());
+        } catch (Exception e) {
+            throw new IllegalStateException("写入对象失败: " + key, e);
+        }
+    }
+
     public InputStream get(String key) {
         try {
             return client.getObject(GetObjectArgs.builder().bucket(bucket).object(key).build());

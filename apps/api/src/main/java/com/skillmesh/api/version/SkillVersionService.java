@@ -117,7 +117,7 @@ public class SkillVersionService {
 
         UploadTarget upload = new UploadTarget(
             session.getId(), "PUT",
-            storage.presignedPut(tempKey, ArtifactService.UPLOAD_TTL),
+            "/uploads/" + session.getId(),
             Map.of("Content-Type", "application/zip"),
             session.getExpiresAt());
         return new CreateVersionResponse(version.getId(), version.getStatus(), upload, null);

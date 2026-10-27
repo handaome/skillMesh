@@ -189,7 +189,7 @@ func locatePublishTargets(path string, all bool) ([]PublishTarget, error) {
 	return targets, nil
 }
 
-// PublishOne 发布一个 Skill：打包 → 建/复用 Skill 元数据 → 建版本 → 直传 → 服务端校验。
+// PublishOne 发布一个 Skill：打包 → 建/复用 Skill 元数据 → 建版本 → 上传 → 服务端校验。
 func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTarget,
 	options PublishOptions) (publishResult, error) {
 

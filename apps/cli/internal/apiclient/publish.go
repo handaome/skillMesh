@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // CreateSkillRequest 对应 OpenAPI 的 CreateSkillRequest。
@@ -47,8 +48,8 @@ type CreateVersionRequest struct {
 	ExpectedBaseRevision string `json:"expected_base_revision,omitempty"`
 }
 
-// UploadTarget 是直传对象存储的目标。注意 url 自带签名，
-// 请求它时不能再加 Authorization 头。
+// UploadTarget 是上传目标。服务端返回相对地址，由客户端拼上 API base，
+// 内容经 API 中转写进对象存储——客户端不需要能访问 MinIO。
 type UploadTarget struct {
 	SessionID string            `json:"session_id"`
 	Method    string            `json:"method"`
@@ -127,16 +128,22 @@ func (c *Client) CompleteUpload(ctx context.Context, sessionID string) (UploadSe
 	return out, nil
 }
 
-// PutArtifact 把制品直传到对象存储的签名地址。
-// 签名地址自带凭据，这里绝不能再带 Authorization 头，否则签名校验失败。
+// PutArtifact 把制品上传到 API 中转端点。
+// 服务端返回的是相对地址（/uploads/{id}），拼上 API base；
+// 走 API 就要带令牌——直传对象存储时反而不能带。
 func (c *Client) PutArtifact(ctx context.Context, target UploadTarget, data []byte) error {
-	request, err := http.NewRequestWithContext(ctx, target.Method, target.URL, bytes.NewReader(data))
+	targetURL := target.URL
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = c.base + "/" + strings.TrimPrefix(targetURL, "/")
+	}
+	request, err := http.NewRequestWithContext(ctx, target.Method, targetURL, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 	for key, value := range target.Headers {
 		request.Header.Set(key, value)
 	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
 	response, err := c.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("上传制品失败: %w", err)

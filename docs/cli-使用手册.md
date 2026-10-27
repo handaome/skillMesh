@@ -293,7 +293,7 @@ export SKILLMESH_TOKEN=<access-token>
 ./skillmesh.exe publish ./skills/java-debug --org acme --team platform
 ```
 
-流程是：校验本地目录 → 扫密钥 → 打成 zip（`SKILL.md` 在包根）→ 算整包 SHA-256 与逐文件 manifest → 按 slug 查云端、没有就建 → 建版本 → 拿 presigned URL 直传对象存储 → 服务端重算 SHA-256 并比对，转正为不可变制品 → 服务端扫描决定发布还是驳回。
+流程是：校验本地目录 → 扫密钥 → 打成 zip（`SKILL.md` 在包根）→ 算整包 SHA-256 与逐文件 manifest → 按 slug 查云端、没有就建 → 建版本 → 把 zip 上传到 API（由 API 写入对象存储）→ 服务端重算 SHA-256 并比对，转正为不可变制品 → 服务端扫描决定发布还是驳回。
 
 可见性与归属怎么定：
 

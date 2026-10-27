@@ -97,6 +97,50 @@ public class UploadService {
             version, now, skillId);
     }
 
+    /**
+     * 接收客户端上传的内容，写进会话对应的临时对象。
+     *
+     * 上传走 API 中转而不是预签名直传：MinIO 通常只在内网可达，
+     * 预签名地址里的主机名外部客户端解析不了。中转后客户端只需连 API。
+     */
+    @Transactional
+    public void store(CurrentUser user, UUID uploadId, InputStream in, long size,
+                      String contentType) {
+        UploadSessionEntity session = uploads.findById(uploadId)
+            .orElseThrow(() -> ApiException.notFound("上传会话"));
+        if (!session.getActorUserId().equals(user.id())) {
+            throw ApiException.notFound("上传会话");
+        }
+        if (!"created".equals(session.getStatus())) {
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "上传会话状态为 " + session.getStatus() + "，不能重复上传");
+        }
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        if (session.getExpiresAt().isBefore(now)) {
+            session.setStatus("expired");
+            session.setErrorCode("UPLOAD_EXPIRED");
+            uploads.save(session);
+            throw new ApiException(410, ErrorCodes.ARTIFACT_MISSING, "上传会话已过期，请重新上传");
+        }
+
+        // Content-Length 缺失时（chunked）用创建会话时声明的长度。
+        if (size < 0) {
+            size = session.getExpectedSizeBytes();
+        }
+        if (size < 0) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "上传内容大小未知");
+        }
+        if (session.getExpectedSizeBytes() > 0 && size != session.getExpectedSizeBytes()) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "上传内容大小与声明不符: " + size + " != " + session.getExpectedSizeBytes());
+        }
+        storage.putStream(session.getTemporaryStorageKey(), in, size,
+            contentType == null || contentType.isBlank()
+                ? "application/octet-stream" : contentType);
+        session.setStatus("uploaded");
+        uploads.save(session);
+    }
+
     @Transactional
     public UploadSession complete(CurrentUser user, UUID uploadId) {
         UploadSessionEntity session = uploads.findById(uploadId)
