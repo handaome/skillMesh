@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,11 @@ type Client struct {
 	base  string
 	token string
 	http  *http.Client
+
+	// 设备注册是写请求：同步一批 Skill 会反复问设备 ID，
+	// 每次都发 POST /devices 会撞上写接口限流。成功注册后缓存住。
+	deviceMu sync.Mutex
+	deviceID string
 }
 
 func New(baseURL, token string, timeout time.Duration) *Client {
@@ -52,7 +58,9 @@ func (c *Client) doWith(ctx context.Context, method, path string, query url.Valu
 }
 
 // maxRateLimitRetries 是被限流后最多重试几次。
-const maxRateLimitRetries = 3
+// 首次同步几十个 Skill 时写请求会连续撞上每分钟上限，
+// 要给够跨过一两个窗口的余量。
+const maxRateLimitRetries = 8
 
 // doOnce 发一次请求。第二个返回值表示「被限流了，可以退避重试」。
 func (c *Client) doOnce(ctx context.Context, method, path string, query url.Values,

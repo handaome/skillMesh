@@ -56,9 +56,20 @@ func (c *Client) RegisterDevice(ctx context.Context, key, platform, version stri
 
 // SubmitChangeset 提交一次同步。幂等键由调用方给：断网重试时必须复用同一个。
 // DeviceID 返回本机在注册中心的设备 ID，没有就注册一个。
+// 注册成功后缓存：同步一批 Skill 会反复问，每次都发写请求会撞限流。
+// 失败不缓存，下一次调用还会重试。
 func (c *Client) DeviceID(ctx context.Context) (string, error) {
+	c.deviceMu.Lock()
+	defer c.deviceMu.Unlock()
+	if c.deviceID != "" {
+		return c.deviceID, nil
+	}
 	device, err := c.RegisterDevice(ctx, MachineKey(), runtime.GOOS, "0.1.0")
-	return device.ID, err
+	if err != nil {
+		return "", err
+	}
+	c.deviceID = device.ID
+	return c.deviceID, nil
 }
 
 func (c *Client) SubmitChangeset(ctx context.Context, deviceID, IdempotencyKey string,

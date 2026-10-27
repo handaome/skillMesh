@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -501,7 +500,7 @@ func confirmWithCloud(ctx context.Context, client *apiclient.Client, target Sync
 		// --dry-run 的承诺是「什么都不改」：不注册设备、不提交变更集。
 		return "", nil
 	}
-	device, err := ensureDevice(ctx, client)
+	device, err := client.DeviceID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -559,14 +558,6 @@ func OutcomeForError(target SyncTarget, err error) syncResult {
 }
 
 // ensureDevice 拿本机在注册中心的设备 ID，没有就注册一个。
-func ensureDevice(ctx context.Context, client *apiclient.Client) (string, error) {
-	device, err := client.RegisterDevice(ctx, apiclient.MachineKey(), runtime.GOOS, cliVersion)
-	if err != nil {
-		return "", err
-	}
-	return device.ID, nil
-}
-
 // ApplyDecision 按判定结果执行。冲突在没有 --resolve 时只报告不动手。
 func ApplyDecision(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	decision syncstate.Decision, local packager.Artifact, localHash string,
