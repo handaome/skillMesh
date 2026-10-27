@@ -131,14 +131,30 @@ func (c *Client) CompleteUpload(ctx context.Context, sessionID string) (UploadSe
 // PutArtifact 把制品上传到 API 中转端点。
 // 服务端返回的是相对地址（/uploads/{id}），拼上 API base；
 // 走 API 就要带令牌——直传对象存储时反而不能带。
+//
+// 上传也是写请求，批量同步时一样会撞限流：跟 doWith 一样按 Retry-After 退避。
 func (c *Client) PutArtifact(ctx context.Context, target UploadTarget, data []byte) error {
+	for attempt := 0; ; attempt++ {
+		retry, err := c.putArtifactOnce(ctx, target, data)
+		if err == nil {
+			return nil
+		}
+		if !retry || attempt >= maxRateLimitRetries {
+			return err
+		}
+	}
+}
+
+func (c *Client) putArtifactOnce(ctx context.Context, target UploadTarget,
+	data []byte) (bool, error) {
+
 	targetURL := target.URL
 	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
 		targetURL = c.base + "/" + strings.TrimPrefix(targetURL, "/")
 	}
 	request, err := http.NewRequestWithContext(ctx, target.Method, targetURL, bytes.NewReader(data))
 	if err != nil {
-		return err
+		return false, err
 	}
 	for key, value := range target.Headers {
 		request.Header.Set(key, value)
@@ -146,14 +162,22 @@ func (c *Client) PutArtifact(ctx context.Context, target UploadTarget, data []by
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("上传制品失败: %w", err)
+		return false, fmt.Errorf("上传制品失败: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusTooManyRequests {
+		wait := rateLimitWait(response)
+		if err := sleepContext(ctx, wait); err != nil {
+			return false, err
+		}
+		return true, fmt.Errorf("上传被限流，%s 后重试", wait)
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("上传制品失败（HTTP %d）：%s", response.StatusCode, string(body))
+		return false, fmt.Errorf("上传制品失败（HTTP %d）：%s", response.StatusCode, string(body))
 	}
-	return nil
+	_, _ = io.Copy(io.Discard, response.Body)
+	return false, nil
 }
 
 // ReviewVersion 提交审核或给出审核结论（设计文档 §12）。

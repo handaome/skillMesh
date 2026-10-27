@@ -43,7 +43,9 @@ const (
 	Deleted syncOutcome = "已删除"
 	// WouldPull 演练时才会出现：本机没有、正式跑会从云端装上。
 	WouldPull syncOutcome = "将拉取"
-	Failed    syncOutcome = "失败"
+	// WouldDelete 演练时才会出现：云端已删，正式跑本地那份会进回收站。
+	WouldDelete syncOutcome = "将删除"
+	Failed      syncOutcome = "失败"
 )
 
 // SyncOptions 是一次同步的可调项。
@@ -64,6 +66,11 @@ type SyncOptions struct {
 	// 成功拿到了云端的已删除清单没有。拿不到就不能上传——不知道云端删了什么，
 	// 上传会把删掉的 Skill 复活（云端查不到 → 判定为「该上传」）。
 	CloudDeletionsKnown bool
+	// CloudDeletes 是云端已删除（归档）的 Skill，按 slug 索引。
+	//
+	// 云端删过的东西不该再被上传上去：那叫复活。别的机器（基线里没记过
+	// 这个 Skill）尤其容易干出这种事——它不知道云端删过，只看到「云端没有」。
+	CloudDeletes map[string]apiclient.DeletedSkill
 }
 
 func newSyncCmd() *cobra.Command {
@@ -131,15 +138,22 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	}
 	// 云端删掉的先处理：本地那份要先移走，
 	// 否则它会被当成「云端没有、本地有」又传回云端。
-	state, deleteResults, deletionsKnown, err := loadStateForSync(ctx, client, options)
+	state, cloud, err := loadStateForSync(ctx, client, options)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
 	// 记下这次有没有拿到删除清单：拿不到的话下面一律不上传。
-	options.CloudDeletionsKnown = deletionsKnown
+	options.CloudDeletionsKnown = cloud.Known
+	options.CloudDeletes = cloud.Deletes
 	targets, err := SyncTargets(options)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
+	}
+	// 清单按 slug 索引，删哪些得等扫出本地有哪些才知道。
+	deleteResults, targets := applyCloudDeletes(ctx, &state, targets, options)
+	if !cloud.Known {
+		deleteResults = append(deleteResults, syncResult{Name: "云端删除同步",
+			Outcome: Failed, Detail: describeListError(cloud.ListError)})
 	}
 	queue, err := syncqueue.Load(Cfg.ConfigDir)
 	if err != nil {
@@ -997,8 +1011,8 @@ func reportSync(results []syncResult, queue syncqueue.Queue) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，将拉取 %d，冲突 %d，待确认 %d，已删除 %d，失败 %d\n",
-		counts[Skipped], counts[Uploaded], counts[fetched], counts[WouldPull],
+	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，将拉取 %d，将删除 %d，冲突 %d，待确认 %d，已删除 %d，失败 %d\n",
+		counts[Skipped], counts[Uploaded], counts[fetched], counts[WouldPull], counts[WouldDelete],
 		counts[Conflicted], counts[PendingDelete], counts[Deleted], counts[Failed])
 	if counts[Conflicted] > 0 {
 		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[Conflicted])

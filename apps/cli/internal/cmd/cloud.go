@@ -105,9 +105,9 @@ func newCloudDeletedCmd() *cobra.Command {
 				return nil
 			}
 			w := newTable(os.Stdout)
-			fmt.Fprintln(w, "SLUG\t名称\t删除时间")
+			fmt.Fprintln(w, "SLUG\t名称\tID\t删除时间")
 			for _, item := range deleted {
-				fmt.Fprintf(w, "%s\t%s\t%s\n", item.Slug, item.Name, item.DeletedAt)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item.Slug, item.Name, item.ID, item.DeletedAt)
 			}
 			return w.Flush()
 		},

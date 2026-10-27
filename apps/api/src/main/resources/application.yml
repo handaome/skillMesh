@@ -53,7 +53,7 @@ skillmesh:
     timeout-ms: ${SM_SCAN_TIMEOUT_MS:30000}
   rate-limit:
     read-per-minute: ${SM_RATE_LIMIT_READ:600}
-    write-per-minute: ${SM_RATE_LIMIT_WRITE:60}
+    write-per-minute: ${SM_RATE_LIMIT_WRITE:300}
     window-seconds: ${SM_RATE_LIMIT_WINDOW:60}
   git:
     allowed-hosts: "${SM_GIT_ALLOWED_HOSTS:github.com,gitlab.com,gitee.com}"

@@ -65,6 +65,10 @@ services:
       # 不能是容器内的 keycloak:8080（浏览器解析不了）。
       SM_OIDC_ISSUER: http://127.0.0.1:8180/kc/realms/skillmesh
       SM_OIDC_CLIENT_ID: skillmesh-cli
+      # 限流（次/分钟）。0 表示关闭；首次同步大量 Skill 时默认值可能不够。
+      SM_RATE_LIMIT_READ: ${SM_RATE_LIMIT_READ:-600}
+      SM_RATE_LIMIT_WRITE: ${SM_RATE_LIMIT_WRITE:-300}
+      SM_RATE_LIMIT_WINDOW: ${SM_RATE_LIMIT_WINDOW:-60}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

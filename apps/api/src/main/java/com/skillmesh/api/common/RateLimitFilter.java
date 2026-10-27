@@ -54,6 +54,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         sweepExpired(now);
         String key = subject(request);
         int limit = isWrite(request) ? writeLimit : readLimit;
+        // 0 或负数表示关闭这一类限流。单机自用部署不想被首次批量同步卡住时用。
+        if (limit <= 0) {
+            chain.doFilter(request, response);
+            return;
+        }
         Window window = windows.compute(key, (ignored, existing) -> {
             if (existing == null || now - existing.startedAt() >= windowMillis) {
                 return new Window(now, 1);
