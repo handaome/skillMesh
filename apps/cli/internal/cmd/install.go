@@ -57,8 +57,24 @@ func newInstallCmd() *cobra.Command {
 				return err
 			}
 			fromLock, hasLock := lock.Find(args[0])
+			// 参数可以是 Skill ID，也可以是锁文件里记的名字：
+			// 后者支持 `install <名字> --version <旧版本>` 回滚，
+			// 这样就不用再记一个 rollback 命令。
+			skillID, agents, targetScope := args[0], agentNames, scope
+			if hasLock && fromLock.SourceID != "" {
+				skillID = fromLock.SourceID
+				if !cmd.Flags().Changed("agent") && len(fromLock.Agents) > 0 {
+					agents = fromLock.Agents
+				}
+				if !cmd.Flags().Changed("scope") && fromLock.Scope != "" {
+					targetScope = fromLock.Scope
+				}
+			}
+			if targetScope == "" {
+				targetScope = "user"
+			}
 
-			versions, err := client.Versions(cmd.Context(), args[0])
+			versions, err := client.Versions(cmd.Context(), skillID)
 			if err != nil {
 				return err
 			}
@@ -66,7 +82,7 @@ func newInstallCmd() *cobra.Command {
 			// latest_version，拿不到就按版本号取最大的。
 			latest := ""
 			if version == "" && !(locked && hasLock) {
-				latest = registryLatestVersion(cmd.Context(), client, args[0])
+				latest = registryLatestVersion(cmd.Context(), client, skillID)
 			}
 			target, err := SelectVersion(versions, version, locked, fromLock, hasLock, latest)
 			if err != nil {
@@ -81,17 +97,13 @@ func newInstallCmd() *cobra.Command {
 			}
 			if dryRun {
 				fmt.Printf("演练：将从 %s@%s 安装 %d 字节到 %v\n",
-					args[0], target.Version, len(data), agentNames)
+					skillID, target.Version, len(data), agents)
 				return nil
 			}
-			targetScope := scope
-			if targetScope == "" {
-				targetScope = "user"
-			}
 			return installArtifact(cmd.Context(), client, projectRoot, installRequest{
-				SkillID: args[0],
+				SkillID: skillID,
 				Version: target,
-				Agents:  agentNames,
+				Agents:  agents,
 				Scope:   targetScope,
 				Replace: replace,
 			})
@@ -117,37 +129,108 @@ type installRequest struct {
 	Replace bool
 }
 
+// artifactReport 是装之前该让人看见的结论：验签、许可证、可疑内容。
+type artifactReport struct {
+	Verdict string
+	License string
+	Risks   string
+}
+
+// fetchArtifact 下载并解出可安装的目录：结构校验与验签都在这里做完。
+//
+// 返回的目录在 cleanup 调用前有效。install 与 restore 走同一条路——
+// 装进去的东西必须是服务端那份，验不过就不能进 Agent 目录。
+func fetchArtifact(ctx context.Context, client *apiclient.Client,
+	version apiclient.SkillVersion) (string, func(), artifactReport, error) {
+
+	noop := func() {}
+	data, err := client.DownloadArtifact(ctx, version.Artifact.ID)
+	if err != nil {
+		return "", noop, artifactReport{}, err
+	}
+	work, err := os.MkdirTemp("", "skillmesh-install-*")
+	if err != nil {
+		return "", noop, artifactReport{}, err
+	}
+	cleanup := func() { os.RemoveAll(work) }
+
+	skillDir, err := installer.ExtractZip(data, work)
+	if err != nil {
+		cleanup()
+		return "", noop, artifactReport{}, err
+	}
+	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
+		cleanup()
+		return "", noop, artifactReport{}, err
+	}
+	verdict, err := VerifyArtifact(ctx, client, version, skillDir)
+	if err != nil {
+		cleanup()
+		return "", noop, artifactReport{}, err
+	}
+	report := artifactReport{
+		Verdict: verdict,
+		License: skillscan.LicenseLine(skillDir),
+		Risks:   riskText(skillDir),
+	}
+	return skillDir, cleanup, report, nil
+}
+
+// installIntoAgent 把已校验的目录装进一个 Agent 目录：落盘、打标记、登记安装。
+// 返回装好的路径。
+func installIntoAgent(ctx context.Context, client *apiclient.Client, skillDir string,
+	req installRequest, agentName, projectRoot string) (string, error) {
+
+	base, err := agent.Dir(Cfg, agentName, req.Scope, projectRoot)
+	if err != nil {
+		return "", err
+	}
+	name, err := skillDirName(skillDir)
+	if err != nil {
+		return "", err
+	}
+	installPath := filepath.Join(base, name)
+	// 目标是链接时写它指向的真实目录（skills 管理器把库里的目录挂进 Agent 目录），
+	// 链接本身保留：替换掉等于把用户的目录布局拆了。
+	writePath := skillscan.WriteTarget(installPath)
+	if err := CheckTarget(writePath, "skillmesh:"+req.SkillID, req.Replace); err != nil {
+		return "", err
+	}
+	if err := installer.InstallAtomic(skillDir, writePath, true); err != nil {
+		return "", err
+	}
+	if err := installer.MarkInstalled(writePath, "skillmesh:"+req.SkillID); err != nil {
+		return "", err
+	}
+	// 登记到注册中心：回答「我在哪些机器上装了什么」。
+	// 不登记的话 installations 永远是空的，这个功能等于没有。
+	// 登记失败不影响安装结果——东西已经装好了——但要让人知道：
+	// 装完了却没进注册中心，跨设备就看不到这条记录。
+	if err := reportInstallation(ctx, client, req, agentName, installPath); err != nil {
+		fmt.Fprintf(os.Stderr, "提示：安装登记没成功（%v），跨设备看不到这条记录\n", err)
+	}
+	fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
+	opLog().Record(oplog.ActionInstall, name, req.Version.Version,
+		map[string]string{"agent": agentName, "path": installPath})
+	return installPath, nil
+}
+
 // installArtifact 下载指定版本、校验、原子装进各 Agent 目录并写锁文件。
 // install 和 rollback 走同一条路——回滚就是装一个更早的不可变版本。
 func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot string,
 	req installRequest) error {
 
-	data, err := client.DownloadArtifact(ctx, req.Version.Artifact.ID)
+	skillDir, cleanup, report, err := fetchArtifact(ctx, client, req.Version)
 	if err != nil {
 		return err
 	}
-	work, err := os.MkdirTemp("", "skillmesh-install-*")
-	if err != nil {
-		return err
+	defer cleanup()
+	fmt.Printf("%s 验签：%s\n", req.Version.Version, report.Verdict)
+	fmt.Println(report.License)
+	if report.Risks != "" {
+		fmt.Println(report.Risks)
 	}
-	defer os.RemoveAll(work)
 
-	skillDir, err := installer.ExtractZip(data, work)
-	if err != nil {
-		return err
-	}
-	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
-		return err
-	}
-	warnRisks(skillDir)
-	warnRisksOnly(skillDir)
-	verdict, err := VerifyArtifact(ctx, client, req.Version, skillDir)
-	if err != nil {
-		// 验签不通过就不装：装下去的是不是服务端说的那份，验不过就不能进 Agent 目录。
-		return err
-	}
-	fmt.Printf("%s 验签：%s\n", req.Version.Version, verdict)
-	fmt.Println(skillscan.LicenseLine(skillDir))
 	name, err := skillDirName(skillDir)
 	if err != nil {
 		return err
@@ -157,33 +240,13 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 	// 目标路径记主要那个（设计文档 §9.1）。
 	installedPath := ""
 	for _, agentName := range req.Agents {
-		base, err := agent.Dir(Cfg, agentName, req.Scope, projectRoot)
+		path, err := installIntoAgent(ctx, client, skillDir, req, agentName, projectRoot)
 		if err != nil {
 			return err
 		}
-		installPath := filepath.Join(base, name)
-		if err := CheckTarget(installPath, "skillmesh:"+req.SkillID, req.Replace); err != nil {
-			return err
-		}
-		if err := installer.InstallAtomic(skillDir, installPath, true); err != nil {
-			return err
-		}
-		if err := installer.MarkInstalled(installPath, "skillmesh:"+req.SkillID); err != nil {
-			return err
-		}
 		if installedPath == "" {
-			installedPath = installPath
+			installedPath = path
 		}
-		// 登记到注册中心：回答「我在哪些机器上装了什么」。
-		// 不登记的话 installations 永远是空的，这个功能等于没有。
-		// 登记失败不影响安装结果——东西已经装好了——但要让人知道：
-		// 装完了却没进注册中心，跨设备就看不到这条记录。
-		if err := reportInstallation(ctx, client, req, agentName, installPath); err != nil {
-			fmt.Fprintf(os.Stderr, "提示：安装登记没成功（%v），跨设备看不到这条记录\n", err)
-		}
-		fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
-		opLog().Record(oplog.ActionInstall, name, req.Version.Version,
-			map[string]string{"agent": agentName, "path": installPath})
 	}
 	if err := RecordInstall(InstallRecord{
 		ProjectRoot:   projectRoot,

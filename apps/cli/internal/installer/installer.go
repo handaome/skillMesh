@@ -78,7 +78,7 @@ func InstallAtomic(src, target string, requireSkillMd bool) error {
 // 审核页看到的文件列表就和本机对不上；.cache、.venv 这类目录进了 Agent
 // 目录也只会白占地方。
 func CopyTree(src, dst string) error {
-	return filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
+	return skillscan.WalkFollow(src, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

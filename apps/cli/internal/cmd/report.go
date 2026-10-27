@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
@@ -14,22 +15,21 @@ import (
 //
 // 只提示不阻断：装到本地是用户自己的机器，密钥进了别人的机器才有理由硬拦，
 // 那是 publish 的事。
-func warnRisks(skillDir string) {
-	findings, err := skillscan.ScanSecrets(skillDir)
-	if err != nil || len(findings) == 0 {
-		return
+// riskText 把安装内容里的风险摊成一段文字：疑似密钥与可疑内容（设计文档 §10）。
+//
+// 返回文本而不是直接打印：批量恢复几十个 Skill 时逐条打印会刷屏，
+// 什么时候展开由调用方决定。
+//
+// 可疑内容不阻断——脚本里有 curl 不等于它有害，但装之前应该让人看见。
+func riskText(skillDir string) string {
+	var parts []string
+	if findings, err := skillscan.ScanSecrets(skillDir); err == nil && len(findings) > 0 {
+		parts = append(parts, "风险提示：\n"+skillscan.FormatFindings(findings))
 	}
-	fmt.Printf("风险提示：\n%s\n", skillscan.FormatFindings(findings))
-}
-
-// warnRisksOnly 只报可疑内容：脚本、可疑命令、外部下载、依赖（设计文档 §10）。
-// 这类不阻断——脚本里有 curl 不等于它有害，但装之前应该让人看见。
-func warnRisksOnly(skillDir string) {
-	risks, err := skillscan.ScanRisks(skillDir)
-	if err != nil || len(risks) == 0 {
-		return
+	if risks, err := skillscan.ScanRisks(skillDir); err == nil && len(risks) > 0 {
+		parts = append(parts, skillscan.FormatRisks(risks))
 	}
-	fmt.Println(skillscan.FormatRisks(risks))
+	return strings.Join(parts, "\n")
 }
 
 // VerifyArtifact 验签这一份制品，并对一遍本地算出的摘要。

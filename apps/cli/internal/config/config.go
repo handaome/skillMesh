@@ -100,6 +100,7 @@ func defaults() Config {
 				Enabled:       true,
 				UserSkillsDir: filepath.Join(homeDir(), ".claude", "skills"),
 				ProjectSkills: filepath.Join(".claude", "skills"),
+				ExtraScanDirs: magpieLibrary(),
 			},
 			"codex": {
 				Enabled:       true,
@@ -122,6 +123,19 @@ func defaults() Config {
 		ConfigDir: configDir,
 		CacheDir:  cacheDir,
 	}
+}
+
+// magpieLibrary 是 magpie 管理器的 Skill 库目录。
+//
+// magpie 把技能本体放在 ~/.config/magpie/library/skills，再链接进各 Agent 目录。
+// 链接在部分系统上连 filepath.Walk 都进不去，所以库目录本身也扫一遍——
+// 同一个 Skill 被链接和库各扫到一次时，由 SyncTargets 按名字去重。
+func magpieLibrary() []string {
+	dir := filepath.Join(homeDir(), ".config", "magpie", "library", "skills")
+	if dirExists(dir) {
+		return []string{dir}
+	}
+	return nil
 }
 
 // detectCursorDir 在 Cursor 的候选目录里挑一个真的存在的。

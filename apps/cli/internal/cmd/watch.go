@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -39,11 +40,13 @@ func newWatchCmd() *cobra.Command {
 		Short: "后台盯住已授权目录，变了就同步",
 		Long: "启动时先全量对账一次（弥补错过的文件系统通知），之后按间隔检查：\n" +
 			"内容变了才触发同步，不变就什么都不做。\n" +
+			"start 只活到本次关机，install 注册开机自启。\n" +
 			"pause 只暂停同步，不影响 Agent 读取现有文件。",
 		Args: cobra.NoArgs,
 	}
 	cmd.AddCommand(watchRunCmd(&interval), watchStartCmd(), watchStatusCmd(),
-		watchPauseCmd("pause"), watchResumeCmd(), watchStopCmd())
+		watchPauseCmd("pause"), watchResumeCmd(), watchStopCmd(),
+		watchInstallCmd(), watchUninstallCmd(), watchLogsCmd())
 	return cmd
 }
 
@@ -182,7 +185,105 @@ func watchStopCmd() *cobra.Command {
 	}
 }
 
-// runWatchLoop 是监听主循环。
+// watchInstallCmd 注册用户级自启动：不要求管理员权限。
+// 跟 watch start 的区别是「下次登录也自动跑」，后者只活到本次关机。
+func watchInstallCmd() *cobra.Command {
+	var interval time.Duration
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "注册开机自启（用户级，不需要管理员）",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			line := fmt.Sprintf("start \"\" \"%s\" watch run --interval %s", exe, interval)
+			path, err := startupEntryPath()
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			body := "@echo off\r\nrem SkillMesh 同步守护进程（用户级，不需要管理员）\r\n" +
+				line + "\r\n"
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				return err
+			}
+			fmt.Printf("已写入用户级自启动项：%s\n下次登录时自动启动。\n", path)
+			return nil
+		},
+	}
+	cmd.Flags().DurationVar(&interval, "interval", defaultWatchInterval, "检查间隔")
+	return cmd
+}
+
+// watchUninstallCmd 移除自启动项；正在跑的进程另用 watch stop 结束。
+func watchUninstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall",
+		Short: "移除自启动项",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			path, err := startupEntryPath()
+			if err != nil {
+				return err
+			}
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			_ = os.Remove(watchPidPath())
+			fmt.Println("已移除自启动项。正在运行的进程请用 skillmesh watch stop。")
+			return nil
+		},
+	}
+}
+
+// watchLogsCmd 看监听循环写下的日志。
+func watchLogsCmd() *cobra.Command {
+	var tail int
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "看后台同步日志",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			data, err := os.ReadFile(watchLogPath())
+			if err != nil {
+				return fmt.Errorf("还没有日志（监听可能没跑过）: %w", err)
+			}
+			lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+			if tail > 0 && len(lines) > tail {
+				lines = lines[len(lines)-tail:]
+			}
+			for _, line := range lines {
+				fmt.Println(line)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&tail, "tail", 50, "只看最后 N 行")
+	return cmd
+}
+
+// startupEntryPath 返回用户级自启动脚本的位置。Windows 走启动文件夹，
+// 其他平台退回 ~/.config 下的说明文件——不猜平台机制，给能看懂的东西。
+func startupEntryPath() (string, error) {
+	if runtime.GOOS == "windows" {
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			return "", fmt.Errorf("APPDATA 为空，找不到启动文件夹")
+		}
+		return filepath.Join(appData, "Microsoft", "Windows", "Start Menu",
+			"Programs", "Startup", "skillmesh-watch.cmd"), nil
+	}
+	home := os.Getenv("HOME")
+	if home == "" {
+		return "", fmt.Errorf("HOME 为空")
+	}
+	return filepath.Join(home, ".config", "skillmesh", "watch-start.sh"), nil
+}
+
 // runWatchLoop 是监听主循环：文件事件与定时轮询都只是「触发扫描」的手段，
 // 扫描与同步逻辑共用一套（设计文档 §6.2）。
 //

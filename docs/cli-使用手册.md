@@ -7,66 +7,67 @@
 
 ## 命令速查
 
+日常只有这几条：登录 → 发布 → 同步。
+
 ```bash
-# 登录（浏览器授权码 + PKCE，令牌存进系统凭据管理器）
-# 位置参数是服务端地址，OIDC issuer 从它的公开配置里取
-./skillmesh.exe login http://127.0.0.1:8080/api/v1
+./skillmesh.exe login http://127.0.0.1:8080/api/v1   # 登录（浏览器授权码 + PKCE）
+./skillmesh.exe publish ./skills/java-debug          # 把本地 Skill 发到云端
+./skillmesh.exe sync                                 # 与云端双向同步
+./skillmesh.exe search java                          # 找 Skill
+./skillmesh.exe info <skill-id>                      # 看详情
+```
 
-# 搜索与查看
-./skillmesh.exe search java
-./skillmesh.exe info <skill-id>
+`skillmesh --help` 只列这些常用命令。团队治理、Git 来源、运维排障那些
+（`add` / `source` / `review` / `group` / `cloud` / `trash` /
+`watch` / `doctor` / `logs` / `update` 等）
+**仍然可用**，只是不占帮助版面——`skillmesh help <命令>` 或本文档下面各节照旧。
 
+```bash
 # 从 Git 仓库安装（两步：先 resolve 看目录，再 add 装）
 ./skillmesh.exe source resolve git@github.com:owner/agent-skills
 ./skillmesh.exe add git@github.com:owner/agent-skills.git \
   --path skills/java-debug --agent claude-code --scope user
 
-# 从注册中心安装
+# 从注册中心安装单个
 ./skillmesh.exe install <skill-id> --agent claude-code --scope user
 
-# 发布本地 Skill（发到团队/组织会停在待审核）
-./skillmesh.exe publish ./skills/java-debug
+# 发布到团队/组织（会停在待审核）
 ./skillmesh.exe publish ./skills/java-debug --org acme --team platform
 
-# 回滚与换设备
-./skillmesh.exe rollback java-debug --to 1.0.0
-./skillmesh.exe restore
-
-# 删掉云端的 Skill（软删除，可还原）
-./skillmesh.exe cloud delete java-debug
-./skillmesh.exe cloud deleted           # 看自己删过哪些
-./skillmesh.exe cloud restore java-debug # 找回来
+# 回滚
+./skillmesh.exe install java-debug --version 1.0.0   # 装回旧版本
 ```
 
 
-## 同步：三方对账，冲突不自动覆盖
+## 同步：两端对齐，冲突不自动覆盖
+
+它把本机 Agent 目录和个人私有空间拉成一样：
+
+| 情况 | 动作 |
+| --- | --- |
+| 本机有、云端没有 | 传上去 |
+| **云端有、本机没有** | **装下来** |
+| 两边都有、内容一样 | 不动 |
+| 只有一边变了 | 顺着变 |
+| 两边都变了 | 冲突，不自动覆盖，等你决定 |
+
+先看本机状况（不碰网络）：`skillmesh scan`。
 
 ```bash
-skillmesh scan                    # 先看本机有什么问题（不碰网络）
-skillmesh sync                    # 对账并同步
-skillmesh sync --direction upload # 只上传 / download 只拉取
+skillmesh sync --dry-run              # 只报会做什么，不落盘
+skillmesh sync --only-existing        # 只处理已收编的，云端新增的不装
+skillmesh sync --direction upload     # 只上传 / download 只下载
 skillmesh sync --resolve keep-local   # 冲突时保留本地并上传
 skillmesh sync --resolve keep-cloud   # 冲突时保留云端并拉回
 skillmesh sync --resolve keep-both    # 本地备份一份，两边都留
-skillmesh sync --retry-only      # 只重试断网失败的任务
-skillmesh sync --skip-new        # 只同步已收编的，首次发现先留在本地
-skillmesh sync --allow-delete    # 确认把「本地删掉的文件」也传播到云端
+skillmesh sync --allow-delete         # 确认把「本地删掉的文件」也传播到云端
 ```
 
 **本地删了文件不会静默传到云端**：同步发现「基线里有、本地没了、云端也没变」的文件时，这次上传会**停下**，报「待确认」并列出是哪些文件。确认要删就加 `--allow-delete` 再跑一次。
 
-> 后台同步（`watch` / `daemon`）**永远不会传播删除**——它们不传 `--allow-delete`。删除只能手动跑 `skillmesh sync --allow-delete` 确认：后台任务没人盯着，不该替人做删除这种不可逆的决定。
+> 后台同步（`watch`）**永远不会传播删除**——它们不传 `--allow-delete`。删除只能手动跑 `skillmesh sync --allow-delete` 确认：后台任务没人盯着，不该替人做删除这种不可逆的决定。
 
-**首次发现不等于收编**：新出现在授权目录里的 Skill 默认会备份到个人私有空间，**不会自动公开**；`--skip-new` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
-
-判定看三份摘要：**基线**（上次同步时）、**本地**、**云端**。
-
-| 本地 vs 云端 | 动作 |
-| --- | --- |
-| 一样 | 无变化 |
-| 只有本地变了 | 上传新版本 |
-| 只有云端变了 | 拉回云端版本 |
-| 两边都变了 | **冲突**，不自动覆盖，等 `--resolve` |
+**首次发现不等于收编**：新出现在授权目录里的 Skill 默认会备份到个人私有空间，**不会自动公开**；`--only-existing` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
 
 **能合就合，合不了才问你**：冲突时先按文件来——本机改了 A、云端改了 B，两边都要；同一个文件两边都改，会做**行级三方文本合并**，合得上直接合，合不上的才生成冲突副本等你定夺（[详细设计 §6.3](详细设计.md)）。冲突副本落在 Skill 目录旁的隐藏目录 `.名字.conflict-<摘要>/`，里面是带 `<<<<<<< 本地` 标记的内容。隐藏目录不会被扫成 Skill，也不会传到云端。合并需要上次同步时的基线（逐文件摘要 + 内容副本，存在配置目录的 `sync-base/`），没有基线就老实说合不了，不会瞎合。
 
@@ -77,9 +78,9 @@ skillmesh sync --allow-delete    # 确认把「本地删掉的文件」也传播
 **删掉的文件能找回来**（[设计文档 §6.4](设计文档.md) 的软删除 + 回收期 + 可恢复）：
 
 ```bash
-skillmesh recycle list                     # 云端某个 Skill 里被删掉的文件
-skillmesh recycle restore old.md           # 把它放回去，产出一个新版本
-skillmesh recycle list --skill demo        # 不在 Skill 目录里时用 --skill 指定
+skillmesh cloud recycle list               # 云端某个 Skill 里被删掉的文件
+skillmesh cloud recycle restore old.md     # 把它放回去，产出一个新版本
+skillmesh cloud recycle list --skill demo  # 不在 Skill 目录里时用 --skill 指定
 ```
 
 回收期 30 天。恢复走的是**正常发版流程**——扫描、审核那道闸一样要过，恢复回来的内容不会被绕开审核直接上线。
@@ -102,7 +103,7 @@ skillmesh cloud restore java-debug      # 找回来
 
 > **拿不到「已删除清单」就不上传**：同步开头先拉这份清单。拉不到（服务端版本太旧、没有 `/deleted-skills` 接口，或者网络不通）时，本次同步**一个都不上传**，直接报失败。原因是老逻辑里「云端查不到 = 该上传」——那时候没有删除的概念，上传会在云端新建一个同名的 Skill，把人家删掉的复活。宁可这次不传，等清单拿到了再说。
 
-> 后台同步（`watch` / `daemon`）也会跟着删——但删掉的东西是进了本机回收站，不是直接抹掉，误删还能找回来。
+> 后台同步（`watch`）也会跟着删——但删掉的东西是进了本机回收站，不是直接抹掉，误删还能找回来。
 
 ## 后台同步
 
@@ -110,25 +111,34 @@ skillmesh cloud restore java-debug      # 找回来
 skillmesh watch start --interval 5m   # 后台盯住目录，变了才同步
 skillmesh watch status                # 在跑吗 / 暂停了吗
 skillmesh watch pause                 # 只暂停同步，不动 Agent 的文件
-skillmesh daemon install              # 写成用户级自启动（不需要管理员）
-skillmesh daemon logs --tail 50
+skillmesh watch install               # 写成用户级自启动（不需要管理员）
+skillmesh watch logs --tail 50
 ```
 
-守护进程启动时先做一次全量对账，弥补错过的文件系统通知。触发是**文件监听 + 轮询兜底**：文件事件带 2 秒防抖（编辑器写文件常分好几次，立刻扫会扫到写了一半的内容），轮询每 `--interval` 兜一次（默认 30 秒）。
+监听启动时先做一次全量对账，弥补错过的文件系统通知。触发是**文件监听 + 轮询兜底**：文件事件带 2 秒防抖（编辑器写文件常分好几次，立刻扫会扫到写了一半的内容），轮询每 `--interval` 兜一次（默认 30 秒）。
 
 盯的是**用户级** Agent 目录（`~/.claude/skills` 这类），项目里的 `.claude/skills` 不在自动同步范围。
 
-**令牌过期会自动续期**：access token 过期时，CLI 用登录时存下的 refresh token 换一个新的（续期后的令牌会写回凭据管理器），所以常驻同步不会因为令牌过期而停摆。只有 refresh token 也失效了（被撤销、或登出过）才需要重新 `skillmesh login`——这时 watch/daemon 的日志里会写「令牌已过期且续期失败，请重新执行 skillmesh login」。
+**令牌过期会自动续期**：access token 过期时，CLI 用登录时存下的 refresh token 换一个新的（续期后的令牌会写回凭据管理器），所以常驻同步不会因为令牌过期而停摆。只有 refresh token 也失效了（被撤销、或登出过）才需要重新 `skillmesh login`——这时 watch 的日志里会写「令牌已过期且续期失败，请重新执行 skillmesh login」。
 
 ## 换设备装回自己的 Skill
 
+新机器上装好 CLI、登录，然后跑一次同步：
+
 ```bash
-./skillmesh.exe search --mine     # 只看个人私有空间
-./skillmesh.exe restore           # 全部装回本机
-./skillmesh.exe restore java-debug --agent claude-code --scope project
+./skillmesh.exe login http://127.0.0.1:8080/api/v1
+./skillmesh.exe sync --dry-run    # 先看会装什么
+./skillmesh.exe sync              # 云端有、本机没有的全部装下来
 ```
 
-`restore` 走的是和 `install` 完全一样的路径：校验 → 原子替换 → 写锁文件。单个 Skill 失败不中断整批，最后给「已恢复 / 跳过 / 失败」三段汇总。
+`sync` 走的是和 `install` 一样的路径：校验 → 验签 → 原子替换 → 写锁文件。单个 Skill 失败不中断整批。
+
+四条口径：
+
+- **已经是同一份就不重装**：本地内容与云端一致时跳过，重复跑不会每次都覆盖一遍。
+- **本地是别的东西就不碰**：本地有同名目录但不受 SkillMesh 管理时跳过，不替人做决定。
+- **本地有未同步的改动就跳过**：不覆盖你可能还没上传的修改，提示你用 `sync` 的 `--resolve` 决定。
+- **装完记下同步基线**：之后云端更新了，下次 `sync` 直接拉回来，不会误报成冲突。
 
 ## 从 Git 仓库装一个 Skill：两步
 
@@ -232,7 +242,7 @@ export SKILLMESH_TOKEN=<access-token>
 ## 回滚到旧版本
 
 ```bash
-./skillmesh.exe rollback <skill-name> --to 1.0.0
+./skillmesh.exe install <skill-name> --version <旧版本>
 ```
 
 版本制品不可变，所以回滚不是「改回去」，而是**再装一次更早的版本**——服务端那份旧制品一直原样留着。装完锁文件里的版本号、摘要一起回退。
@@ -264,19 +274,17 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 | 命令 | 作用 |
 | --- | --- |
 | `list` | 列出本项目锁文件里登记的**本地安装**：Skill、Agent、版本/commit、安装路径、是否受管 |
-| `status` | 同上，但输出 JSON（`status <name>` 只看某一个），适合脚本消费 |
 | `update --check` | 检查远端有没有新 commit，**只报告不改动** |
 | `update <name> --dry-run` | 看这次更新改了哪些文件，不落盘 |
 | `scan` | 本机分类扫描：已管理 / 内容变化 / 疑似敏感 / 路径冲突 |
 | `update --all` | 应用全部更新 |
 | `update <name>` | 只更新某一个 |
-| `rollback <name> --to <version>` | 回滚到指定版本（仅注册中心来源） |
+| `install <name> --version <v>` | 回滚到指定版本（仅注册中心来源；名字取自锁文件） |
 | `sync` / `sync --resolve` | 与个人私有空间对账，冲突按你的选择解决 |
 | `watch start` / `stop` / `pause` | 后台同步监听 |
-| `lock refresh` | 重新解析来源并刷新锁文件 |
 | `uninstall <name>` | 卸载（默认移进回收站，可找回） |
 | `trash list` / `restore` / `purge` | 本机回收站：找回卸载掉的 Skill、清过期 |
-| `recycle list` / `restore <path>` | 云端回收站：找回云端某个 Skill 里被删掉的文件 |
+| `cloud recycle list` / `restore <path>` | 云端回收站：找回云端某个 Skill 里被删掉的文件 |
 
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。作用域（`user` 还是 `project`）记在锁文件里，`update`/`uninstall`/`list` 都以记录为准，不会把项目级安装误当成用户级。
 
@@ -403,12 +411,7 @@ verify:
 
 参数个数或 flag 写错也是 `2`，信封里 `code` 是 `INVALID_ARGUMENTS`。
 
-CI 里没有浏览器，用环境变量传令牌（见[从注册中心装一个 Skill](#从注册中心装一个-skill)）：
-
-```bash
-export SKILLMESH_TOKEN="..."
-./skillmesh.exe --json install <skill-id> --locked
-```
+CI 里没有浏览器，用环境变量传令牌并加 `--locked`，见[从注册中心装一个 Skill](#从注册中心装一个-skill)。
 
 ## 让 Agent 来管理 Skill
 
@@ -508,11 +511,10 @@ cp apps/cli/skills/manage-skills/SKILL.md ~/.claude/skills/manage-skills/SKILL.m
 日志逐行再脱敏一遍（脱敏功能上线前写的历史日志没有脱敏过）。
 诊断包是要往外发的，别把原始文件直接贴出来。
 
-## 诊断
+## 环境检查
 
 ```bash
-./skillmesh.exe doctor        # 服务端地址、配置目录、git 是否可用、登录状态、各 Agent 目录能不能写
-./skillmesh.exe agents detect  # 各 Agent 的用户级/项目级目录表格
+./skillmesh.exe doctor        # 服务端地址、配置目录、git、登录状态、各 Agent 目录能否写
 ```
 
 配置在 `%APPDATA%\SkillMesh\config.yaml`（Linux/macOS 走 XDG），Agent 的目录在配置里指定，不在代码里硬编码：

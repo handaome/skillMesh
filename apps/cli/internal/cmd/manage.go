@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -167,34 +166,6 @@ func ResolvedLabel(skill lockfile.LockedSkill) string {
 		return short(skill.ResolvedCommit)
 	}
 	return orDash(skill.Version)
-}
-
-func newStatusCmd() *cobra.Command {
-	return supportsJSON(&cobra.Command{
-		Use:   "status [skill-name]",
-		Short: "查看锁文件里的安装状态（JSON）",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			lock, err := lockfile.Load(mustGetwd())
-			if err != nil {
-				return err
-			}
-			var payload any = map[string]any{
-				"resolved_at": lock.ResolvedAt,
-				"skills":      lock.Skills,
-			}
-			if len(args) == 1 {
-				skill, ok := lock.Find(args[0])
-				if !ok {
-					return fmt.Errorf("锁文件中没有 %s", args[0])
-				}
-				payload = skill
-			}
-			encoder := json.NewEncoder(os.Stdout)
-			encoder.SetIndent("", "  ")
-			return encoder.Encode(payload)
-		},
-	})
 }
 
 func newUninstallCmd() *cobra.Command {

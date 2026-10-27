@@ -58,15 +58,38 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newLoginCmd(), newLogoutCmd(),
 		newSearchCmd(), newInfoCmd(),
-		newSourceCmd(), NewAddCmd(), newInstallCmd(), newPublishCmd(), newRollbackCmd(),
+		newSourceCmd(), NewAddCmd(), newInstallCmd(), newPublishCmd(),
 		newReviewCmd(),
-		newListCmd(), newStatusCmd(), newUninstallCmd(), newInstallationsCmd(),
-		newScanCmd(), newSyncCmd(), newRestoreCmd(), newCloudCmd(), newGroupCmd(),
-		newDoctorCmd(), newAgentsCmd(), NewUpdateCmd(), newLockCmd(), newTrashCmd(),
-		newRecycleCmd(), newLogsCmd(), newSelfInstallCmd(),
-		newWatchCmd(), newDaemonCmd(),
+		newListCmd(), newUninstallCmd(), newInstallationsCmd(),
+		newScanCmd(), newSyncCmd(), newCloudCmd(), newGroupCmd(),
+		newDoctorCmd(), NewUpdateCmd(), newTrashCmd(),
+		newLogsCmd(), newSelfInstallCmd(),
+		newWatchCmd(),
 	)
+	hideAdvancedCommands(root)
 	return root
+}
+
+// hideAdvancedCommands 把边缘命令从 --help 里收起来。
+//
+// 顶层 29 个命令里，日常「多地同步」只用得上 login / publish / sync / search /
+// info / install / list / uninstall。其余是团队治理、Git 来源、运维排障的边角；
+// 一次性列出来只会让人以为要先学一遍。
+//
+// 只是从帮助里隐藏，命令本身照旧可用（脚本、文档里的用法都不坏）：
+// 需要时用 skillmesh help <命令> 查，或看 docs/cli-使用手册.md。
+func hideAdvancedCommands(root *cobra.Command) {
+	advanced := map[string]bool{
+		"add": true, "cloud": true, "doctor": true,
+		"group": true, "installations": true, "logs": true,
+		"review": true, "scan": true, "self-install": true,
+		"source": true, "trash": true, "update": true, "watch": true,
+	}
+	for _, sub := range root.Commands() {
+		if advanced[sub.Name()] {
+			sub.Hidden = true
+		}
+	}
 }
 
 func Execute() error {
@@ -119,10 +142,10 @@ func newClient(ctx context.Context) (*apiclient.Client, error) {
 
 // refreshTokens 令牌过期时用 refresh token 换新的，并把新令牌存回去。
 //
-// 常驻同步（watch/daemon）不能因为令牌过期就静默停摆：原来这里直接报「令牌已过期」，
+// 常驻同步（watch）不能因为令牌过期就静默停摆：原来这里直接报「令牌已过期」，
 // 而 watch 每轮同步都走这里，于是同步会一直失败、只在日志里留一行。
 func refreshTokens(ctx context.Context, tokens auth.Tokens) (auth.Tokens, error) {
-	// 令牌端点不按规矩回话时不能无限挂着：watch/daemon 会卡在这儿，
+	// 令牌端点不按规矩回话时不能无限挂着：watch 会卡在这儿，
 	// 既不听文件变化也不同步——正是这个功能要解决的那类停摆。给续期一个上限。
 	timeout := time.Duration(Cfg.Network.TimeoutSeconds) * time.Second
 	if timeout <= 0 {

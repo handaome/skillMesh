@@ -20,6 +20,11 @@ type Candidate struct {
 //
 // recursive 为 false 时只看直接子目录：有些 Agent 的 skills 目录是扁平的，
 // 递归下去会把技能自己带的子目录也当成候选。
+//
+// 符号链接指向目录时也认：不少人用链接把技能目录挂进 Agent 目录
+// （skills 管理器就是这么干的），filepath.Walk 按 Lstat 判定，会把链接当成
+// 普通文件跳过——结果是整批技能在 scan / sync 眼里「不存在」。
+// 链接本身当候选，不往里递归：链接指向的是技能本体，再挖下去就是别人的仓库了。
 func Candidates(root string, recursive bool) ([]Candidate, error) {
 	var found []Candidate
 	err := filepath.Walk(root, func(path string, fi os.FileInfo, err error) error {
@@ -27,6 +32,11 @@ func Candidates(root string, recursive bool) ([]Candidate, error) {
 			return err
 		}
 		if !fi.IsDir() {
+			// Windows 上链接目录（symlink / junction / 重解析点）在 Lstat 眼里
+			// 不是目录，模式位也不一定是 ModeSymlink，只能跟随一次再看。
+			if path != root && isLinkedSkillDir(path) {
+				found = append(found, Candidate{Dir: path, Name: filepath.Base(path)})
+			}
 			return nil
 		}
 		if path != root && IsSkippedDir(fi.Name()) {
@@ -56,6 +66,18 @@ func Candidates(root string, recursive bool) ([]Candidate, error) {
 		return nil, fmt.Errorf("扫描候选目录失败: %w", err)
 	}
 	return found, nil
+}
+
+// isLinkedSkillDir 判断符号链接是不是指向一个 Skill 目录。
+//
+// 断链、指向普通文件、指向不含 SKILL.md 的目录，都不算。
+func isLinkedSkillDir(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(path, "SKILL.md"))
+	return err == nil
 }
 
 // SkillName 优先取 SKILL.md frontmatter 的 name，回退到目录名。

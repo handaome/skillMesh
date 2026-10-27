@@ -37,7 +37,7 @@ func DirHashes(dir string) ([]FileDigest, error) {
 		return nil, err
 	}
 	var files []FileDigest
-	err = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+	err = WalkFollow(dir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

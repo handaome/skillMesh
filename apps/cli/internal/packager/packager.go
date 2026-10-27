@@ -53,7 +53,7 @@ func Pack(dir string) (Artifact, error) {
 	writer := zip.NewWriter(&buf)
 	var manifest []Entry
 
-	walkErr := filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
+	walkErr := skillscan.WalkFollow(dir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}

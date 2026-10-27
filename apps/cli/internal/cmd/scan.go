@@ -132,7 +132,26 @@ func scanAll(targets []scanTarget, state syncstate.State, includeUnmanaged bool)
 			entries = append(entries, scanOneDir(target, dir, state, includeUnmanaged, seen)...)
 		}
 	}
-	return entries
+	return dedupeScanEntries(entries)
+}
+
+// dedupeScanEntries 按「名字 + Agent」去重，先出现的优先。
+//
+// 同一个 Skill 可能既在 Agent 目录里、又在它链接指向的库里（magpie 这类
+// 管理器就是这么摆的），两处都列一遍只会让人以为有 120 多个技能。
+// 口径与 SyncTargets 的去重一致。
+func dedupeScanEntries(entries []scanEntry) []scanEntry {
+	seen := make(map[string]bool, len(entries))
+	unique := make([]scanEntry, 0, len(entries))
+	for _, entry := range entries {
+		key := entry.Name + "/" + entry.Agent
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, entry)
+	}
+	return unique
 }
 
 // scanOneDir 扫一个目录，结果追加到 entries。

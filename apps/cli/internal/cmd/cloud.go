@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
 	"github.com/spf13/cobra"
+	"os"
 )
 
 // newCloudCmd 云端 Skill 的删除与还原。
@@ -19,7 +19,8 @@ func newCloudCmd() *cobra.Command {
 			"还原之后各端再同步，云端被删的那份在本地也会一起删掉。",
 		Args: cobra.NoArgs,
 	}
-	cmd.AddCommand(newCloudDeleteCmd(), newCloudRestoreCmd(), newCloudDeletedCmd())
+	cmd.AddCommand(newCloudDeleteCmd(), newCloudRestoreCmd(), newCloudDeletedCmd(),
+		newRecycleCmd())
 	return cmd
 }
 

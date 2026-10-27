@@ -42,14 +42,26 @@ func newDoctorCmd() *cobra.Command {
 					me.User.DisplayName, short(me.User.ID))
 			}
 
+			// Agent 目录一览：用户级、项目级、以及额外扫描根。
+			// 这是原来 agents detect 的内容，并进 doctor 少一个命令。
+			projectRoot := mustGetwd()
 			for _, name := range agent.Names(Cfg) {
 				agentCfg := Cfg.Agents[name]
 				if !agentCfg.Enabled {
 					fmt.Printf("agent %-12s 未启用\n", name)
 					continue
 				}
-				fmt.Printf("agent %-12s %s（%s）\n", name, agentCfg.UserSkillsDir,
+				fmt.Printf("agent %-12s 用户 %s（%s）\n", name, agentCfg.UserSkillsDir,
 					DirState(agentCfg.UserSkillsDir))
+				projectDir := agentCfg.ProjectSkills
+				if resolved, err := agentDirFor(name, lockfile.LockedSkill{}, projectRoot); err == nil {
+					projectDir = resolved
+				}
+				fmt.Printf("%-18s 项目 %s（%s）\n", "", projectDir, DirState(projectDir))
+				if len(agentCfg.ExtraScanDirs) > 0 {
+					fmt.Printf("%-18s 额外扫描 %s\n", "",
+						strings.Join(agentCfg.ExtraScanDirs, "、"))
+				}
 			}
 			reportSyncHealth()
 			return nil
@@ -98,7 +110,7 @@ func reportSyncHealth() {
 		}
 		waiting++
 	}
-	fmt.Printf("同步队列 待重试 %d，已放弃 %d（用 sync --retry-only 只跑待重试的）\n",
+	fmt.Printf("同步队列 待重试 %d，已放弃 %d（下次 sync 会重试待重试的任务）\n",
 		waiting, abandoned)
 	for _, entry := range pending {
 		if !entry.Abandoned() {
@@ -107,41 +119,3 @@ func reportSyncHealth() {
 		fmt.Printf("  已放弃 %s：%s\n", entry.Name, redact.Text(entry.LastError))
 	}
 }
-
-func newAgentsCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "agents",
-		Short: "Agent 适配器管理",
-	}
-	cmd.AddCommand(&cobra.Command{
-		Use:   "detect",
-		Short: "检测本机各 Agent 的 Skill 目录",
-		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			projectRoot := mustGetwd()
-			w := newTable(os.Stdout)
-			fmt.Fprintln(w, "AGENT\t启用\t用户目录\t项目目录\t目录状态")
-			for _, name := range agent.Names(Cfg) {
-				agentCfg, ok := Cfg.Agents[name]
-				if !ok {
-					fmt.Fprintf(w, "%s\t无配置\t-\t-\t-\n", name)
-					continue
-				}
-				projectDir := agentCfg.ProjectSkills
-				if resolved, err := agentDirFor(name, lockfile.LockedSkill{}, projectRoot); err == nil {
-					projectDir = resolved
-				}
-				// 目录状态要如实说：探测到的和「假设应该在这」的，含义不一样。
-				state := "不存在，安装时创建"
-				if agentCfg.Detected() {
-					state = "存在（本机探测到）"
-				}
-				fmt.Fprintf(w, "%s\t%v\t%s\t%s\t%s\n",
-					name, agentCfg.Enabled, agentCfg.UserSkillsDir, projectDir, state)
-			}
-			return w.Flush()
-		},
-	})
-	return cmd
-}
-

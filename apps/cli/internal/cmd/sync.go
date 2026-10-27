@@ -42,7 +42,9 @@ const (
 	PendingDelete syncOutcome = "待确认"
 	// Deleted 云端删掉了这个 Skill，本地那份也跟着进了回收站。
 	Deleted syncOutcome = "已删除"
-	Failed  syncOutcome = "失败"
+	// WouldPull 演练时才会出现：本机没有、正式跑会从云端装上。
+	WouldPull syncOutcome = "将拉取"
+	Failed    syncOutcome = "失败"
 )
 
 // SyncOptions 是一次同步的可调项。
@@ -50,10 +52,12 @@ type SyncOptions struct {
 	Agents    []string
 	Only      string // --skill，只同步这一个
 	Direction string // upload / download / both
-	SkipNew   bool   // 只同步「已经收编过」的，新发现的先留在本地
-	Resolve   string // keep-local / keep-cloud / keep-both，空表示不处理冲突
-	RetryOnly bool   // 只重试队列里到点的任务
-	DryRun    bool
+	// OnlyExisting 只处理已经收编过的那批：本地新发现的不上传，
+	// 云端有而本机没有的也不装。原来拆成 --skip-new 与 --no-pull-new 两个开关，
+	// 语义都是「别自作主张」，合成一个。
+	OnlyExisting bool
+	Resolve      string // keep-local / keep-cloud / keep-both，空表示不处理冲突
+	DryRun       bool
 	// AllowDelete 确认把「本地删掉的文件」也传到云端。
 	// 不确认就不传：目录扫不到不该等于云端被删（设计文档 §6.3）。
 	AllowDelete bool
@@ -67,9 +71,10 @@ func newSyncCmd() *cobra.Command {
 	options := SyncOptions{}
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "把本地 Agent 目录里的 Skill 与个人私有空间对账",
-		Long: "扫描已授权的 Agent 目录，比较「基线 / 本地 / 云端」三份内容摘要：\n" +
-			"只有一边变了就顺着变，两边都变了按冲突处理，绝不自动覆盖。\n\n" +
+		Short: "与云端双向同步：本机改的传上去，云端有而本机没有的装下来",
+		Long: "扫描已授权的 Agent 目录，与个人私有空间双向对齐：\n" +
+			"本机有而云端没有 → 传上去；云端有而本机没有 → 装下来；\n" +
+			"两边都有就比内容：只有一边变了顺着变，两边都变了按冲突处理，绝不自动覆盖。\n\n" +
 			"这是「本地 ↔ 个人云端」那条链路（设计文档 §3.1、§6.3），不是团队发布。\n" +
 			"只同步、从不删除云端内容——目录扫不到不该等于云端被删。",
 		Args: cobra.NoArgs,
@@ -80,7 +85,7 @@ func newSyncCmd() *cobra.Command {
 			}
 			results, queue, err := runSync(cmd.Context(), options)
 			if len(results) == 0 && err == nil {
-				if options.SkipNew {
+				if options.OnlyExisting {
 					fmt.Println("没有「已经收编过」的 Skill；首次发现的留在本地，" +
 						"去掉 --skip-new 才会备份。")
 					return nil
@@ -98,11 +103,10 @@ func newSyncCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&options.Agents, "agent", nil, "只同步指定 Agent 的目录，不填用全部启用的")
 	cmd.Flags().StringVar(&options.Only, "skill", "", "只同步这一个 Skill")
 	cmd.Flags().StringVar(&options.Direction, "direction", "both", "同步方向：upload / download / both")
-	cmd.Flags().BoolVar(&options.SkipNew, "skip-new", false,
-		"只同步已经收编过的 Skill，新发现的先留在本地（设计文档 §3.1 首次发现策略）")
+	cmd.Flags().BoolVar(&options.OnlyExisting, "only-existing", false,
+		"只处理已收编的 Skill：本地新发现的不上传，云端新增的也不装")
 	cmd.Flags().StringVar(&options.Resolve, "resolve", "",
 		"冲突解决方式：keep-local / keep-cloud / keep-both")
-	cmd.Flags().BoolVar(&options.RetryOnly, "retry-only", false, "只重试失败队列里到点的任务")
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "只报出会同步什么，不落盘")
 	cmd.Flags().BoolVar(&options.AllowDelete, "allow-delete", false,
 		"确认把本地删掉的文件也同步到云端（删除传播需要显式确认）")
@@ -142,7 +146,7 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
-	targets = filterByBackoff(targets, queue, options)
+	targets = filterByBackoff(targets, queue)
 
 	var results []syncResult
 	results = append(results, deleteResults...)
@@ -195,6 +199,11 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 			state.Upsert(entry)
 		}
 		results = append(results, result)
+	}
+	// 云端有、本机没有的：一并装上。这是「多地同步」的另一半，
+	// 不让用户再去记一个 restore 命令。
+	if !options.OnlyExisting {
+		results = append(results, pullMissing(ctx, client, options, &state)...)
 	}
 	if !options.DryRun {
 		if err := state.Save(Cfg.ConfigDir); err != nil {
@@ -250,26 +259,16 @@ func queueKey(name, agentName string) string {
 }
 
 // filterByBackoff 按退避时间安排任务：
-//   - 默认：还在退避期内的先不碰，避免网络不通时每次运行都硬撞一遍
-//   - --retry-only：只留下队列里到点且没放弃的任务
-func filterByBackoff(targets []SyncTarget, queue syncqueue.Queue, options SyncOptions) []SyncTarget {
+// 还在退避期内的先不碰，避免网络不通时每次运行都硬撞一遍。
+func filterByBackoff(targets []SyncTarget, queue syncqueue.Queue) []SyncTarget {
 	pending := map[string]syncqueue.Entry{}
 	for _, entry := range queue.Pending() {
 		pending[queueKey(entry.Name, entry.Agent)] = entry
-	}
-	if options.RetryOnly && len(pending) == 0 {
-		return nil
 	}
 	now := time.Now()
 	kept := make([]SyncTarget, 0, len(targets))
 	for _, target := range targets {
 		entry, queued := pending[queueKey(target.Name, target.Agent)]
-		if options.RetryOnly {
-			if queued && !entry.Abandoned() && entry.Ready(now) {
-				kept = append(kept, target)
-			}
-			continue
-		}
 		if queued && !entry.Abandoned() && !entry.Ready(now) {
 			continue
 		}
@@ -338,7 +337,26 @@ func SyncTargets(options SyncOptions) ([]SyncTarget, error) {
 	for _, dir := range Cfg.Sync.ExtraDirs {
 		targets = append(targets, targetsIn(state, dir, "custom", options, true)...)
 	}
-	return targets, nil
+	return dedupeTargets(targets), nil
+}
+
+// dedupeTargets 按「名字 + Agent」去重，先出现的优先。
+//
+// 同一个 Skill 可能同时出现在 Agent 目录和它链接指向的库里
+// （magpie 这类管理器就是这么摆的）。两处都记一份基线会同名互相覆盖，
+// 上传也会做两次；Agent 原生目录排在前面，所以优先留它。
+func dedupeTargets(targets []SyncTarget) []SyncTarget {
+	seen := make(map[string]bool, len(targets))
+	unique := make([]SyncTarget, 0, len(targets))
+	for _, target := range targets {
+		key := target.Name + "/" + target.Agent
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, target)
+	}
+	return unique
 }
 
 // targetsIn 列出一个目录里的 Skill，并带上各自的基线。
@@ -355,7 +373,7 @@ func targetsIn(state syncstate.State, dir, agentName string, options SyncOptions
 		if !known {
 			entry = state.Discover(name, agentName)
 		}
-		if options.SkipNew && state.New(name, agentName) {
+		if options.OnlyExisting && state.New(name, agentName) {
 			continue
 		}
 		targets = append(targets, SyncTarget{
@@ -836,10 +854,12 @@ func DownloadInto(ctx context.Context, client *apiclient.Client, target SyncTarg
 		return "", err
 	}
 	fmt.Printf("%s 验签：%s\n", selected.Version, verdict)
-	if err := installer.InstallAtomic(skillDir, target.Path, true); err != nil {
+	// 本地是链接时写它指向的真实目录，链接保留（与 install 同一口径）。
+	writePath := skillscan.WriteTarget(target.Path)
+	if err := installer.InstallAtomic(skillDir, writePath, true); err != nil {
 		return "", err
 	}
-	if err := installer.MarkInstalled(target.Path, "skillmesh:"+skill.ID); err != nil {
+	if err := installer.MarkInstalled(writePath, "skillmesh:"+skill.ID); err != nil {
 		return "", err
 	}
 	// 同步下来的 Skill 也要登记安装实例：不然 installations 里看不到任何同步来的 Skill。
@@ -972,7 +992,7 @@ func reportQueue(queue syncqueue.Queue) {
 		fmt.Printf("待重试：%s（%s，第 %d 次失败：%s）\n", entry.Name, entry.NextAttemptAt,
 			entry.Attempts, entry.LastError)
 	}
-	fmt.Println("skillmesh sync --retry-only 只跑这些到点的任务；skillmesh doctor 看队列概况。")
+	fmt.Println("下次 sync 会重试这些到点的任务；skillmesh doctor 看队列概况。")
 }
 
 func reportSync(results []syncResult, queue syncqueue.Queue) error {
@@ -986,9 +1006,9 @@ func reportSync(results []syncResult, queue syncqueue.Queue) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，冲突 %d，待确认 %d，已删除 %d，失败 %d\n",
-		counts[Skipped], counts[Uploaded], counts[fetched], counts[Conflicted],
-		counts[PendingDelete], counts[Deleted], counts[Failed])
+	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，将拉取 %d，冲突 %d，待确认 %d，已删除 %d，失败 %d\n",
+		counts[Skipped], counts[Uploaded], counts[fetched], counts[WouldPull],
+		counts[Conflicted], counts[PendingDelete], counts[Deleted], counts[Failed])
 	if counts[Conflicted] > 0 {
 		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[Conflicted])
 	}
