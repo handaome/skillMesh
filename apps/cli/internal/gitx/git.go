@@ -11,6 +11,10 @@ import (
 
 // NormalizeURL 规范化仓库地址，拒绝危险协议与内嵌凭据
 // （详细设计 §7.3：凭据不得写入 URL）。
+//
+// 只接受远程地址：本地路径与 file:// 一律拒绝。「远程地址」这个承诺要真的成立——
+// 放行本地路径的话，git 会拿着它去 clone，报出来的是
+// 「git: 'lsr' does not appear to be a git repository」，用户看不懂。
 func NormalizeURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -19,16 +23,15 @@ func NormalizeURL(raw string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(raw), "file://") {
 		return "", fmt.Errorf("拒绝 file:// 协议")
 	}
+	if looksLikeLocalPath(raw) {
+		return "", fmt.Errorf("拒绝本地路径作为来源：%s。请给远程仓库地址", raw)
+	}
 	if strings.HasPrefix(raw, "git@") {
 		return raw, nil
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("解析仓库地址失败: %w", err)
-	}
-	if len(parsed.Scheme) == 1 && len(parsed.Opaque) >= 2 {
-		// Windows 本地路径，如 C:\repo
-		return "", fmt.Errorf("拒绝本地路径作为来源，请用远程仓库地址")
 	}
 	switch parsed.Scheme {
 	case "https", "ssh", "":
@@ -44,8 +47,33 @@ func NormalizeURL(raw string) (string, error) {
 			return "", fmt.Errorf("仓库地址不得内嵌凭据，请用 --credential-ref 引用本机凭据")
 		}
 	}
+	// owner/repo 这样的简写不是远程地址。不拦的话 git 会拿着它去 clone，
+	// 报出来的是一句看不懂的「repository not found」。
+	if parsed.Scheme == "" && !strings.Contains(raw, "@") && !strings.Contains(raw, ":") {
+		return "", fmt.Errorf("看起来是 owner/repo 这样的简写，请给完整的远程仓库地址")
+	}
 	parsed.Fragment = ""
 	return parsed.String(), nil
+}
+
+// looksLikeLocalPath 这个字符串是不是本地路径。
+//
+// 覆盖四种形态：Windows 盘符路径（C:\repo、C:/repo）、UNC（\\server\share）、
+// POSIX 绝对路径（/home/x/repo）、相对路径（./x、../x）与家目录写法（~/x）。
+// 它们都指向本机，不是远程来源。
+func looksLikeLocalPath(raw string) bool {
+	if strings.HasPrefix(raw, "./") || strings.HasPrefix(raw, "../") ||
+		strings.HasPrefix(raw, "~/") || raw == "." || raw == ".." {
+		return true
+	}
+	if strings.HasPrefix(raw, `\\`) {
+		return true
+	}
+	// 盘符路径：C 后面跟分隔符，或者就是 C: 本身。
+	if len(raw) >= 2 && raw[1] == ':' {
+		return true
+	}
+	return strings.HasPrefix(raw, "/")
 }
 
 // Clone 把仓库浅克隆到 dest，返回实际解析到的 commit。

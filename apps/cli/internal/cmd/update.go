@@ -384,9 +384,19 @@ func ApplyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 // 用户自己写的同名 Skill 不该被静默覆盖掉。
 // 受管的旧版本先备份进回收站：装砸了还能找回来（skillmesh trash restore）。
 func installOverwrite(skillDir, name, target string) error {
-	if _, err := os.Stat(target); err == nil {
+	state, err := installer.ClassifyTarget(target)
+	if err != nil {
+		return err
+	}
+	switch state {
+	case installer.TargetAbsent:
+	case installer.TargetSymlink:
+		return &installer.TargetConflictError{TargetPath: target, Reason: installer.ReasonSymlink}
+	case installer.TargetFile:
+		return &installer.TargetConflictError{TargetPath: target, Reason: installer.ReasonNotDir}
+	default:
 		if !installer.IsManaged(target) {
-			return fmt.Errorf("目标已存在且不受 SkillMesh 管理，拒绝覆盖: %s", target)
+			return &installer.TargetConflictError{TargetPath: target, Reason: installer.ReasonUnmanaged}
 		}
 		item, err := backupInstalled(name, target)
 		if err != nil {

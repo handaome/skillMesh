@@ -29,6 +29,16 @@ func InstallAtomic(src, target string, requireSkillMd bool) error {
 		return err
 	}
 
+	// 目标是符号链接就拒绝：os.Rename 挪走的是链接本身，而链接指向的
+	// 可能是用户自己的目录——替换掉等于动了用户没让动的文件。
+	state, err := ClassifyTarget(target)
+	if err != nil {
+		return err
+	}
+	if state == TargetSymlink {
+		return &TargetConflictError{TargetPath: target, Reason: ReasonSymlink}
+	}
+
 	staging, err := os.MkdirTemp(parent, StagingPrefix)
 	if err != nil {
 		return err

@@ -170,7 +170,7 @@ func localSkillPath(entry syncstate.Entry) string {
 	if err != nil {
 		return ""
 	}
-	for _, path := range localSkills(dir) {
+	for _, path := range localSkills(dir, true) {
 		if skillscan.SkillName(path) == entry.Name {
 			return path
 		}

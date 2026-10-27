@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
+	"github.com/handaome/skillmesh/apps/cli/internal/redact"
 	"github.com/handaome/skillmesh/apps/cli/internal/syncqueue"
 	"github.com/spf13/cobra"
 )
@@ -33,15 +33,16 @@ func newDoctorCmd() *cobra.Command {
 				// 如实说坏在哪：newClient 现在有四种失败（没登录、令牌过期续不上、
 				// 取不到 issuer、存不回新令牌），一律说成「未登录」会把人引去重新登录，
 				// 而真正的原因在别处。doctor 的职责就是说清楚哪里坏了。
-				fmt.Printf("认证     失败: %v\n", err)
+				// 错误文本先脱敏：里面可能带带凭据的仓库地址（详细设计 §3.9）。
+				fmt.Printf("认证     失败: %s\n", redact.Text(err.Error()))
 			} else if me, err := client.Me(cmd.Context()); err != nil {
-				fmt.Printf("认证     失败: %v\n", err)
+				fmt.Printf("认证     失败: %s\n", redact.Text(err.Error()))
 			} else {
 				fmt.Printf("认证     已登录为 %s (%s)\n",
 					me.User.DisplayName, short(me.User.ID))
 			}
 
-			for _, name := range sortedAgentNames() {
+			for _, name := range agent.Names(Cfg) {
 				agentCfg := Cfg.Agents[name]
 				if !agentCfg.Enabled {
 					fmt.Printf("agent %-12s 未启用\n", name)
@@ -103,7 +104,7 @@ func reportSyncHealth() {
 		if !entry.Abandoned() {
 			continue
 		}
-		fmt.Printf("  已放弃 %s：%s\n", entry.Name, entry.LastError)
+		fmt.Printf("  已放弃 %s：%s\n", entry.Name, redact.Text(entry.LastError))
 	}
 }
 
@@ -120,7 +121,7 @@ func newAgentsCmd() *cobra.Command {
 			projectRoot := mustGetwd()
 			w := newTable(os.Stdout)
 			fmt.Fprintln(w, "AGENT\t启用\t用户目录\t项目目录\t目录状态")
-			for _, name := range agent.Supported {
+			for _, name := range agent.Names(Cfg) {
 				agentCfg, ok := Cfg.Agents[name]
 				if !ok {
 					fmt.Fprintf(w, "%s\t无配置\t-\t-\t-\n", name)
@@ -144,11 +145,3 @@ func newAgentsCmd() *cobra.Command {
 	return cmd
 }
 
-func sortedAgentNames() []string {
-	names := make([]string, 0, len(Cfg.Agents))
-	for name := range Cfg.Agents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}

@@ -23,3 +23,6 @@ skillmesh.lock.yaml
 
 # SDD 工具的工作区（ledger、brief、review package）
 .superpowers/
+
+# Playwright MCP 的本机产物（快照与控制台日志）
+.playwright-mcp/

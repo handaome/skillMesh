@@ -75,6 +75,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
                or lower(s.slug) like :q or lower(s.description) like :q)
           and (cast(:visibility as text) is null or s.visibility = :visibility)
           and (cast(:tag as text) is null or s.tags @> ARRAY[cast(:tag as text)])
+          and (not cast(:untagged as boolean) or cardinality(s.tags) = 0)
           and (not cast(:mine as boolean) or s.owner_user_id = :owner)
           and s.status = """ + SkillStatus.ACTIVE_SQL + """
           and (cast(:cursorTime as timestamptz) is null
@@ -85,10 +86,44 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
                              @Param("q") String q,
                              @Param("visibility") String visibility,
                              @Param("tag") String tag,
+                             @Param("untagged") boolean untagged,
                              @Param("mine") boolean mine,
                              @Param("cursorTime") OffsetDateTime cursorTime,
                              @Param("cursorId") UUID cursorId,
                              Pageable pageable);
+
+    /**
+     * 可见范围内的标签及各自的数量。
+     *
+     * 前端要按标签筛 Skill，但列表是游标分页的：从一页数据里汇总标签，
+     * 汇总出来的只是这一页出现过的标签——用户想按一个只出现在第二页的标签
+     * 筛选时，根本没有那个选项可点。所以标签得由服务端单独给一份。
+     *
+     * 口径与搜索一致：可见范围 + active。归档的 Skill 不参与统计，
+     * 否则筛出来的结果里全是看不见的条目。
+     *
+     * 路径是 /api/v1/tags 而不是 /api/v1/skills/tags：后者会被
+     * GET /api/v1/skills/{skillId} 抢走，skillId 那一段是变量，
+     * tags 被当 UUID 解析，报出来的是「参数格式不对」，看不出是路由撞了。
+     */
+    @Query(value = """
+        select t as tag, count(*) as count
+        from skills s, unnest(s.tags) as t
+        where """ + VisibleSkills.WHERE + """
+          and (not cast(:mine as boolean) or s.owner_user_id = :owner)
+          and s.status = """ + SkillStatus.ACTIVE_SQL + """
+        group by t
+        order by count(*) desc, t
+        """, nativeQuery = true)
+    List<TagCount> visibleTagCounts(@Param("owner") UUID owner,
+                                    @Param("mine") boolean mine);
+
+    /** 标签与数量的投影。 */
+    interface TagCount {
+        String getTag();
+
+        long getCount();
+    }
 
     /**
      * 列出已归档（删除）的 Skill。

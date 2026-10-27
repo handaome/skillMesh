@@ -3,6 +3,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,14 +17,21 @@ import (
 
 var Cfg config.Config
 
+// argsChecked 记录命令的参数校验是否已经通过。
+//
+// cobra 先校验参数、再跑 PersistentPreRunE，所以「没走到配置加载就失败」
+// 就意味着是参数或 flag 写错了，不该按运行失败分类。
+var argsChecked bool
+
 func newRootCmd() *cobra.Command {
 	var server string
+	argsChecked = false
 	root := &cobra.Command{
 		Use:           "skillmesh",
 		Short:         "SkillMesh CLI：安装、同步与发布 Agent Skill",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
 			loaded, err := config.Load()
 			if err != nil {
 				return err
@@ -32,10 +40,20 @@ func newRootCmd() *cobra.Command {
 			if server != "" {
 				Cfg.Server = server
 			}
+			argsChecked = true
+			// 还没支持 JSON 的命令要提前说清楚：用户加了 --json 却拿到
+			// 一屏人读表格，比没加 --json 更让人以为程序坏了。
+			if jsonOut && c.Annotations[jsonAnnotation] != "true" {
+				fmt.Fprintln(os.Stderr, "提示：该命令暂不支持 --json，输出仍是人读格式。")
+			}
 			return nil
 		},
 	}
 	root.PersistentFlags().StringVar(&server, "server", "", "覆盖服务端地址")
+	root.PersistentFlags().BoolVar(&jsonOut, "json", false, "输出稳定 JSON，供脚本调用")
+	root.PersistentFlags().BoolVar(&quiet, "quiet", false, "减少普通提示，错误仍输出到 stderr")
+	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "显示平时隐藏的完整绝对路径")
+	root.Version = cliVersion
 
 	root.AddCommand(
 		newLoginCmd(), newLogoutCmd(),
@@ -43,9 +61,9 @@ func newRootCmd() *cobra.Command {
 		newSourceCmd(), NewAddCmd(), newInstallCmd(), newPublishCmd(), newRollbackCmd(),
 		newReviewCmd(),
 		newListCmd(), newStatusCmd(), newUninstallCmd(), newInstallationsCmd(),
-		newScanCmd(), newSyncCmd(), newRestoreCmd(), newCloudCmd(),
+		newScanCmd(), newSyncCmd(), newRestoreCmd(), newCloudCmd(), newGroupCmd(),
 		newDoctorCmd(), newAgentsCmd(), NewUpdateCmd(), newLockCmd(), newTrashCmd(),
-		newRecycleCmd(), newLogsCmd(),
+		newRecycleCmd(), newLogsCmd(), newSelfInstallCmd(),
 		newWatchCmd(), newDaemonCmd(),
 	)
 	return root
@@ -53,10 +71,26 @@ func newRootCmd() *cobra.Command {
 
 func Execute() error {
 	if err := newRootCmd().ExecuteContext(context.Background()); err != nil {
-		fmt.Fprintln(os.Stderr, "错误:", err)
+		reportError(err)
 		return err
 	}
 	return nil
+}
+
+// reportError 把失败写成机器可读的信封，或一行人话。
+//
+// 两种模式都往 stderr 写：stdout 只留给成功结果，下游读到的永远是干净的。
+func reportError(err error) {
+	if jsonEnabled() {
+		encoder := json.NewEncoder(os.Stderr)
+		encoder.SetIndent("", "  ")
+		_ = encoder.Encode(errorPayloadOf(err))
+		return
+	}
+	fmt.Fprintln(os.Stderr, "错误:", err)
+	if usageError(err) {
+		fmt.Fprintln(os.Stderr, "用法：skillmesh <命令> --help")
+	}
 }
 
 // newClient 用已保存的登录态建 API 客户端。
@@ -72,7 +106,7 @@ func newClient(ctx context.Context) (*apiclient.Client, error) {
 	}
 	tokens, err := auth.LoadTokens(tokenPath())
 	if err != nil {
-		return nil, fmt.Errorf("未登录，请先执行 skillmesh login")
+		return nil, fmt.Errorf("%w，请先执行 skillmesh login", ErrNotLoggedIn)
 	}
 	if !tokens.Valid() {
 		tokens, err = refreshTokens(ctx, tokens)

@@ -12,6 +12,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
+	"github.com/handaome/skillmesh/apps/cli/internal/redact"
 	"github.com/handaome/skillmesh/apps/cli/internal/trash"
 	"github.com/spf13/cobra"
 )
@@ -34,8 +35,17 @@ func agentDirFor(name string, entry lockfile.LockedSkill, projectRoot string) (s
 	return agent.Dir(Cfg, name, scopeOf(entry.Scope, projectRoot), projectRoot)
 }
 
+// listEntry 是 list 的一行。数据来自本机锁文件与磁盘实态，云端没有对应结构。
+type listEntry struct {
+	Skill   string `json:"skill"`
+	Agent   string `json:"agent"`
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	Managed bool   `json:"managed"`
+}
+
 func newListCmd() *cobra.Command {
-	return &cobra.Command{
+	return supportsJSON(&cobra.Command{
 		Use:   "list",
 		Short: "列出本项目已登记的本地安装",
 		Long: "列出本项目锁文件里登记的本地安装。\n" +
@@ -52,35 +62,70 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(lock.Skills) == 0 {
+			entries := listEntries(lock, projectRoot)
+			if jsonEnabled() {
+				if err := writeJSON(map[string]any{"items": entries}); err != nil {
+					return err
+				}
+				warnRevoked(cmd.Context(), client, lock)
+				return nil
+			}
+			if len(entries) == 0 {
 				fmt.Println("本项目尚未登记任何本地安装。")
 				fmt.Println("已发布到云端的 Skill 用 skillmesh search 查。")
 				return nil
 			}
-			w := newTable(os.Stdout)
-			fmt.Fprintln(w, "SKILL\tAGENT\t版本/commit\t路径\t受管")
-			for _, skill := range lock.Skills {
-				for _, agentName := range skill.Agents {
-					base, err := agentDirFor(agentName, skill, projectRoot)
-					if err != nil {
-						base = "?"
-					}
-					target := filepath.Join(base, skill.Name)
-					managed := "否"
-					if installer.IsManaged(target) {
-						managed = "是"
-					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-						skill.Name, agentName, ResolvedLabel(skill), target, managed)
-				}
-			}
-			if err := w.Flush(); err != nil {
+			if err := printListTable(entries); err != nil {
 				return err
 			}
 			warnRevoked(cmd.Context(), client, lock)
 			return nil
 		},
+	})
+}
+
+// listEntries 把锁文件展开成一行一个 Agent 的安装记录。
+//
+// 路径默认脱敏：完整绝对路径会泄露本机目录布局，列表是要被贴到 issue 里的
+// （详细设计 §3.9）。要完整路径加 --verbose。
+func listEntries(lock lockfile.Lock, projectRoot string) []listEntry {
+	entries := make([]listEntry, 0, len(lock.Skills))
+	for _, skill := range lock.Skills {
+		for _, agentName := range skill.Agents {
+			base, err := agentDirFor(agentName, skill, projectRoot)
+			if err != nil {
+				base = "?"
+			}
+			target := filepath.Join(base, skill.Name)
+			shown := target
+			if !verbose {
+				shown = redact.Path(target)
+			}
+			entries = append(entries, listEntry{
+				Skill:   skill.Name,
+				Agent:   agentName,
+				Version: ResolvedLabel(skill),
+				Path:    shown,
+				Managed: installer.IsManaged(target),
+			})
+		}
 	}
+	return entries
+}
+
+// printListTable 打印人读表格。
+func printListTable(entries []listEntry) error {
+	w := newTable(os.Stdout)
+	fmt.Fprintln(w, "SKILL\tAGENT\t版本/commit\t路径\t受管")
+	for _, entry := range entries {
+		managed := "否"
+		if entry.Managed {
+			managed = "是"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			entry.Skill, entry.Agent, entry.Version, entry.Path, managed)
+	}
+	return w.Flush()
 }
 
 // unregisterInstallations 把这个 Skill 在本机的安装记录标成已卸载。
@@ -111,7 +156,7 @@ func warnRevoked(ctx context.Context, client *apiclient.Client, lock lockfile.Lo
 		if !found || status == "published" {
 			continue
 		}
-		fmt.Printf("注意：%s 当前装的 %s 状态是 %s，云端已不可用，请自行确认是否继续使用。\n",
+		notice("注意：%s 当前装的 %s 状态是 %s，云端已不可用，请自行确认是否继续使用。\n",
 			entry.Name, entry.Version, status)
 	}
 }
@@ -125,7 +170,7 @@ func ResolvedLabel(skill lockfile.LockedSkill) string {
 }
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	return supportsJSON(&cobra.Command{
 		Use:   "status [skill-name]",
 		Short: "查看锁文件里的安装状态（JSON）",
 		Args:  cobra.MaximumNArgs(1),
@@ -149,7 +194,7 @@ func newStatusCmd() *cobra.Command {
 			encoder.SetIndent("", "  ")
 			return encoder.Encode(payload)
 		},
-	}
+	})
 }
 
 func newUninstallCmd() *cobra.Command {
@@ -174,29 +219,11 @@ func newUninstallCmd() *cobra.Command {
 					return err
 				}
 				target := filepath.Join(base, entry.Name)
-				switch {
-				case purge:
-					// --purge 是真删：不可恢复，只在明确要求时走
-					if err := os.RemoveAll(target); err != nil {
-						return err
-					}
-					fmt.Printf("已彻底删除 %s\n", target)
-				case force:
-					if err := os.RemoveAll(target); err != nil {
-						return err
-					}
-					fmt.Printf("已移除 %s\n", target)
-				default:
-					// 默认进回收站：卸载还能找回来（设计文档 §6.4、§15.1）
-					item, err := trash.NewStore(Cfg.ConfigDir).Move(entry.Name, target)
-					if err != nil {
-						return err
-					}
-					fmt.Printf("已移到回收站 %s（%d KiB，skillmesh trash restore 可找回）\n",
-						item.Entry, item.SizeKiB)
+				if err := uninstallTarget(entry.Name, target, force, purge); err != nil {
+					return err
 				}
-				opLog().Record(oplog.ActionUninstall, entry.Name, target,
-					map[string]string{"agent": agentName})
+				opLog().Record(oplog.ActionUninstall, entry.Name, ResolvedLabel(entry),
+					map[string]string{"agent": agentName, "path": target})
 			}
 			lock.Remove(entry.Name)
 			if err := lock.Save(projectRoot); err != nil {
@@ -213,4 +240,31 @@ func newUninstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "连同不受 SkillMesh 管理的目录一起删除")
 	cmd.Flags().BoolVar(&purge, "purge", false, "彻底删除，不进回收站（不可恢复）")
 	return cmd
+}
+
+// uninstallTarget 按模式处理一个目标目录：真删、强删，或移进回收站。
+//
+// 默认进回收站：卸载还能找回来（设计文档 §6.4、§15.1）。
+func uninstallTarget(name, target string, force, purge bool) error {
+	switch {
+	case purge:
+		// --purge 是真删：不可恢复，只在明确要求时走
+		if err := os.RemoveAll(target); err != nil {
+			return err
+		}
+		fmt.Printf("已彻底删除 %s\n", target)
+	case force:
+		if err := os.RemoveAll(target); err != nil {
+			return err
+		}
+		fmt.Printf("已移除 %s\n", target)
+	default:
+		item, err := trash.NewStore(Cfg.ConfigDir).Move(name, target)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("已移到回收站 %s（%d KiB，skillmesh trash restore 可找回）\n",
+			item.Entry, item.SizeKiB)
+	}
+	return nil
 }

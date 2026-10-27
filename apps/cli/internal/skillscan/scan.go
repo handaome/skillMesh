@@ -17,7 +17,10 @@ type Candidate struct {
 }
 
 // Candidates 找出根目录下所有含 SKILL.md 的子目录。
-func Candidates(root string) ([]Candidate, error) {
+//
+// recursive 为 false 时只看直接子目录：有些 Agent 的 skills 目录是扁平的，
+// 递归下去会把技能自己带的子目录也当成候选。
+func Candidates(root string, recursive bool) ([]Candidate, error) {
 	var found []Candidate
 	err := filepath.Walk(root, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -34,6 +37,10 @@ func Candidates(root string) ([]Candidate, error) {
 		if relErr == nil {
 			depth := len(strings.Split(filepath.ToSlash(rel), "/"))
 			if path != root && depth > maxCandidateDepth {
+				return filepath.SkipDir
+			}
+			// 不递归时只留直接子目录（depth 1），再往下一层就停。
+			if !recursive && path != root && depth >= 2 {
 				return filepath.SkipDir
 			}
 		}

@@ -36,7 +36,7 @@ func newSourceCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			candidates, err := skillscan.Candidates(root)
+			candidates, err := skillscan.Candidates(root, true)
 			if err != nil {
 				return err
 			}

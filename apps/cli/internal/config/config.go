@@ -62,6 +62,17 @@ type Agent struct {
 	Enabled       bool   `yaml:"enabled"`
 	UserSkillsDir string `yaml:"user_skills_dir"`
 	ProjectSkills string `yaml:"project_skills_dir"`
+	// ExtraScanDirs 是这个 Agent 额外的扫描根。
+	//
+	// 全局的那份是 sync.extra_dirs，这份挂在某个 Agent 名下——
+	// 同一台机器上给不同的 Agent 扫不同的目录时用得上。
+	ExtraScanDirs []string `yaml:"extra_scan_dirs,omitempty"`
+	// RecursiveScan 控制扫这个 Agent 目录时要不要递归进子目录。
+	//
+	// nil 表示沿用默认（递归，深度上限 4）；显式 false 时只看直接子目录——
+	// 有些 Agent 的 skills 目录是扁平的，递归会把技能自带的子目录也当成候选。
+	// 用指针而不是 bool：bool 分不出「没配」与「显式关掉」。
+	RecursiveScan *bool `yaml:"recursive_scan,omitempty"`
 	// DetectedDir 是启动时在本机探测到的目录（设计文档 §8：
 	// 「按当前 Cursor 版本验证支持路径」）。空串表示没探测到，用的是配置值。
 	DetectedDir string `yaml:"-"`
@@ -185,6 +196,12 @@ func Load() (Config, error) {
 	// 注册中心换把钥匙照样验签通过，信任根形同虚设。
 	Cfg.Verify = file.Verify
 	// 额外扫描的目录：路径里的 ~ 要展开，跟 Agent 目录一样。
+	for name, agentCfg := range file.Agents {
+		for _, dir := range agentCfg.ExtraScanDirs {
+			agentCfg.ExtraScanDirs = append(agentCfg.ExtraScanDirs, expandHome(dir))
+		}
+		file.Agents[name] = agentCfg
+	}
 	for _, dir := range file.Sync.ExtraDirs {
 		if dir != "" {
 			Cfg.Sync.ExtraDirs = append(Cfg.Sync.ExtraDirs, expandHome(dir))

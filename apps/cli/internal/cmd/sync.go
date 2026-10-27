@@ -321,21 +321,31 @@ func SyncTargets(options SyncOptions) ([]SyncTarget, error) {
 		if err != nil {
 			return nil, err
 		}
-		targets = append(targets, targetsIn(state, dir, agentName, options)...)
+		agentCfg := Cfg.Agents[agentName]
+		recursive := agent.RecursiveScan(agentCfg)
+		targets = append(targets, targetsIn(state, dir, agentName, options, recursive)...)
+		// 这个 Agent 自己配的额外扫描根（agents.<name>.extra_scan_dirs）。
+		// 它们挂在这个 Agent 名下，基线也按这个 Agent 记。
+		for _, extra := range agentCfg.ExtraScanDirs {
+			if extra != "" {
+				targets = append(targets, targetsIn(state, extra, agentName, options, recursive)...)
+			}
+		}
 	}
 	// 额外配置的目录：项目级、自定义目录（设计文档 §6.1）。
 	// 它们不属于任何 Agent，用 custom 当标识——同一个 Skill 在
 	// Agent 目录与自定义目录里各有一份时，两份各自记基线。
 	for _, dir := range Cfg.Sync.ExtraDirs {
-		targets = append(targets, targetsIn(state, dir, "custom", options)...)
+		targets = append(targets, targetsIn(state, dir, "custom", options, true)...)
 	}
 	return targets, nil
 }
 
 // targetsIn 列出一个目录里的 Skill，并带上各自的基线。
-func targetsIn(state syncstate.State, dir, agentName string, options SyncOptions) []SyncTarget {
+func targetsIn(state syncstate.State, dir, agentName string, options SyncOptions,
+	recursive bool) []SyncTarget {
 	var targets []SyncTarget
-	for _, path := range localSkills(dir) {
+	for _, path := range localSkills(dir, recursive) {
 		name := skillscan.SkillName(path)
 		if options.Only != "" && name != options.Only {
 			continue
@@ -362,7 +372,7 @@ func syncAgentNames(selected []string) []string {
 		return selected
 	}
 	var names []string
-	for _, name := range agent.Supported {
+	for _, name := range agent.Names(Cfg) {
 		if agentCfg, ok := Cfg.Agents[name]; ok && agentCfg.Enabled {
 			names = append(names, name)
 		}
@@ -371,11 +381,13 @@ func syncAgentNames(selected []string) []string {
 }
 
 // localSkills 列出目录下的 Skill 候选（含目录本身）。
-func localSkills(dir string) []string {
+//
+// recursive 为 false 时只看直接子目录——见 skillscan.Candidates。
+func localSkills(dir string, recursive bool) []string {
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err == nil {
 		return []string{dir}
 	}
-	candidates, err := skillscan.Candidates(dir)
+	candidates, err := skillscan.Candidates(dir, recursive)
 	if err != nil {
 		return nil
 	}

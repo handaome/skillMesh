@@ -5,6 +5,7 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.Redact;
 import com.skillmesh.api.skill.SkillService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -65,7 +66,7 @@ public class InstallationController {
         CurrentUser user = currentUserService.current(jwt);
         skillService.requireVisibleSkill(user, req.skill_id());
         requireOneOf("install_scope", req.install_scope(), SCOPES);
-        requireOneOf("agent", req.agent(), List.of("claude-code", "codex", "cursor", "generic"));
+        requireAgent(req.agent());
 
         // 同一台机器同一个目录装同一个 Skill 只有一条：重复登记 = 更新
         InstallationEntity entity = installations
@@ -156,8 +157,10 @@ public class InstallationController {
         CurrentUser user = currentUserService.current(jwt);
         InstallationEntity entity = require(user, installationId);
         installations.delete(entity);
+        // 记录已经被删了，完整路径不会留在安装登记表里，流水里留一份脱敏的当线索。
+        // 流水是按 Skill 可见的，写全路径等于把本机目录布局摊给团队管理员。
         audit.record(user, "installation.unregister", "skill", entity.getSkillId(), "success",
-            Map.of("target_path", entity.getTargetPath()), entity.getDeviceId());
+            Map.of("target_path", Redact.path(entity.getTargetPath())), entity.getDeviceId());
         return ResponseEntity.noContent().build();
     }
 
@@ -165,6 +168,22 @@ public class InstallationController {
         InstallationEntity entity = installations.findByIdAndUserId(installationId, user.id())
             .orElseThrow(() -> ApiException.notFound("安装记录"));
         return entity;
+    }
+
+    /**
+     * Agent 名字要像个名字，但不限定取值。
+     *
+     * Agent 目录是本机配置的事（config.yaml 的 agents 段）：企业内网自建的
+     * Agent 不在服务端的枚举里，限死取值的话这类安装登记不上——
+     * 装完看着成功，跨设备却看不到这条记录。
+     */
+    private void requireAgent(String agent) {
+        if (agent == null || agent.isBlank()) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "agent 不能为空");
+        }
+        if (agent.length() > 64) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "agent 名字过长（最多 64 个字符）");
+        }
     }
 
     private void requireOneOf(String field, String value, List<String> allowed) {

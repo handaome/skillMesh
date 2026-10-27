@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/redact"
 )
 
 // FileName 是日志文件名。
@@ -75,6 +77,12 @@ func (w *Writer) Append(event Event) {
 	}
 	if event.Outcome == "" {
 		event.Outcome = "success"
+	}
+	// 落盘前先脱敏：这份日志会被用户贴到 issue 里，
+	// 家目录布局和令牌都不该跟着出去（详细设计 §3.9）。
+	event.Detail = redact.Text(event.Detail)
+	for key, value := range event.Extra {
+		event.Extra[key] = redact.Field(key, value)
 	}
 	raw, err := json.Marshal(event)
 	if err != nil {

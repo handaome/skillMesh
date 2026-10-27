@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -44,7 +43,7 @@ func newScanCmd() *cobra.Command {
 		includeUnmanaged bool
 	)
 
-	cmd := &cobra.Command{
+	cmd := supportsJSON(&cobra.Command{
 		Use:   "scan [目录]",
 		Short: "扫描已授权目录里的 Skill，分类列出发现的问题",
 		Long: "不碰网络，只看本机：哪些是受管的、哪些是新的、哪些内容变了、\n" +
@@ -64,18 +63,16 @@ func newScanCmd() *cobra.Command {
 				return err
 			}
 			entries := scanAll(dirs, state, includeUnmanaged)
-			if asJSON {
-				encoder := json.NewEncoder(os.Stdout)
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(entries)
+			if asJSON || jsonEnabled() {
+				return writeJSON(jsonItems(entries))
 			}
 			return reportScan(entries)
 		},
-	}
+	})
 	cmd.Flags().StringSliceVar(&agentNames, "agent", nil, "只扫指定 Agent 的目录")
 	cmd.Flags().StringVar(&path, "path", "", "直接指定要扫的目录")
 	cmd.Flags().BoolVar(&allAgents, "all-agents", false, "扫所有已启用的 Agent")
-	cmd.Flags().BoolVar(&asJSON, "json", false, "输出 JSON")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "输出 JSON（等同全局 --json）")
 	cmd.Flags().BoolVar(&includeUnmanaged, "include-unmanaged", false,
 		"连不受 SkillMesh 管理的目录一起列出")
 	return cmd
@@ -85,6 +82,10 @@ func newScanCmd() *cobra.Command {
 type scanTarget struct {
 	Agent string
 	Dir   string
+	// Recursive 控制扫这个目录时要不要递归进子目录。
+	Recursive bool
+	// ExtraDirs 是这个 Agent 自己配的额外扫描根。
+	ExtraDirs []string
 }
 
 // scanDirs 决定扫哪些目录：显式路径优先，其次 --agent / --all-agents，最后用配置里启用的 Agent。
@@ -98,7 +99,7 @@ func scanDirs(args []string, path string, agentNames []string, allAgents bool) (
 	names := agentNames
 	if allAgents || len(names) == 0 {
 		names = nil
-		for _, name := range agent.Supported {
+		for _, name := range agent.Names(Cfg) {
 			if agentCfg, ok := Cfg.Agents[name]; ok && agentCfg.Enabled {
 				names = append(names, name)
 			}
@@ -110,7 +111,13 @@ func scanDirs(args []string, path string, agentNames []string, allAgents bool) (
 		if err != nil {
 			return nil, err
 		}
-		targets = append(targets, scanTarget{Agent: name, Dir: dir})
+		agentCfg := Cfg.Agents[name]
+		targets = append(targets, scanTarget{
+			Agent:     name,
+			Dir:       dir,
+			Recursive: agent.RecursiveScan(agentCfg),
+			ExtraDirs: agentCfg.ExtraScanDirs,
+		})
 	}
 	return targets, nil
 }
@@ -120,39 +127,48 @@ func scanAll(targets []scanTarget, state syncstate.State, includeUnmanaged bool)
 	seen := map[string]string{} // 安装名 -> 来源路径，撞车就报出来
 
 	for _, target := range targets {
-		// 读不到就明说读不到。当成空目录会让 sync 以为东西都没了（详细设计 §3.6）。
-		if _, err := os.Stat(target.Dir); err != nil {
-			entries = append(entries, scanEntry{
-				Name: "-", Agent: target.Agent, Path: target.Dir,
-				Category: catNew, Detail: "目录读不到，已跳过：" + err.Error(),
-			})
-			continue
-		}
-		candidates, err := skillscan.Candidates(target.Dir)
-		if err != nil {
-			entries = append(entries, scanEntry{
-				Name: "-", Agent: target.Agent, Path: target.Dir,
-				Category: catNew, Detail: "扫描失败，已跳过：" + err.Error(),
-			})
-			continue
-		}
-		for _, candidate := range candidates {
-			name := skillscan.SkillName(candidate.Dir)
-			if previous, duplicate := seen[name]; duplicate {
-				entries = append(entries, scanEntry{
-					Name: name, Agent: target.Agent, Path: candidate.Dir,
-					Category: catConflict, Detail: "与 " + previous + " 撞名",
-				})
-				continue
-			}
-			seen[name] = candidate.Dir
-			entries = append(entries, classifyOne(target, candidate, state, includeUnmanaged))
+		// 主目录，加上这个 Agent 自己配的额外扫描根。
+		for _, dir := range append([]string{target.Dir}, target.ExtraDirs...) {
+			entries = append(entries, scanOneDir(target, dir, state, includeUnmanaged, seen)...)
 		}
 	}
 	return entries
 }
 
-// classifyOne 给单个 Skill 归类。最严重的那条优先——敏感 > 变化 > 未受管 > 已管理。
+// scanOneDir 扫一个目录，结果追加到 entries。
+func scanOneDir(target scanTarget, dir string, state syncstate.State,
+	includeUnmanaged bool, seen map[string]string) []scanEntry {
+
+	var entries []scanEntry
+	// 读不到就明说读不到。当成空目录会让 sync 以为东西都没了（详细设计 §3.6）。
+	if _, err := os.Stat(dir); err != nil {
+		return []scanEntry{{
+			Name: "-", Agent: target.Agent, Path: dir,
+			Category: catNew, Detail: "目录读不到，已跳过：" + err.Error(),
+		}}
+	}
+	candidates, err := skillscan.Candidates(dir, target.Recursive)
+	if err != nil {
+		return []scanEntry{{
+			Name: "-", Agent: target.Agent, Path: dir,
+			Category: catNew, Detail: "扫描失败，已跳过：" + err.Error(),
+		}}
+	}
+	for _, candidate := range candidates {
+		name := skillscan.SkillName(candidate.Dir)
+		if previous, duplicate := seen[name]; duplicate {
+			entries = append(entries, scanEntry{
+				Name: name, Agent: target.Agent, Path: candidate.Dir,
+				Category: catConflict, Detail: "与 " + previous + " 撞名",
+			})
+			continue
+		}
+		seen[name] = candidate.Dir
+		entries = append(entries, classifyOne(target, candidate, state, includeUnmanaged))
+	}
+	return entries
+}
+
 func classifyOne(target scanTarget, candidate skillscan.Candidate, state syncstate.State,
 	includeUnmanaged bool) scanEntry {
 

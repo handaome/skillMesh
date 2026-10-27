@@ -171,7 +171,7 @@ func locatePublishTargets(path string, all bool) ([]PublishTarget, error) {
 	if !all {
 		return []PublishTarget{{Dir: dir, RelPath: filepath.Base(dir)}}, nil
 	}
-	candidates, err := skillscan.Candidates(dir)
+	candidates, err := skillscan.Candidates(dir, true)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +222,12 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 	}
 	if displayName == "" {
 		displayName = filepath.Base(target.Dir)
+	}
+	// 名字要能当目录名用：装的时候目录名取的就是它。
+	// 在发布这一步就拒掉，比等终端用户装到 Windows 上失败、只看到一句
+	// 原始的操作系统错误要好。
+	if err := CheckDirName(displayName); err != nil {
+		return publishResult{}, err
 	}
 	description := options.Description
 	if description == "" {

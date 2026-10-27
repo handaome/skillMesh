@@ -19,14 +19,34 @@ import (
 
 func newInstallCmd() *cobra.Command {
 	var agentNames []string
-	var scope, version string
+	var scope, version, file string
 	var locked, dryRun, replace bool
 
 	cmd := &cobra.Command{
 		Use:   "install <skill-id>",
 		Short: "从 SkillMesh 注册中心安装指定版本的 Skill",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 本地 zip：没签名、没走过服务端扫描，不进注册中心，
+			// 只装到本机，来源写进锁文件（详细设计 §7.1 的来源分级）。
+			if file != "" {
+				if len(args) > 0 {
+					return fmt.Errorf("--file 与 skill-id 不能同时用")
+				}
+				root, cleanup, err := extractToTemp(file)
+				if err != nil {
+					return err
+				}
+				defer cleanup()
+				return installFromDir(localInstallOptions{
+					Root: root, Source: "local:" + file, SourceType: "local",
+					Provider: "local", Scope: scope, Agents: agentNames,
+					UpdatePolicy: "manual", Replace: replace, DryRun: dryRun,
+				})
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("要给 skill-id，或用 --file 指定本地 zip")
+			}
 			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
@@ -80,6 +100,8 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&agentNames, "agent", []string{"claude-code"}, "目标 Agent，可重复指定")
 	cmd.Flags().StringVar(&scope, "scope", "user", "user 或 project")
 	cmd.Flags().StringVar(&version, "version", "", "指定版本，默认取最新已发布")
+	cmd.Flags().StringVar(&file, "file", "",
+		"从本地 zip 安装（不进注册中心，来源只写锁文件）")
 	cmd.Flags().BoolVar(&locked, "locked", false, "严格按锁文件校验，不符则失败")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只演练不落盘")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
@@ -140,7 +162,7 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 			return err
 		}
 		installPath := filepath.Join(base, name)
-		if err := CheckTarget(installPath, req.Replace); err != nil {
+		if err := CheckTarget(installPath, "skillmesh:"+req.SkillID, req.Replace); err != nil {
 			return err
 		}
 		if err := installer.InstallAtomic(skillDir, installPath, true); err != nil {
@@ -154,10 +176,13 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		}
 		// 登记到注册中心：回答「我在哪些机器上装了什么」。
 		// 不登记的话 installations 永远是空的，这个功能等于没有。
-		reportInstallation(ctx, client, req, agentName, installPath)
+		// 登记失败不影响安装结果——东西已经装好了——但要让人知道：
+		// 装完了却没进注册中心，跨设备就看不到这条记录。
+		if err := reportInstallation(ctx, client, req, agentName, installPath); err != nil {
+			fmt.Fprintf(os.Stderr, "提示：安装登记没成功（%v），跨设备看不到这条记录\n", err)
+		}
 		fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
-		opLog().Record(oplog.ActionInstall, name,
-			fmt.Sprintf("%s@%s", req.Version.Version, installPath),
+		opLog().Record(oplog.ActionInstall, name, req.Version.Version,
 			map[string]string{"agent": agentName, "path": installPath})
 	}
 	if err := RecordInstall(InstallRecord{
@@ -181,15 +206,17 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 }
 
 // reportInstallation 把这次安装登记到注册中心：回答「我在哪些机器上装了什么」。
-// 登记失败不影响安装结果——东西已经装好了。
+//
+// 登记失败不影响安装结果——东西已经装好了——但要让调用方知道：
+// 装完了却没进注册中心，跨设备就看不到这条记录。
 func reportInstallation(ctx context.Context, client *apiclient.Client,
-	req installRequest, agentName, target string) {
+	req installRequest, agentName, target string) error {
 
 	deviceID, err := client.DeviceID(ctx)
 	if err != nil {
-		return
+		return err
 	}
-	_, _ = client.RegisterInstallation(ctx, apiclient.RegisterInstallationInput{
+	_, err = client.RegisterInstallation(ctx, apiclient.RegisterInstallationInput{
 		SkillID:          req.SkillID,
 		DeviceID:         deviceID,
 		Agent:            agentName,
@@ -200,6 +227,7 @@ func reportInstallation(ctx context.Context, client *apiclient.Client,
 		// 刚装完的内容就是制品里的那份，本机还没被改过。
 		LocalModified: false,
 	})
+	return err
 }
 
 func artifactSHA256(version apiclient.SkillVersion) string {

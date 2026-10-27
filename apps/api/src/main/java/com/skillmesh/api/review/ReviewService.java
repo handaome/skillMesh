@@ -6,6 +6,7 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.recycle.RecycleService;
+import com.skillmesh.api.review.dto.BatchDecideRequest;
 import com.skillmesh.api.scan.ScanEntity;
 import com.skillmesh.api.scan.ScanRepository;
 import com.skillmesh.api.skill.SkillEntity;
@@ -15,11 +16,17 @@ import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.VersionOrder;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 发布审核（设计文档 §10.1：draft → scanning → pending_review → published）。
@@ -37,10 +44,12 @@ public class ReviewService {
     private final ReviewRepository reviews;
     private final ScanRepository scans;
     private final RecycleService recycle;
+    private final TransactionTemplate transactions;
 
     public ReviewService(SkillRepository skills, SkillVersionRepository versions,
                          OrgService orgs, AuditService audit, ReviewRepository reviews,
-                         ScanRepository scans, RecycleService recycle) {
+                         ScanRepository scans, RecycleService recycle,
+                         PlatformTransactionManager transactionManager) {
         this.skills = skills;
         this.versions = versions;
         this.orgs = orgs;
@@ -48,6 +57,50 @@ public class ReviewService {
         this.reviews = reviews;
         this.scans = scans;
         this.recycle = recycle;
+        this.transactions = new TransactionTemplate(transactionManager);
+        // 每条一个独立事务。默认的 REQUIRED 会加入调用方的事务：
+        // 一条失败就把整个外层标记成 rollback-only，已经放行的条目跟着被撤回来。
+        this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    /** 批量结果里的字段名。与请求体一致。 */
+    private static final String FIELD_SKILL_ID = "skill_id";
+    private static final String FIELD_VERSION = "version";
+
+    /**
+     * 批量审核。
+     *
+     * 每条在自己的事务里：批量的语义是「逐条独立」，一条被拒不该把已经放行的
+     * 也一起撤回来。共用一个事务的话，第一条失败后面全回滚，用户看到的是
+     * 「一条都没成」，而实际上前面的已经过了——那比不做批量更糟。
+     *
+     * 权限不放宽：每条都照样走 decide 里的那几道闸（reviewer 角色、
+     * 不能审自己发布的版本、扫描结论阻断）。批量只是省了逐条点开详情页。
+     */
+    public Map<String, Object> batchDecide(CurrentUser user, BatchDecideRequest request) {
+        boolean approved = "approve".equals(request.action());
+        List<Map<String, Object>> succeeded = new ArrayList<>();
+        List<Map<String, Object>> failed = new ArrayList<>();
+        for (BatchDecideRequest.Item item : request.items()) {
+            try {
+                transactions.executeWithoutResult(status ->
+                    decide(user, item.skillId(), item.version(), approved, request.comment()));
+                succeeded.add(Map.of(FIELD_SKILL_ID, item.skillId().toString(),
+                    FIELD_VERSION, item.version()));
+            } catch (ApiException e) {
+                failed.add(Map.of(FIELD_SKILL_ID, item.skillId().toString(),
+                    FIELD_VERSION, item.version(),
+                    "code", e.code(), "message", String.valueOf(e.getMessage())));
+            } catch (RuntimeException e) {
+                failed.add(Map.of(FIELD_SKILL_ID, item.skillId().toString(),
+                    FIELD_VERSION, item.version(),
+                    "code", ErrorCodes.INTERNAL, "message", String.valueOf(e.getMessage())));
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("succeeded", succeeded);
+        result.put("failed", failed);
+        return result;
     }
 
     /** 团队或组织可见的 Skill，发版要走审核。 */
@@ -87,7 +140,7 @@ public class ReviewService {
         }
         audit.record(user, "version.submit", "skill", skillId, "success",
             Map.of("version", version, "comment", comment == null ? "" : comment));
-        return Map.of("skill_id", skillId.toString(), "version", version,
+        return Map.of(FIELD_SKILL_ID, skillId.toString(), FIELD_VERSION, version,
             "status", "pending_review");
     }
 
@@ -153,7 +206,7 @@ public class ReviewService {
         }
         versions.save(entity);
         recordReview(user, skillId, entity, comment, approved);
-        return Map.of("skill_id", skillId.toString(), "version", version,
+        return Map.of(FIELD_SKILL_ID, skillId.toString(), FIELD_VERSION, version,
             "status", entity.getStatus());
     }
 

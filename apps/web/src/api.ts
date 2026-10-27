@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -111,11 +111,28 @@ export function searchSkills(
  *
  * 分页与 searchSkills 一样：mine=true 只改属主过滤，游标照样要接。
  */
-export function searchMySkills(q: string, cursor?: string): Promise<SkillPage> {
+export function searchMySkills(
+  q: string, cursor?: string, filters?: Record<string, string>,
+): Promise<SkillPage> {
   const params = new URLSearchParams({ mine: 'true', limit: '100' })
   if (q) params.set('q', q)
   if (cursor) params.set('cursor', cursor)
+  for (const [key, value] of Object.entries(filters ?? {})) {
+    if (value) params.set(key, value)
+  }
   return request<SkillPage>(`/skills?${params}`, 'GET')
+}
+
+/**
+ * 我可见的标签与各自的数量。
+ *
+ * 标签清单要单独取，不能从一页列表里汇总：列表是游标分页的，汇总出来的
+ * 只是这一页出现过的标签——用户想按一个只出现在第二页的标签筛选时，
+ * 根本没有那个选项可点。
+ */
+export function fetchTags(mine = false): Promise<TagCount[]> {
+  const params = new URLSearchParams({ mine: String(mine) })
+  return request<TagCount[]>(`/tags?${params}`, 'GET')
 }
 
 /**
@@ -341,6 +358,53 @@ export function rejectVersion(skillId: string, version: string, comment = ''): P
  * 软删除：数据留着，status 变成 archived，slug 让出来——同名能重建。
  * 各端同步时据此把本地那份一起删掉。
  */
+/**
+ * 批量审核。
+ *
+ * 逐条独立：一条过了另一条没过，两边都报清楚。服务端要是共用一个事务，
+ * 第一条失败会把已经放行的也一起撤回来。
+ *
+ * 权限不放宽：每条照样走单条审核的那几道闸（reviewer 角色、
+ * 不能审自己发布的版本）。批量只是省了逐条点开详情页。
+ */
+export function batchDecide(
+  items: { skill_id: string; version: string }[],
+  action: 'approve' | 'reject',
+  comment = '',
+): Promise<BatchDecideResult> {
+  return request<BatchDecideResult>(
+    '/reviews/batch-decide', 'POST', { action, items, comment },
+  )
+}
+
+/**
+ * 批量改标签。
+ *
+ * 逐条独立：一条没权限不该把已经改好的也一起撤回来。权限与单条更新一致
+ * （只有属主能改）。
+ */
+export function batchUpdateTags(ids: string[], tags: string[]): Promise<BatchSkillResult> {
+  return request<BatchSkillResult>('/skills/batch/tags', 'PATCH', { ids, tags })
+}
+
+/**
+ * 批量归档（软删除）。
+ *
+ * 数据留着，可以还原；各端同步后本地那份也会被删掉。
+ */
+export function batchArchive(ids: string[]): Promise<BatchSkillResult> {
+  return request<BatchSkillResult>('/skills/batch/archive', 'POST', { ids })
+}
+
+/**
+ * 我可见的技能集合。
+ *
+ * 徽标只算「我装了几个」——本人可见的数据。
+ */
+export function listGroups(): Promise<Group[]> {
+  return request<Group[]>('/groups', 'GET')
+}
+
 export function deleteSkill(id: string): Promise<void> {
   return request<void>(`/skills/${id}`, 'DELETE')
 }

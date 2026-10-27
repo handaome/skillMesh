@@ -16,16 +16,29 @@ import (
 func newLogsCmd() *cobra.Command {
 	var tail int
 	var skill string
-	cmd := &cobra.Command{
+	var bundle string
+	cmd := supportsJSON(&cobra.Command{
 		Use:   "logs",
 		Short: "看本机的 Skill 操作日志",
 		Long: "本机发生过什么：同步的上传/拉取/删除、发布、安装、卸载。\n" +
 			"服务端的审计流水记的是「谁对哪个 Skill 做了什么」，\n" +
-			"这份记的是本机的细节——比如云端删了之后本地那份被移进了回收站。",
+			"这份记的是本机的细节——比如云端删了之后本地那份被移进了回收站。\n\n" +
+			"--bundle 导出诊断包（zip）：日志、配置、各 Agent 目录状态。\n" +
+			"提交 issue 时把它一起给出去——里面的家目录与令牌已经脱敏。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if bundle != "" {
+				if err := exportBundle(bundle); err != nil {
+					return err
+				}
+				fmt.Printf("诊断包已导出 %s\n", bundle)
+				return nil
+			}
 			path := opLogPath()
 			entries := oplog.Tail(path, tail, skill)
+			if jsonEnabled() {
+				return writeJSON(map[string]any{"items": jsonItems(entries)})
+			}
 			if len(entries) == 0 {
 				if _, err := os.Stat(path); err != nil {
 					fmt.Printf("还没有日志：%s\n", path)
@@ -43,9 +56,10 @@ func newLogsCmd() *cobra.Command {
 			}
 			return w.Flush()
 		},
-	}
+	})
 	cmd.Flags().IntVar(&tail, "tail", 50, "看最后多少条")
 	cmd.Flags().StringVar(&skill, "skill", "", "只看这个 Skill")
+	cmd.Flags().StringVar(&bundle, "bundle", "", "导出诊断包（zip）到指定路径")
 	return cmd
 }
 

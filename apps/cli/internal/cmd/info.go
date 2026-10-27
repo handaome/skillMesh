@@ -9,8 +9,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// infoPayload 是 info 的机器可读结果。
+type infoPayload struct {
+	Skill    apiclient.Skill          `json:"skill"`
+	Versions []apiclient.SkillVersion `json:"versions"`
+	Blocked  []string                 `json:"blocked_versions"`
+	Findings []apiclient.ScanFinding  `json:"scan_findings"`
+}
+
 func newInfoCmd() *cobra.Command {
-	return &cobra.Command{
+	return supportsJSON(&cobra.Command{
 		Use:   "info <skill-id>",
 		Short: "查看 Skill 详情、来源、扫描结论与版本列表",
 		Long: "装之前先看一眼：来源、许可证、扫描结论和风险都在这儿。\n" +
@@ -25,12 +33,20 @@ func newInfoCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%s (%s)\n%s\n", skill.Name, skill.Slug, skill.Description)
-
 			versions, err := client.Versions(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
+			blocked, findings := collectRisks(versions.Items)
+			if jsonEnabled() {
+				return writeJSON(infoPayload{
+					Skill:    skill,
+					Versions: jsonItems(versions.Items),
+					Blocked:  jsonItems(blocked),
+					Findings: jsonItems(findings),
+				})
+			}
+			fmt.Printf("%s (%s)\n%s\n", skill.Name, skill.Slug, skill.Description)
 			if len(versions.Items) == 0 {
 				fmt.Println("暂无版本")
 				return nil
@@ -39,9 +55,9 @@ func newInfoCmd() *cobra.Command {
 			if err := printVersions(versions.Items); err != nil {
 				return err
 			}
-			return printRisks(versions.Items)
+			return printRisks(blocked, findings)
 		},
-	}
+	})
 }
 
 // printProvenance 打印来源信息。缺的就写「未提供」，不留空让人猜。
@@ -101,10 +117,12 @@ func scanLabel(scan *apiclient.ScanSummary) string {
 	return scan.Status
 }
 
-// printRisks 把没发布成功的版本和扫描命中摊开——这些是需要人看的。
-func printRisks(versions []apiclient.SkillVersion) error {
-	var findings []apiclient.ScanFinding
+// collectRisks 挑出装不了的版本和扫描命中。
+//
+// 人读输出和 JSON 输出都要这两样，分开算就会出现两边对不上的情况。
+func collectRisks(versions []apiclient.SkillVersion) ([]string, []apiclient.ScanFinding) {
 	var blocked []string
+	var findings []apiclient.ScanFinding
 	for _, version := range versions {
 		if version.Status != "published" {
 			blocked = append(blocked, fmt.Sprintf("%s（%s）", version.Version, version.Status))
@@ -113,6 +131,11 @@ func printRisks(versions []apiclient.SkillVersion) error {
 			findings = append(findings, version.Scan.Findings...)
 		}
 	}
+	return blocked, findings
+}
+
+// printRisks 把没发布成功的版本和扫描命中摊开——这些是需要人看的。
+func printRisks(blocked []string, findings []apiclient.ScanFinding) error {
 	if len(blocked) == 0 && len(findings) == 0 {
 		return nil
 	}

@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
+  batchArchive,
+  batchUpdateTags,
   createSkill,
   deleteSkill,
+  fetchTags,
   getVersions,
   listDeletedSkills,
   listRecycleFiles,
@@ -12,14 +15,18 @@ import {
   searchMySkills,
   updateSkill,
 } from '../api'
+import { useMultiSelect } from '../composables/useMultiSelect'
 import { usePagedList } from '../composables/usePagedList'
 import { VERSION_STATUS_TEXT, VISIBILITY_TEXT } from '../constants/status'
-import type { DeletedSkill, RecycleFile, Skill, SkillVersion } from '../types'
+import type { BatchSkillResult, DeletedSkill, RecycleFile, Skill, SkillVersion, TagCount } from '../types'
 import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
+import BatchTagDialog from '../components/BatchTagDialog.vue'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
 import ModalDialog from '../components/ModalDialog.vue'
+import MultiSelectToolbar from '../components/MultiSelectToolbar.vue'
+import TagFilter from '../components/TagFilter.vue'
 import TagInput from '../components/TagInput.vue'
 
 /** 服务端收 slug 的规则：小写字母数字开头，后跟小写字母数字或连字符，总长 2–64。 */
@@ -29,12 +36,18 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/
 const SEARCH_DEBOUNCE_MS = 300
 
 const query = ref('')
+/** 选中的标签。多选是「同时满足」。 */
+const selectedTags = ref<string[]>([])
+/** 只看没打标的。与选了标签互斥。 */
+const untagged = ref(false)
+/** 可选的标签与各自数量。只统计我名下的。 */
+const tagOptions = ref<TagCount[]>([])
 
 /**
  * 列表。服务端按游标翻页，超过一页的这里能接着往下取。
  *
- * 查询词是这次查询的条件：翻页时用同一个词接着查，
- * 词变了就重新 load——拿旧词的游标查新词，页面对不上。
+ * 查询词与筛选条件是这次查询的条件：翻页时用同一组条件接着查，
+ * 条件变了就重新 load——拿旧条件的游标查新条件，页面对不上。
  */
 const {
   items: skills,
@@ -45,10 +58,37 @@ const {
   countText,
   load: loadPage,
   loadMore,
-} = usePagedList<Skill, string>((q, cursor) => searchMySkills(q, cursor), { unit: '个' })
+} = usePagedList<Skill, { q: string; filters: Record<string, string> }>(
+  (params, cursor) => searchMySkills(params.q, cursor, params.filters),
+  { unit: '个' },
+)
 
 /** 选中的 Skill。右侧详情面板显示的就是它。 */
 const selected = ref<Skill | null>(null)
+
+/**
+ * 勾选状态（批量操作用）。
+ *
+ * 与右侧详情面板的「选中」是两回事：那个是看详情，这个是圈定
+ * 「接下来要一起处理的那几条」。
+ */
+const filterSignal = computed(
+  () => `${query.value}|${selectedTags.value.join(',')}|${untagged.value}`,
+)
+const scopeSignal = ref('')
+const {
+  selectedItems: checkedItems,
+  selectedCount: checkedCount,
+  isSelected: isChecked,
+  toggle: toggleChecked,
+  clear: clearChecked,
+} = useMultiSelect<Skill>({
+  items: skills,
+  filtered: skills,
+  getKey: (skill) => skill.id,
+  filterSignal,
+  scopeSignal,
+})
 
 /**
  * 版本列表。
@@ -153,13 +193,33 @@ function versionPill(status: string): string {
  */
 async function load() {
   const q = query.value
-  await loadPage(q)
+  void loadTags()
+  const filters: Record<string, string> = {}
+  // 标签与「未打标」互斥，界面已经保证了，这里只管把条件传下去。
+  if (selectedTags.value.length) filters.tag = selectedTags.value[0]
+  if (untagged.value) filters.untagged = 'true'
+  await loadPage({ q, filters })
   if (query.value !== q || listError.value) return
   // 选中的那个可能已经不在列表里了（被改名或撤销），跟着清掉。
   // 这里不重拉版本：刷新列表是筛选，不是「换个 Skill」——每次击键都多打一次
   // 版本列表，请求量直接翻倍。
   if (selected.value && !skills.value.some((s) => s.id === selected.value?.id)) {
     clearSelection()
+  }
+}
+
+/**
+ * 拉标签清单。
+ *
+ * 每次刷新都拉一遍：新建的 Skill 带的标签要能立刻出现在筛选器里，
+ * 否则用户建完标签还得刷新页面才看得见。
+ */
+async function loadTags() {
+  try {
+    tagOptions.value = await fetchTags(true)
+  } catch {
+    // 标签拉不到不该挡住列表：筛选器只是没有选项，搜索照常用。
+    tagOptions.value = []
   }
 }
 
@@ -217,6 +277,66 @@ async function restoreFile(file: RecycleFile) {
   notice.value = `${file.path} 已恢复，发出了新版本。`
   await loadRecycle(skill.id)
   await loadVersions(skill.id)
+}
+
+/** 批量动作的结果提示。 */
+const batchResult = ref<BatchSkillResult | null>(null)
+/** 批量动作执行中。 */
+const batchBusy = ref(false)
+/** 批量打标签对话框。 */
+const tagDialogOpen = ref(false)
+/** 批量删除的确认弹窗。 */
+const deleteConfirmOpen = ref(false)
+
+/** 所选 Skill 的标签并集：批量打标签的初值。 */
+const checkedTagUnion = computed(() => {
+  const tags = new Set<string>()
+  for (const skill of checkedItems.value) {
+    for (const tag of skill.tags) tags.add(tag)
+  }
+  return [...tags]
+})
+
+/**
+ * 批量打标签。
+ *
+ * 覆盖式：把选中的 Skill 的标签统一改成对话框里那组。逐条独立——
+ * 一条没权限不该把已经改好的也一起撤回来。
+ */
+async function applyBatchTags(tags: string[]) {
+  tagDialogOpen.value = false
+  batchBusy.value = true
+  try {
+    batchResult.value = await batchUpdateTags(
+      checkedItems.value.map((skill) => skill.id),
+      tags,
+    )
+    clearChecked()
+    await load()
+  } catch (e) {
+    listActionError.value = errorText(e)
+  } finally {
+    batchBusy.value = false
+  }
+}
+
+/**
+ * 批量归档（删除）。
+ *
+ * 软删除：云端数据留着，能还原；但各端同步后本地那份也会被删掉。
+ */
+async function applyBatchDelete() {
+  deleteConfirmOpen.value = false
+  batchBusy.value = true
+  try {
+    batchResult.value = await batchArchive(checkedItems.value.map((skill) => skill.id))
+    clearChecked()
+    await load()
+  } catch (e) {
+    listActionError.value = errorText(e)
+  } finally {
+    batchBusy.value = false
+  }
 }
 
 function clearSelection() {
@@ -404,6 +524,20 @@ onUnmounted(() => {
     <p v-if="listActionError" class="sm-note sm-note--error sm-mb-16" data-test="list-error">
       {{ listActionError }}
     </p>
+
+    <!-- 批量结果：过了多少、没过多少、哪一条为什么没过。 -->
+    <p
+      v-if="batchResult"
+      class="sm-note sm-mb-16"
+      :class="batchResult.failed.length ? 'sm-note--warning' : 'sm-note--success'"
+      data-test="batch-result"
+    >
+      成功 {{ batchResult.succeeded.length }} 条<template v-if="batchResult.failed.length"
+        >，{{ batchResult.failed.length }} 条没过：{{
+          batchResult.failed.map((f) => f.message).join('；')
+        }}</template
+      >
+    </p>
     <p v-if="listNotice" class="sm-note sm-note--success sm-mb-16" data-test="list-notice">
       {{ listNotice }}
     </p>
@@ -427,6 +561,42 @@ onUnmounted(() => {
           <span class="sm-muted sm-sm sm-num" data-test="count">{{ countText }}</span>
         </div>
 
+        <!--
+          批量工具条。批量改标签是覆盖式：统一改成对话框里那组，
+          改之前看得见最后会变成什么样。
+        -->
+        <MultiSelectToolbar :count="checkedCount" :busy="batchBusy" @clear="clearChecked">
+          <button
+            class="sm-btn sm-btn--quiet sm-btn--sm"
+            data-test="batch-tag"
+            :disabled="batchBusy"
+            @click="tagDialogOpen = true"
+          >
+            批量打标签
+          </button>
+          <button
+            class="sm-btn sm-btn--danger sm-btn--sm"
+            data-test="batch-delete"
+            :disabled="batchBusy"
+            @click="deleteConfirmOpen = true"
+          >
+            批量删除
+          </button>
+        </MultiSelectToolbar>
+
+        <!--
+          标签筛选。标签清单单独取：列表是游标分页的，从一页数据里汇总标签
+          汇总不全，用户想按只出现在第二页的标签筛选时就没有那个选项可点。
+        -->
+        <div class="sm-mb-12">
+          <TagFilter
+            v-model="selectedTags"
+            v-model:untagged="untagged"
+            :tags="tagOptions"
+            @change="load"
+          />
+        </div>
+
         <div v-if="loading" class="sm-empty">加载中…</div>
 
         <EmptyState
@@ -445,6 +615,14 @@ onUnmounted(() => {
             class="sm-item"
             :class="{ 'sm-item-on': selected?.id === skill.id }"
           >
+            <input
+              class="sm-item-check"
+              type="checkbox"
+              :checked="isChecked(skill)"
+              :aria-label="`选择 ${skill.name}`"
+              data-test="mine-check"
+              @change="toggleChecked(skill)"
+            />
             <button class="sm-item-btn sm-grow" data-test="mine-item" @click="select(skill)">
               <div class="sm-item-body">
                 <div class="sm-item-head">
@@ -789,6 +967,37 @@ onUnmounted(() => {
         <button class="sm-btn" @click="creating = false">取消</button>
         <button class="sm-btn sm-btn--primary" data-test="create-submit" @click="create">
           创建
+        </button>
+      </template>
+    </ModalDialog>
+    <BatchTagDialog
+      :open="tagDialogOpen"
+      :initial-tags="checkedTagUnion"
+      :count="checkedCount"
+      :busy="batchBusy"
+      @close="tagDialogOpen = false"
+      @confirm="applyBatchTags"
+    />
+
+    <ModalDialog :open="deleteConfirmOpen" title="批量删除" @close="deleteConfirmOpen = false">
+      <p class="sm-mb-12">
+        将删除选中的 {{ checkedCount }} 个 Skill。这是软删除：云端数据留着，可以还原；
+        但各端同步后本地那份也会被删掉。
+      </p>
+      <template #footer>
+        <button
+          class="sm-btn sm-btn--quiet sm-btn--sm"
+          data-test="batch-delete-cancel"
+          @click="deleteConfirmOpen = false"
+        >
+          取消
+        </button>
+        <button
+          class="sm-btn sm-btn--danger sm-btn--sm"
+          data-test="batch-delete-confirm"
+          @click="applyBatchDelete"
+        >
+          确定删除
         </button>
       </template>
     </ModalDialog>

@@ -49,3 +49,18 @@ func CodeOf(err error) string {
 	}
 	return ""
 }
+
+// NetworkError 是请求没拿到答复时的错误：连不上、超时、DNS 失败。
+//
+// 与 ProblemError 分开是因为两者的处置方式不同：前者是服务端明确拒绝
+// 并给了错误码，后者只说明「没拿到结果」，调用方多半该重试。
+type NetworkError struct {
+	URL string
+	Err error
+}
+
+func (e *NetworkError) Error() string {
+	return fmt.Sprintf("请求 %s 失败: %v", e.URL, e.Err)
+}
+
+func (e *NetworkError) Unwrap() error { return e.Err }

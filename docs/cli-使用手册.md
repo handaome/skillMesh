@@ -151,10 +151,10 @@ skillmesh daemon logs --tail 50
 
 装之前先弄清几条规则：
 
-- **仓库地址必须是远程地址**。`file://` 和本地路径会被拒绝；`git@owner:repo.git`、`ssh://`、`https://` 三种形式不能混写。
+- **仓库地址必须是远程地址**。`file://`、本地路径（`./x`、`/abs/x`、`C:\repo`）和 `owner/repo` 这样的简写都会被拒绝，并明确告诉你该怎么写；`git@owner:repo.git`、`ssh://`、`https://` 三种形式不能混写。
 - `--path` **只有候选恰好一个时才能省略**，有多个会报错并列出候选让你挑。
 - `--all` 装仓库里的全部 Skill，与 `--path` 互斥。
-- `--agent` 决定装到哪：`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/` 里本机真实存在的那个（默认关着，要在 config.yaml 里打开）。
+- `--agent` 决定装到哪：`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/` 里本机真实存在的那个（默认关着，要在 config.yaml 里打开）。**也可以填 config.yaml 里自定义的 Agent**（`agents` 段下的键），登记到注册中心时照原样记下，不受服务端枚举限制。
 - `--scope user` 装到用户级（所有项目都能用）；`--scope project` 装到当前项目里、提交进版本控制给团队共享。
 - `--credential-ref` 给私有仓库用本机凭据管理器里的凭据引用，**不接受明文令牌**。
 - `--dry-run` 只列出会装什么，不落盘。
@@ -353,6 +353,160 @@ verify:
 「无变化」不记：每次同步都刷一遍没有变化，日志会被噪声淹掉。
 
 同步的这几类结果同时上报给服务端记审计——「本地那份被云端的删除带走了」只有客户端看得见，服务端那边只有版本记录。服务端审计的完整动作清单见[团队治理](团队治理.md#审计)。
+
+## 脚本与 CI 调用
+
+`--json` 是全局参数，作用在 stdout 与退出码上：stdout 只出 JSON，提示和错误都走 stderr，失败时按错误类型给出不同的退出码。脚本靠这两个判断「成没成」「该不该重试」。
+
+```bash
+./skillmesh.exe --json list                 # 本地安装清单
+./skillmesh.exe --json search react          # 云端搜索
+./skillmesh.exe --json info <skill-id>      # 详情、版本、扫描结论
+./skillmesh.exe --json installations        # 各台机器上装了什么
+./skillmesh.exe --json logs --tail 20       # 本机操作日志
+./skillmesh.exe --json scan --path ./skills # 本机扫描结果
+```
+
+目前支持 `--json` 的就是上面这六个命令。给别的命令加 `--json` 会在 stderr 提示「暂不支持」，输出仍是人读格式——不会悄悄混进半个 JSON。
+
+失败时 stderr 给一个信封：
+
+```json
+{
+  "ok": false,
+  "code": "VALIDATION_FAILED",
+  "message": "参数格式不对: skillId = not-exist-id-xyz",
+  "exit_code": 2,
+  "details": {
+    "http_status": 400,
+    "request_id": "req_39b67aa6e71f4880b7e56d2c76797467"
+  }
+}
+```
+
+`code` 沿用服务端 problem+json 的口径，同一个 `code` 在服务端和 CLI 里指的是同一件事。
+
+退出码：
+
+| 退出码 | 含义 | 脚本通常怎么办 |
+|---:|---|---|
+| `0` | 成功 | 继续 |
+| `1` | 未分类错误 | 记下来人工看 |
+| `2` | 参数或配置错误 | 改命令重试 |
+| `3` | 未登录/认证失败 | 先登录或换令牌 |
+| `4` | 权限不足 | 换账号，别重试 |
+| `5` | 网络或服务端不可用 | 退避后重试 |
+| `6` | 安全策略阻断 | 别重试，要人来处理 |
+| `7` | 检测到冲突 | 要人来定夺 |
+| `8` | 目标 Agent 或目录未检测到/不可写 | 检查环境 |
+| `9` | 目标资源不存在 | 换目标 |
+
+参数个数或 flag 写错也是 `2`，信封里 `code` 是 `INVALID_ARGUMENTS`。
+
+CI 里没有浏览器，用环境变量传令牌（见[从注册中心装一个 Skill](#从注册中心装一个-skill)）：
+
+```bash
+export SKILLMESH_TOKEN="..."
+./skillmesh.exe --json install <skill-id> --locked
+```
+
+## 让 Agent 来管理 Skill
+
+Claude Code、Codex 这类 Agent 可以替你查 Skill、装 Skill、把 Skill 发到团队——
+但只能走 CLI，不能直接往 Agent 的 skills 目录写文件。直接写会绕过可见性、
+审核与版本治理：装的东西不进注册中心，下次同步还会被当成「未受管的目录」。
+
+### 1. 把 CLI 放到 Agent 找得到的地方
+
+Agent 每次问 PATH 找 CLI 太靠不住，PATH 上的还可能是别的版本。用 `self-install`
+把当前这个 CLI 发布到固定路径：
+
+```bash
+./skillmesh.exe self-install
+# 已发布 C:\Users\<你>\AppData\Roaming\SkillMesh\bin\skillmesh.exe（版本 0.1.0）
+
+./skillmesh.exe self-install --check
+# 固定路径  C:\Users\<你>\AppData\Roaming\SkillMesh\bin\skillmesh.exe
+# 版本      0.1.0
+# 状态      可用
+```
+
+版本标记（`.version`）是**复制成功之后才写**的，所以状态只有三种：
+
+| 状态 | 含义 | 怎么办 |
+| --- | --- | --- |
+| 有二进制且有 `.version` | 完整可用 | 直接用 |
+| 有二进制没有 `.version` | 上次复制没成功 | 重跑一次 `self-install` |
+| 什么都没有 | 还没发布过 | 跑一次 `self-install` |
+
+### 2. 把操作契约装给 Agent
+
+操作契约在 `apps/cli/skills/manage-skills/SKILL.md`，是一份带 frontmatter 的
+Agent skill。复制到 Agent 的 skills 目录即可被自动加载：
+
+```bash
+# Claude Code
+cp apps/cli/skills/manage-skills/SKILL.md ~/.claude/skills/manage-skills/SKILL.md
+```
+
+契约里写清了三件事：
+
+- **心智模型**——库 / 可见性 / 版本 / 审核，Agent 才知道该发到哪里去。
+- **不可逆操作要人工确认**——真删、软删除、发到团队、回滚版本，都得先问过人。
+- **一条红线**——不许执行 `review approve`。审核人不能审自己发布的版本是
+  双人复核的底线，让 Agent 自动审批等于绕开它。
+
+契约里也带了 `--json` 输出与退出码的说明，Agent 脚本化调用时不用再猜。
+
+## 本地来源：--local 与 --file
+
+内网、离线或者还没进注册中心的东西，也能装：
+
+```bash
+# 从本地目录装
+./skillmesh.exe add --local ./my-skills --agent claude-code --scope user
+
+# 从本地 zip 装
+./skillmesh.exe install --file ./my-skill.zip --agent claude-code --scope user
+```
+
+**这类安装不进注册中心。** 本地来源没有签名、没走过服务端的扫描与审核，
+登记上去等于让未验证的内容冒充发布方的版本。它们只装到本机，
+来源写进锁文件（`source_type: local`），更新与卸载照常按锁文件走。
+
+两个不同的本地目录装同一个名字会被认成不同来源，不会互相覆盖。
+
+## 技能集合
+
+集合是「命名的一组 Skill」：团队把一套规范收成一个集合，新人一键装齐。
+
+```bash
+./skillmesh.exe group list                       # 列出我可见的集合
+./skillmesh.exe group show team-baseline        # 成员与我装了几个
+./skillmesh.exe group create team-baseline     --name "团队基线" --skill dogfood --skill skill-creator
+./skillmesh.exe group install team-baseline --agent claude-code   # 装齐
+```
+
+- 成员用 `--skill` 指定，slug 或 id 都行；可重复。
+- 建集合与改成员走 CLI，网页端看集合与已装情况——跟发布走 CLI 是同一个道理。
+- 徽标只算「我装了几个」：本人可见的数据。团队级覆盖率（谁在哪台机器上装了多少）
+  是另一种可见性，单独授权，不在这里混进来。
+- `group install` 逐个装：一个装不上不影响后面的，结果逐条报出来。
+
+## 诊断包
+
+提交 issue 时把诊断包一起给出去，省得来回问「你的配置长什么样」：
+
+```bash
+./skillmesh.exe logs --bundle ./diagnostics.zip
+```
+
+包里四样东西：`version.txt`（版本与运行环境）、`config.yaml`（脱敏后的配置）、
+`agents.txt`（各 Agent 的目录与可写状态）、`operations.log`（本机日志）。
+
+**里面已经脱敏**：家目录换成 `~`，令牌、邮箱、带凭据的 URL 全部遮蔽，
+日志逐行再脱敏一遍（脱敏功能上线前写的历史日志没有脱敏过）。
+诊断包是要往外发的，别把原始文件直接贴出来。
 
 ## 诊断
 

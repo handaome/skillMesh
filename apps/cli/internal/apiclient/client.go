@@ -88,7 +88,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("请求 %s 失败: %w", target, err)
+		return false, &NetworkError{URL: target, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {

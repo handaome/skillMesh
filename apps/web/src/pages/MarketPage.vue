@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { downloadArtifact, getSkill, getVersions, searchSkills } from '../api'
+import { downloadArtifact, fetchTags, getSkill, getVersions, searchSkills } from '../api'
 import { usePagedList } from '../composables/usePagedList'
 import { SCAN_STATUS_TEXT, VERSION_STATUS_TEXT, VISIBILITY_TEXT } from '../constants/status'
-import type { Skill, SkillVersion } from '../types'
+import type { Skill, SkillVersion, TagCount } from '../types'
 import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 import FileBrowser from '../components/FileBrowser.vue'
+import TagFilter from '../components/TagFilter.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,6 +18,12 @@ const query = ref('')
 const searched = ref(false)
 /** 可见性筛选。空串表示不过滤（看全部能看见的）。 */
 const visibility = ref('')
+/** 选中的标签。多选是「同时满足」。 */
+const selectedTags = ref<string[]>([])
+/** 只看没打标的。与选了标签互斥。 */
+const untagged = ref(false)
+/** 可选的标签与各自数量。 */
+const tagOptions = ref<TagCount[]>([])
 
 /**
  * 列表。服务端按游标翻页，超过一页的这里能接着往下取。
@@ -93,11 +100,30 @@ async function download(version: SkillVersion) {
  */
 async function search() {
   const q = query.value
+  void loadTags()
   const filters: Record<string, string> = {}
   if (visibility.value) filters.visibility = visibility.value
+  // 标签与「未打标」互斥，界面已经保证了，这里只管把条件传下去。
+  if (selectedTags.value.length) filters.tag = selectedTags.value[0]
+  if (untagged.value) filters.untagged = 'true'
   await loadPage({ q, filters })
   if (query.value !== q || error.value) return
   searched.value = true
+}
+
+/**
+ * 拉标签清单。
+ *
+ * 每次搜索都拉一遍：新建的 Skill 带的标签要能立刻出现在筛选器里，
+ * 否则用户建完标签还得刷新页面才看得见。
+ */
+async function loadTags() {
+  try {
+    tagOptions.value = await fetchTags()
+  } catch {
+    // 标签拉不到不该挡住列表：筛选器只是没有选项，搜索照常用。
+    tagOptions.value = []
+  }
 }
 
 /**
@@ -164,7 +190,10 @@ watch(
 
 // 进页面就把能看见的 Skill 列出来：市场是一张目录，
 // 空着让人先输关键词，等于让第一屏什么都不回答。
-onMounted(search)
+onMounted(() => {
+  void loadTags()
+  void search()
+})
 </script>
 
 <template>
@@ -321,6 +350,16 @@ onMounted(search)
         <option value="team">团队可见</option>
         <option value="private">私有</option>
       </select>
+      <!--
+        标签筛选。标签清单单独取：列表是游标分页的，从一页数据里汇总标签
+        汇总不全，用户想按只出现在第二页的标签筛选时就没有那个选项可点。
+      -->
+      <TagFilter
+        v-model="selectedTags"
+        v-model:untagged="untagged"
+        :tags="tagOptions"
+        @change="search"
+      />
       <span class="sm-spacer" />
       <span v-if="searched" class="sm-muted sm-sm sm-num" data-test="count">
         {{ countText }}

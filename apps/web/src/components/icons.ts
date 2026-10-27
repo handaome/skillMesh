@@ -10,6 +10,7 @@ export type IconName =
   | 'users'
   | 'review'
   | 'audit'
+  | 'layers'
   | 'menu'
   | 'close'
   | 'check'
@@ -23,6 +24,7 @@ export type IconName =
 export const PATHS: Record<IconName, string[]> = {
   market: ['M2.5 4.5h4v4h-4zM9.5 4.5h4v4h-4zM2.5 11.5h4v4h-4zM9.5 11.5h4v4h-4z'],
   box: ['M8 1.8l6 2.7v6.9l-6 2.8-6-2.8V4.5zM2 4.5l6 2.7 6-2.7M8 7.2v7'],
+  layers: ['M8 1.6l6.2 3.1L8 7.8 1.8 4.7zM2.2 8.1L8 11l5.8-2.9M2.2 11.3L8 14.2l5.8-2.9'],
   users: [
     'M6 7.5a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5zM2 13.5c0-2.2 1.8-3.5 4-3.5s4 1.3 4 3.5',
     'M11 3.4a2.25 2.25 0 010 4.4M11.6 10.2c1.5.35 2.4 1.5 2.4 3.3',

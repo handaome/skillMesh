@@ -2,11 +2,14 @@ package com.skillmesh.api.skill;
 
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.skill.dto.BatchArchiveRequest;
+import com.skillmesh.api.skill.dto.BatchTagRequest;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillResponse;
 import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import jakarta.validation.Valid;
 import java.net.URI;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -45,10 +48,12 @@ public class SkillController {
                           @RequestParam(required = false) String q,
                           @RequestParam(required = false) String visibility,
                           @RequestParam(required = false) String tag,
+                          @RequestParam(defaultValue = "false") boolean untagged,
                           @RequestParam(defaultValue = "false") boolean mine,
                           @RequestParam(required = false) Integer limit,
                           @RequestParam(required = false) String cursor) {
-        return skills.search(currentUserService.current(jwt), q, visibility, tag, mine, limit, cursor);
+        return skills.search(currentUserService.current(jwt), q, visibility, tag,
+            untagged, mine, limit, cursor);
     }
 
     @GetMapping("/{skillId}")
@@ -77,6 +82,29 @@ public class SkillController {
                                         @PathVariable UUID skillId) {
         skills.archive(currentUserService.current(jwt), skillId);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 批量改标签。
+     *
+     * 逐条独立：一条没权限不该把已经改好的也一起撤回来。权限与单条更新一致
+     * （只有属主能改），批量只是省了逐个点开详情页。
+     */
+    @PatchMapping("/batch/tags")
+    public Map<String, Object> batchTags(@AuthenticationPrincipal Jwt jwt,
+                                         @Valid @RequestBody BatchTagRequest req) {
+        return skills.batchUpdateTags(currentUserService.current(jwt), req);
+    }
+
+    /**
+     * 批量归档（删除）。
+     *
+     * 软删除：数据留着，可以还原。逐条独立，权限与单条删除一致。
+     */
+    @PostMapping("/batch/archive")
+    public Map<String, Object> batchArchive(@AuthenticationPrincipal Jwt jwt,
+                                            @Valid @RequestBody BatchArchiveRequest req) {
+        return skills.batchArchive(currentUserService.current(jwt), req);
     }
 
     /** 还原被删除的 Skill。 */

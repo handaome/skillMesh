@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/spf13/cobra"
 )
 
@@ -11,7 +12,7 @@ func newSearchCmd() *cobra.Command {
 	var visibility, tag string
 	var limit int
 	var mine bool
-	cmd := &cobra.Command{
+	cmd := supportsJSON(&cobra.Command{
 		Use:   "search [关键字]",
 		Short: "搜索可见的 Skill",
 		Args:  cobra.MaximumNArgs(1),
@@ -28,32 +29,43 @@ func newSearchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(page.Items) == 0 {
-				fmt.Println("没有匹配的 Skill")
-				return nil
+			if jsonEnabled() {
+				return writeJSON(map[string]any{
+					"items":    jsonItems(page.Items),
+					"has_more": page.HasMore,
+				})
 			}
-			w := newTable(os.Stdout)
-			fmt.Fprintln(w, "SLUG\t名称\t可见性\t最新版本\tID")
-			for _, skill := range page.Items {
-				latest := "-"
-				if skill.LatestVersion != nil {
-					latest = *skill.LatestVersion
-				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					skill.Slug, skill.Name, skill.Visibility, latest, skill.ID)
-			}
-			if err := w.Flush(); err != nil {
-				return err
-			}
-			if page.HasMore {
-				fmt.Println("还有更多结果，请缩小关键字范围。")
-			}
-			return nil
+			return printSearchTable(page)
 		},
-	}
+	})
 	cmd.Flags().StringVar(&visibility, "visibility", "", "按可见性过滤：private/team/organization/public")
 	cmd.Flags().StringVar(&tag, "tag", "", "按标签过滤")
 	cmd.Flags().IntVar(&limit, "limit", 20, "返回条数")
 	cmd.Flags().BoolVar(&mine, "mine", false, "只搜我名下的 Skill（个人私有空间）")
 	return cmd
+}
+
+// printSearchTable 打印人读表格。
+func printSearchTable(page apiclient.SkillPage) error {
+	if len(page.Items) == 0 {
+		fmt.Println("没有匹配的 Skill")
+		return nil
+	}
+	w := newTable(os.Stdout)
+	fmt.Fprintln(w, "SLUG\t名称\t可见性\t最新版本\tID")
+	for _, skill := range page.Items {
+		latest := "-"
+		if skill.LatestVersion != nil {
+			latest = *skill.LatestVersion
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			skill.Slug, skill.Name, skill.Visibility, latest, skill.ID)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if page.HasMore {
+		fmt.Println("还有更多结果，请缩小关键字范围。")
+	}
+	return nil
 }

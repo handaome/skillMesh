@@ -354,6 +354,74 @@
 }
 .sm-tag button:hover { background: var(--active); color: var(--text); }
 
+/* ---------- 标签筛选 ---------- */
+/* 可点的药丸：外观跟标签一致，多一个选中态。 */
+.sm-tagfilter { display: flex; flex-wrap: wrap; gap: 6px; }
+.sm-tagfilter-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
+  font-size: var(--fs-small);
+  font-weight: 500;
+}
+.sm-tagfilter-item:hover { background: var(--active); color: var(--text); }
+.sm-tagfilter-on { background: var(--data-bg); color: var(--data-ink); }
+.sm-tagfilter-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  opacity: 0.75;
+}
+
+/* ---------- 命令面板 ---------- */
+.sm-palette {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+.sm-palette-backdrop { position: absolute; inset: 0; background: rgb(10 13 16 / 45%); }
+.sm-palette-panel {
+  position: relative;
+  width: min(560px, calc(100vw - 32px));
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 32px rgb(10 13 16 / 14%);
+  overflow: hidden;
+}
+.sm-palette-input { border: 0; border-bottom: 1px solid var(--rule); border-radius: 0; }
+.sm-palette-input:focus { box-shadow: none; border-color: var(--rule); }
+.sm-palette-list { margin: 0; padding: 6px; list-style: none; overflow-y: auto; }
+.sm-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.sm-palette-on { background: var(--active); }
+.sm-palette-kind {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--pill-neutral-bg);
+  color: var(--pill-neutral-ink);
+  font-size: var(--fs-small);
+}
+.sm-palette-empty { padding: 20px; text-align: center; }
+
 /* ---------- 列表行 ---------- */
 /* 一行一个对象，行间一条细线。 */
 .sm-list { display: grid; }
@@ -378,6 +446,8 @@
 .sm-item-btn:focus-visible { outline-offset: -2px; }
 .sm-item-btn:hover .sm-item-body { background: var(--raised); }
 .sm-item-on { background: var(--active); }
+/* 行里的勾选框：行本身是按钮，勾选框与它并排——按钮里套按钮浏览器会拆开。 */
+.sm-item-check { flex: none; width: 16px; height: 16px; margin: 0; cursor: pointer; }
 .sm-item-static { cursor: default; }
 .sm-item-body {
   flex: 1;

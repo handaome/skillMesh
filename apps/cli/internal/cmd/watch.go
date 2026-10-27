@@ -321,7 +321,7 @@ func watchedDirs() []string {
 	var dirs []string
 	seen := map[string]bool{}
 	add := func(root string) {
-		for _, dir := range append([]string{root}, localSkills(root)...) {
+		for _, dir := range append([]string{root}, localSkills(root, true)...) {
 			if seen[dir] {
 				continue
 			}
@@ -425,7 +425,7 @@ func skillSnapshot() map[string]string {
 		if err != nil {
 			continue
 		}
-		for _, path := range localSkills(dir) {
+		for _, path := range localSkills(dir, true) {
 			digest, err := skillscan.DirDigest(path)
 			if err != nil {
 				continue

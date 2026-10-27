@@ -6,9 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
-	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 	"github.com/spf13/cobra"
@@ -24,19 +22,39 @@ func NewAddCmd() *cobra.Command {
 		agentNames                         []string
 		refType, updatePolicy              string
 		replace, all, dryRun               bool
+		localDir                           string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <repo-url>",
 		Short: "从 Git 仓库安装 Skill 到 Agent 目录",
 		Long: "解析仓库里的 Skill、扫描校验、安装到目标 Agent 目录，并把来源写进锁文件。\n" +
 			"只想看会装什么，加 --dry-run。",
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !contains([]string{"manual", "notify", "auto_safe"}, updatePolicy) {
 				return fmt.Errorf("--update-policy 只能是 manual / notify / auto_safe")
 			}
 			if refType != "" && !contains([]string{"branch", "tag", "commit", "default"}, refType) {
 				return fmt.Errorf("--ref-type 只能是 branch / tag / commit / default")
+			}
+			// 本地目录：只装到本机，来源写进锁文件，不进注册中心。
+			if localDir != "" {
+				if len(args) > 0 {
+					return fmt.Errorf("--local 与仓库地址不能同时用")
+				}
+				root, err := filepath.Abs(localDir)
+				if err != nil {
+					return err
+				}
+				return installFromDir(localInstallOptions{
+					Root: root, Source: "local:" + root, SourceType: "local",
+					Provider: "local", Subpath: subpath, All: all, Scope: scope,
+					Agents: agentNames, UpdatePolicy: updatePolicy,
+					Replace: replace, DryRun: dryRun,
+				})
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("要给仓库地址，或用 --local 指定本地目录")
 			}
 			repo, err := gitx.NormalizeURL(args[0])
 			if err != nil {
@@ -60,115 +78,21 @@ func NewAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			candidates, err := LocateCandidates(root, subpath, all)
-			if err != nil {
-				return err
-			}
-
-			projectRoot := mustGetwd()
-			targetScope := scope
-			if targetScope == "" {
-				targetScope = "project"
-				if projectRoot == "" {
-					targetScope = "user"
-				}
-			}
-			// --agent all：装到所有已启用的适配器（详细设计 §3.5）。
-			targets := agentNames
-			if len(targets) == 1 && targets[0] == "all" {
-				targets = syncAgentNames(nil)
-			}
-			if len(targets) == 0 {
-				return fmt.Errorf("没有已启用的 Agent 可装")
-			}
-
-			base, err := agent.Dir(Cfg, targets[0], targetScope, projectRoot)
-			if err != nil {
-				return err
-			}
-
-			// 先把全部候选校验一遍、定好计划，再动手装：
-			// 一个 Skill 有问题不该挡住其他全部。
-			plan := PlanInstalls(root, candidates, base, replace)
-			reportPlan(plan, base, dryRun)
-
-			if dryRun {
-				return nil
-			}
-
-			lock, err := lockfile.Load(projectRoot)
-			if err != nil {
-				return err
-			}
-			installed := 0
-			var installedItems []planItem
-			for _, item := range plan.Install {
-				// 每个目标 Agent 都装一份；一个失败不影响别的。
-				installedHere := false
-				for _, agentName := range targets {
-					base, err := agent.Dir(Cfg, agentName, targetScope, projectRoot)
-					if err != nil {
-						plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
-						continue
-					}
-					target := filepath.Join(base, item.Name)
-					if err := installer.InstallAtomic(item.Candidate.Dir, target, true); err != nil {
-						plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
-						continue
-					}
-					if err := installer.MarkInstalled(target, repo); err != nil {
-						plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
-						continue
-					}
-					// 多 Agent 时合并到同一条：锁文件一条对应一个 Skill，
-					// Agents 列出装到了哪些（Upsert 会按名字替换掉前一条）。
-					lock.Upsert(mergeAgents(&lock, lockfile.LockedSkill{
-						Name:           item.Name,
-						Repository:     repo,
-						Provider:       providerOf(repo),
-						Path:           item.RelPath,
-						RefType:        RefTypeOrDetect(root, ref, refType),
-						Ref:            ref,
-						ResolvedCommit: commit,
-						Scope:          targetScope,
-						UpdatePolicy:   updatePolicy,
-						InstalledHash:  InstalledDigest(target),
-						Agents:         []string{agentName},
-						// 记下实际装到哪：Agent 目录改了以后，
-						// 按配置重算的位置与当初装的对不上（设计文档 §9.1）。
-						TargetPath: target,
-						// 许可证识别结果只是线索，不等于可以再分发。
-						License: skillscan.DetectLicense(item.Candidate.Dir, root),
-					}))
-					installedHere = true
-				}
-				if installedHere {
-					installedItems = append(installedItems, item)
-					installed++
-				}
-			}
-			if err := lock.Save(projectRoot); err != nil {
-				return err
-			}
-			fmt.Printf("\n已安装 %d 个 Skill 到 %s\n", installed, base)
-			for _, item := range installedItems {
-				fmt.Printf("  %s —— %s\n", item.Name, skillscan.LicenseLine(item.Candidate.Dir, root))
-			}
-			if len(plan.Fail) > 0 {
-				fmt.Printf("失败 %d 个：\n", len(plan.Fail))
-				for _, failure := range plan.Fail {
-					fmt.Printf("  %s —— %s\n", failure.Path, failure.Why)
-				}
-			}
-			fmt.Printf("锁文件 %s\n", lockfile.FileName)
-			return nil
+			return installFromDir(localInstallOptions{
+				Root: root, Source: repo, SourceType: "git",
+				Repository: repo, Provider: providerOf(repo),
+				RefType: refType, Ref: ref, Commit: commit,
+				Subpath: subpath, All: all, Scope: scope, Agents: agentNames,
+				UpdatePolicy: updatePolicy, Replace: replace, DryRun: dryRun,
+			})
 		},
 	}
 	cmd.Flags().StringVar(&ref, "ref", "", "分支、标签或 commit")
 	cmd.Flags().StringVar(&refType, "ref-type", "",
 		"ref 的类型：branch / tag / commit / default（不填则自己判断）")
 	cmd.Flags().StringVar(&subpath, "path", "", "仓库内 Skill 子目录")
+	cmd.Flags().StringVar(&localDir, "local", "",
+		"从本地目录安装（不进注册中心，来源只写锁文件）")
 	cmd.Flags().StringSliceVar(&agentNames, "agent", []string{"claude-code"},
 		"目标 Agent，可重复指定；all 表示所有已启用的适配器")
 	cmd.Flags().StringVar(&scope, "scope", "", "user 或 project（默认有项目根时为 project）")
@@ -210,7 +134,12 @@ func LocateCandidates(root, subpath string, all bool) ([]skillscan.Candidate, er
 		}
 		return []skillscan.Candidate{{Dir: dir, Name: filepath.Base(dir)}}, nil
 	}
-	candidates, err := skillscan.Candidates(root)
+	// root 本身就是一个 Skill 目录时（本地 zip 解出来就是这样），
+	// 它自己就是候选，不用再往里找。
+	if _, err := os.Stat(filepath.Join(root, "SKILL.md")); err == nil {
+		return []skillscan.Candidate{{Dir: root, Name: filepath.Base(root)}}, nil
+	}
+	candidates, err := skillscan.Candidates(root, true)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +195,10 @@ type installPlan struct {
 
 // PlanInstalls 校验全部候选并决定装哪些。
 // 校验失败只影响它自己；安装名冲突或目标被占则跳过，不静默覆盖。
-func PlanInstalls(root string, candidates []skillscan.Candidate, base string, replace bool) installPlan {
+//
+// source 是来源标识（仓库地址），用来判断目标目录里装的是不是同一个东西。
+func PlanInstalls(root string, candidates []skillscan.Candidate, base string,
+	source string, replace bool) installPlan {
 	var plan installPlan
 	used := map[string]string{} // 安装名 -> 来源路径
 	for _, candidate := range candidates {
@@ -295,7 +227,7 @@ func PlanInstalls(root string, candidates []skillscan.Candidate, base string, re
 		used[name] = rel
 
 		target := filepath.Join(base, name)
-		if err := CheckTarget(target, replace); err != nil {
+		if err := CheckTarget(target, source, replace); err != nil {
 			plan.Skip = append(plan.Skip, skipItem{Path: rel, Why: err.Error()})
 			continue
 		}
@@ -341,17 +273,6 @@ func reportPlan(plan installPlan, base string, dryRun bool) {
 			fmt.Printf("  %s —— %s\n", failure.Path, failure.Why)
 		}
 	}
-}
-
-// CheckTarget 同名且不受管理时默认不覆盖，避免毁掉用户手写的 Skill。
-func CheckTarget(target string, replace bool) error {
-	if _, err := os.Stat(target); err != nil {
-		return nil
-	}
-	if replace || installer.IsManaged(target) {
-		return nil
-	}
-	return fmt.Errorf("目标已存在且不受 SkillMesh 管理: %s（用 --replace 覆盖）", target)
 }
 
 // providerOf 从仓库地址猜出来源类型（设计文档 §7.1）。

@@ -173,7 +173,7 @@ class SkillVisibilityTest {
 
     /** SQL 口径：走搜索用的那条查询，可见的就是查得到的。 */
     private Set<UUID> visibleBySql(CurrentUser user) {
-        List<SkillEntity> rows = skills.search(user.id(), null, null, null, false,
+        List<SkillEntity> rows = skills.search(user.id(), null, null, null, false, false,
             null, null, PageRequest.of(0, 1000));
         Set<UUID> all = Set.of(publicSkill, ownPrivateSkill, otherPrivateSkill, orgSkill, teamSkill);
         return rows.stream().map(SkillEntity::getId).filter(all::contains)

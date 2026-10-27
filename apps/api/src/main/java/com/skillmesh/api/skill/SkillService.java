@@ -8,21 +8,28 @@ import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.skill.dto.BatchArchiveRequest;
+import com.skillmesh.api.skill.dto.BatchTagRequest;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.skill.dto.DeletedSkillResponse;
 import com.skillmesh.api.skill.dto.SkillSourceInput;
 import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillResponse;
+import com.skillmesh.api.skill.dto.TagCountResponse;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class SkillService {
@@ -37,12 +44,78 @@ public class SkillService {
 
     private final AuditService audit;
 
+    private final TransactionTemplate transactions;
+
     public SkillService(SkillRepository skills, OrgService orgs, SourceRepository sources,
-                        AuditService audit) {
+                        AuditService audit, PlatformTransactionManager transactionManager) {
         this.skills = skills;
         this.orgs = orgs;
         this.sources = sources;
         this.audit = audit;
+        this.transactions = new TransactionTemplate(transactionManager);
+        // 每条一个独立事务。默认的 REQUIRED 会加入调用方的事务：
+        // 一条失败就把整个外层标记成 rollback-only，已经改好的跟着被撤回来。
+        this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    /**
+     * 批量改标签。
+     *
+     * 每条在自己的事务里：批量的语义是「逐条独立」，一条没权限不该把已经改好的
+     * 也一起撤回来。
+     *
+     * 权限不放宽：每条都照样走 update 里的判定（只有属主能改）。
+     */
+    public Map<String, Object> batchUpdateTags(CurrentUser user, BatchTagRequest request) {
+        List<Map<String, Object>> succeeded = new ArrayList<>();
+        List<Map<String, Object>> failed = new ArrayList<>();
+        for (UUID id : request.ids()) {
+            try {
+                transactions.executeWithoutResult(status -> doUpdate(user, id,
+                    new UpdateSkillRequest(null, null, request.tags(), null)));
+                succeeded.add(Map.of("id", id.toString()));
+            } catch (ApiException e) {
+                failed.add(Map.of("id", id.toString(), "code", e.code(),
+                    "message", String.valueOf(e.getMessage())));
+            } catch (RuntimeException e) {
+                failed.add(Map.of("id", id.toString(), "code", ErrorCodes.INTERNAL,
+                    "message", String.valueOf(e.getMessage())));
+            }
+        }
+        return batchResult(succeeded, failed);
+    }
+
+    /**
+     * 批量归档（删除）。
+     *
+     * 逐条独立，权限与单条删除一致：个人 Skill 只有属主能删，
+     * 团队/组织可见的要 publisher 及以上。
+     */
+    public Map<String, Object> batchArchive(CurrentUser user, BatchArchiveRequest request) {
+        List<Map<String, Object>> succeeded = new ArrayList<>();
+        List<Map<String, Object>> failed = new ArrayList<>();
+        for (UUID id : request.ids()) {
+            try {
+                transactions.executeWithoutResult(status -> doArchive(user, id));
+                succeeded.add(Map.of("id", id.toString()));
+            } catch (ApiException e) {
+                failed.add(Map.of("id", id.toString(), "code", e.code(),
+                    "message", String.valueOf(e.getMessage())));
+            } catch (RuntimeException e) {
+                failed.add(Map.of("id", id.toString(), "code", ErrorCodes.INTERNAL,
+                    "message", String.valueOf(e.getMessage())));
+            }
+        }
+        return batchResult(succeeded, failed);
+    }
+
+    /** 批量结果：过了的和没过的分开报。 */
+    private static Map<String, Object> batchResult(List<Map<String, Object>> succeeded,
+                                                    List<Map<String, Object>> failed) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("succeeded", succeeded);
+        result.put("failed", failed);
+        return result;
     }
 
     @Transactional
@@ -115,6 +188,11 @@ public class SkillService {
 
     @Transactional
     public SkillResponse update(CurrentUser user, UUID id, UpdateSkillRequest req) {
+        return doUpdate(user, id, req);
+    }
+
+    /** 改展示性元数据。批量也走这里——批量用 TransactionTemplate 开着事务，不走代理。 */
+    private SkillResponse doUpdate(CurrentUser user, UUID id, UpdateSkillRequest req) {
         SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
         if (!user.id().equals(entity.getOwnerUserId())) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能改这个 Skill");
@@ -159,6 +237,11 @@ public class SkillService {
      */
     @Transactional
     public void archive(CurrentUser user, UUID id) {
+        doArchive(user, id);
+    }
+
+    /** 归档。批量也走这里——批量用 TransactionTemplate 开着事务，不走代理。 */
+    private void doArchive(CurrentUser user, UUID id) {
         SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
         requireArchiveRight(user, entity);
         if (!SkillStatus.ACTIVE.equals(entity.getStatus())) {
@@ -280,15 +363,28 @@ public class SkillService {
 
     @Transactional(readOnly = true)
     public CursorPage<SkillResponse> search(CurrentUser user, String q, String visibility, String tag,
-                            boolean mine, Integer limit, String cursor) {
+                            boolean untagged, boolean mine, Integer limit, String cursor) {
         int size = limit == null ? DEFAULT_LIMIT : Math.clamp(limit, 1, MAX_LIMIT);
         CursorCodec.Cursor decoded = decodeCursor(cursor);
         // 团队/组织可见的 Skill：可见性条件交给 SQL 过滤，
         // 别把不该看到的查出来再在内存里筛——那等于没权限控制。
         List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibility, tag,
-            mine, decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
+            untagged, mine, decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
         return CursorPage.of(rows, size, SkillService::nextCursorOf)
             .map(page -> page.stream().map(SkillService::toResponse).toList());
+    }
+
+    /**
+     * 可见范围内的标签及数量。
+     *
+     * 口径与搜索一致：可见范围 + active。数量是给标签筛选器显示的——
+     * 让用户知道点下去大概会看到多少条。
+     */
+    @Transactional(readOnly = true)
+    public List<TagCountResponse> tags(CurrentUser user, boolean mine) {
+        return skills.visibleTagCounts(user.id(), mine).stream()
+            .map(row -> new TagCountResponse(row.getTag(), row.getCount()))
+            .toList();
     }
 
     /**

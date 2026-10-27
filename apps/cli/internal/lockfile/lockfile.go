@@ -25,6 +25,9 @@ type LockedSkill struct {
 	Name           string   `yaml:"name"`
 	SourceID       string   `yaml:"source_id,omitempty"`
 	Repository     string   `yaml:"repository"`
+	// SourceType 是来源类型：git（留空也算 git）/ local。
+	// 本地来源没有仓库地址，来源信息靠它和 Path 认。
+	SourceType    string   `yaml:"source_type,omitempty"`
 	Provider       string   `yaml:"provider,omitempty"`
 	Path           string   `yaml:"path"`
 	RefType        string   `yaml:"ref_type"`

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { currentOrg, selectOrganization } from './auth/currentOrg'
 import { ensureFresh, loadMe, logoutEndingSession, meError, session } from './auth/session'
 import AppIcon from './components/AppIcon.vue'
+import CommandPalette from './components/CommandPalette.vue'
 
 const router = useRouter()
 
@@ -24,6 +25,7 @@ const NAV = [
   { to: '/mine', label: '我的 Skill', icon: 'box' as const },
   { to: '/team', label: '团队', icon: 'users' as const },
   { to: '/reviews', label: '审核', icon: 'review' as const },
+  { to: '/groups', label: '集合', icon: 'layers' as const },
   { to: '/audit', label: '审计', icon: 'audit' as const },
 ]
 
@@ -71,6 +73,9 @@ function signOut() {
   </div>
 
   <div v-else class="app">
+    <!-- 命令面板：⌘K / Ctrl+K 打开，搜 Skill 或跳页面。 -->
+    <CommandPalette />
+
     <aside class="side" :class="{ open: navOpen }">
       <router-link class="side-brand" to="/" @click="navOpen = false">
         <!-- 标记：四块拼成的网，取自 SkillMesh 的「网」。 -->

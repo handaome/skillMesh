@@ -33,6 +33,16 @@ export interface Page<T> {
 export type SkillPage = Page<Skill>
 
 /**
+ * 一个标签及其数量。
+ *
+ * 数量给筛选器显示：用户点之前就知道大概会筛出多少条。
+ */
+export interface TagCount {
+  tag: string
+  count: number
+}
+
+/**
  * 已删除（归档）的 Skill。
  *
  * 服务端只返回当前用户自己删掉的那些——别人删的不在这儿。
@@ -269,7 +279,59 @@ export type AuditEventPage = Page<AuditEvent>
 /** 待审队列的一页。待审数没有上限，同样要能往下翻。 */
 export type PendingReviewPage = Page<PendingReview>
 
+/**
+ * 批量审核的结果。
+ *
+ * 逐条独立：过了的和没过的分开报。没过的那几条带原因，
+ * 用户能知道是哪一条、为什么。
+ */
+export interface BatchDecideResult {
+  succeeded: { skill_id: string; version: string }[]
+  failed: {
+    skill_id: string
+    version: string
+    code: string
+    message: string
+  }[]
+}
+
+/**
+ * 批量操作（改标签、归档）的结果。
+ *
+ * 与批量审核同一个形状：逐条独立，两边都报清楚。
+ */
+export interface BatchSkillResult {
+  succeeded: { id: string }[]
+  failed: { id: string; code: string; message: string }[]
+}
+
 /** 回收站里被删掉的文件（设计文档 §6.4：软删除、回收期内能找回）。 */
+/**
+ * 技能集合：命名的一组 Skill。
+ *
+ * 徽标只算「我装了几个」——本人可见的数据。团队级的覆盖率要另开权限，
+ * 不在这里混进来。
+ */
+export interface Group {
+  id: string
+  slug: string
+  name: string
+  description: string
+  visibility: string
+  member_count: number
+  installed_count: number
+  members: GroupMember[]
+}
+
+/** 集合里的一个 Skill。 */
+export interface GroupMember {
+  id: string
+  slug: string
+  name: string
+  latest_version: string | null
+  installed: boolean
+}
+
 export interface RecycleFile {
   path: string
   sha256: string
