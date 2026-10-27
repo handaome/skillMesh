@@ -16,6 +16,7 @@ import (
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/auth"
+	"github.com/handaome/skillmesh/apps/cli/internal/config"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 )
@@ -50,6 +51,9 @@ func newLoginCmd() *cobra.Command {
 				if cfg.ClientID != "" {
 					clientID = cfg.ClientID
 				}
+				// 记住这台服务端：登录成功后再写进配置，
+				// 否则后续 sync 还会连默认的 localhost。
+				Cfg.Server = server
 			}
 			if issuerURL == "" {
 				issuerURL = os.Getenv("SM_KEYCLOAK_ISSUER")
@@ -65,6 +69,10 @@ func newLoginCmd() *cobra.Command {
 			path := tokenPath()
 			if err := tokens.Save(path); err != nil {
 				return err
+			}
+			// 登录成功才写服务端地址：失败时不该把配置改掉。
+			if err := config.SaveServer(Cfg.Server); err != nil {
+				fmt.Fprintf(os.Stderr, "提示：服务端地址没写进配置（%v），后续命令请用 --server 指定\n", err)
 			}
 			fmt.Printf("已登录，令牌有效期至 %s\n",
 				tokens.ExpiresAt.Local().Format(time.RFC3339))

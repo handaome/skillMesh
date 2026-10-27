@@ -232,3 +232,59 @@ func expandHome(path string) string {
 	}
 	return path
 }
+
+// SaveServer 把服务端地址写进 config.yaml，保留文件里已有的其他配置与注释。
+//
+// login <服务端地址> 之后必须记住它：登录的是远程服务端，后续 sync
+// 不能还连默认的 localhost。
+func SaveServer(server string) error {
+	configDir, _ := DefaultPaths()
+	path := filepath.Join(configDir, "config.yaml")
+
+	var doc yaml.Node
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			return fmt.Errorf("解析 config.yaml: %w", err)
+		}
+	case os.IsNotExist(err):
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{
+			{Kind: yaml.MappingNode},
+		}}
+	default:
+		return fmt.Errorf("读取 config.yaml: %w", err)
+	}
+	if len(doc.Content) == 0 {
+		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fmt.Errorf("config.yaml 顶层不是键值对")
+	}
+
+	value := strings.TrimRight(server, "/")
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "server" {
+			continue
+		}
+		root.Content[i+1].Value = value
+		root.Content[i+1].Tag = "!!str"
+		return writeYAML(path, &doc)
+	}
+	root.Content = append(root.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "server"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+	return writeYAML(path, &doc)
+}
+
+func writeYAML(path string, doc *yaml.Node) error {
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
