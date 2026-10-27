@@ -108,6 +108,10 @@ public class ArtifactService {
             throw new ApiException(422, ErrorCodes.DIGEST_MISMATCH,
                 "制品摘要不匹配：声明 " + expectedSha256 + "，实际 " + actual);
         }
+        // 收下之前先确认这确实是 zip：Java 的 ZipInputStream 对不是 zip 的字节不报错，
+        // 它会返回一份空清单，于是 tar.gz、错误页都能被当成「空制品」发布出去，
+        // 直到客户端安装时才炸（Go 的 archive/zip 是严格的）。
+        ZipManifest.requireZip(bytes);
         // 同一份内容已经有正式对象就复用它，不往桶里再写一份。
         String key = store(actual, bytes);
         storage.delete(tempKey);

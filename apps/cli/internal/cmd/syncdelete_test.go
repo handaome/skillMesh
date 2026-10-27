@@ -19,6 +19,14 @@ func cloudDeleteOpts(slug, id string, dryRun bool) SyncOptions {
 	}
 }
 
+// fakeSlugFinder 假装云端某些 slug 上有活着的 Skill。
+type fakeSlugFinder map[string]apiclient.Skill
+
+func (f fakeSlugFinder) FindSkillBySlug(_ context.Context, slug string) (apiclient.Skill, bool, error) {
+	skill, ok := f[slug]
+	return skill, ok, nil
+}
+
 // 云端删掉、本地基线里就是它：本地那份要跟着删。
 func TestApplyCloudDeletesRemovesLocalCopy(t *testing.T) {
 	state := syncstate.State{Skills: []syncstate.Entry{
@@ -28,7 +36,7 @@ func TestApplyCloudDeletesRemovesLocalCopy(t *testing.T) {
 	targets := []SyncTarget{
 		{Name: "yuanbao", Agent: "claude-code", Path: `C:\Users\u\.claude\skills\yuanbao`},
 	}
-	results, kept := applyCloudDeletes(context.Background(), &state, targets,
+	results, kept := applyCloudDeletes(context.Background(), nil, &state, targets,
 		cloudDeleteOpts("yuanbao", "id-1", true))
 	if len(kept) != 0 {
 		t.Fatalf("留在待同步里的 %d 条，want 0", len(kept))
@@ -48,7 +56,7 @@ func TestApplyCloudDeletesBlocksUploadOfForeignCopy(t *testing.T) {
 	targets := []SyncTarget{
 		{Name: "yuanbao", Agent: "claude-code", Path: `C:\Users\u\.claude\skills\yuanbao`},
 	}
-	results, kept := applyCloudDeletes(context.Background(), &state, targets,
+	results, kept := applyCloudDeletes(context.Background(), nil, &state, targets,
 		cloudDeleteOpts("yuanbao", "id-1", true))
 	if len(kept) != 0 {
 		t.Fatalf("留在待同步里的 %d 条，want 0（不能上传）", len(kept))
@@ -64,7 +72,7 @@ func TestApplyCloudDeletesBlocksUploadOfUnknownCopy(t *testing.T) {
 	targets := []SyncTarget{
 		{Name: "yuanbao", Agent: "claude-code", Path: `C:\Users\u\.claude\skills\yuanbao`},
 	}
-	results, kept := applyCloudDeletes(context.Background(), &state, targets,
+	results, kept := applyCloudDeletes(context.Background(), nil, &state, targets,
 		cloudDeleteOpts("yuanbao", "id-1", true))
 	if len(kept) != 0 {
 		t.Fatalf("留在待同步里的 %d 条，want 0（不能上传）", len(kept))
@@ -80,12 +88,52 @@ func TestApplyCloudDeletesKeepsUnrelated(t *testing.T) {
 	targets := []SyncTarget{
 		{Name: "slides", Agent: "claude-code", Path: `C:\Users\u\.claude\skills\slides`},
 	}
-	results, kept := applyCloudDeletes(context.Background(), &state, targets,
+	results, kept := applyCloudDeletes(context.Background(), nil, &state, targets,
 		cloudDeleteOpts("yuanbao", "id-1", true))
 	if len(kept) != 1 {
 		t.Fatalf("留在待同步里的 %d 条，want 1", len(kept))
 	}
 	if len(results) != 0 {
 		t.Fatalf("结果 %v，want 空", results)
+	}
+}
+
+// 删除记录会过时：删掉之后又用同一个 slug 重建过一个（或者还原成了另一个
+// Skill），云端这个 slug 上有活着的 Skill——本地这份没记过基线时，
+// 该跟活着的那份对账，不能被一条过期记录拦在外面。
+func TestApplyCloudDeletesIgnoresStaleTombstone(t *testing.T) {
+	state := syncstate.State{}
+	targets := []SyncTarget{
+		{Name: "yuanbao", Agent: "claude-code", Path: `C:\Users\u\.claude\skills\yuanbao`},
+	}
+	finder := fakeSlugFinder{"yuanbao": {ID: "id-2", Slug: "yuanbao"}}
+	results, kept := applyCloudDeletes(context.Background(), finder, &state, targets,
+		cloudDeleteOpts("yuanbao", "id-1", true))
+	if len(kept) != 1 {
+		t.Fatalf("留在待同步里的 %d 条，want 1（该跟活着的 Skill 对账）", len(kept))
+	}
+	if len(results) != 0 {
+		t.Fatalf("结果 %v，want 空", results)
+	}
+}
+
+// 本地这份正是被删掉的那个，slug 后来又被重建了：本地这份照样要删，
+// 删完 sync 再把重建的那个拉下来。
+func TestApplyCloudDeletesRemovesDeletedCopyEvenWhenSlugRebuilt(t *testing.T) {
+	state := syncstate.State{Skills: []syncstate.Entry{
+		{Name: "yuanbao", Agent: "claude-code", SkillID: "id-1",
+			Path: `C:\Users\u\.claude\skills\yuanbao`},
+	}}
+	targets := []SyncTarget{
+		{Name: "yuanbao", Agent: "claude-code", Path: `C:\Users\u\.claude\skills\yuanbao`},
+	}
+	finder := fakeSlugFinder{"yuanbao": {ID: "id-2", Slug: "yuanbao"}}
+	results, kept := applyCloudDeletes(context.Background(), finder, &state, targets,
+		cloudDeleteOpts("yuanbao", "id-1", true))
+	if len(kept) != 0 {
+		t.Fatalf("留在待同步里的 %d 条，want 0", len(kept))
+	}
+	if len(results) != 1 || results[0].Outcome != WouldDelete {
+		t.Fatalf("结果 %v，want 一条将删除", results)
 	}
 }

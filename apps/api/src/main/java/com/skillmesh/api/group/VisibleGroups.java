@@ -1,4 +1,4 @@
-package com.skillmesh.api.skill;
+package com.skillmesh.api.group;
 
 import com.skillmesh.api.org.Roles;
 
@@ -15,7 +15,7 @@ import com.skillmesh.api.org.Roles;
  * 片段里的表别名固定为 {@code g}（skill_groups），参数名固定为 {@code :owner}。
  *
  * team 可见的 Skill：该团队成员，或该组织的 owner/admin 能看——与
- * {@link SkillService#canView} 同一口径，两处必须一起改，
+ * {@link com.skillmesh.api.skill.SkillService#canView} 同一口径，两处必须一起改，
  * 一处改了另一处没改，搜索与直读就对不上了。
  * 组织里的普通成员看不到别的团队的 Skill：团队可见归团队管，
  * 放行到组织管理员为止（他们在审核队列里能批，「能批不能看」说不通）。

@@ -67,6 +67,13 @@ func describeListError(err error) string {
 		"；为免把云端删掉的 Skill 复活，本次不做上传"
 }
 
+// slugFinder 找云端当前占着某个 slug 的 Skill。
+//
+// 只看活着的（服务端搜索按 status=active 过滤）：归档的 Skill 不算。
+type slugFinder interface {
+	FindSkillBySlug(ctx context.Context, slug string) (apiclient.Skill, bool, error)
+}
+
 // applyCloudDeletes 处理云端删掉的 Skill：本地那份跟着删掉，
 // 或者至少不再往云端上传。
 //
@@ -78,17 +85,23 @@ func describeListError(err error) string {
 //     或者用户自己放的目录。不动它，但**绝不能上传**——
 //     云端明确删过，上传就是复活。
 //
+// 但删除记录会过时：用户删掉之后又用同一个 slug 重新发布过（或者还原成了
+// 另一个 Skill），这时云端这个 slug 上有活着的 Skill，删除记录说的已经不是
+// 现在这件事了——本地这份该跟活着的那份对账，不该被一条过期记录拦在外面。
+//
 // 返回处理结果，以及剩下的待同步目标（被拦下的不在其中）。
-func applyCloudDeletes(ctx context.Context, state *syncstate.State, targets []SyncTarget,
-	options SyncOptions) ([]syncResult, []SyncTarget) {
+func applyCloudDeletes(ctx context.Context, finder slugFinder, state *syncstate.State,
+	targets []SyncTarget, options SyncOptions) ([]syncResult, []SyncTarget) {
 
 	if len(options.CloudDeletes) == 0 {
 		return nil, targets
 	}
 	var results []syncResult
 	kept := make([]SyncTarget, 0, len(targets))
+	alive := map[string]bool{}
 	for _, target := range targets {
-		tomb, ok := options.CloudDeletes[slugOf(target)]
+		slug := slugOf(target)
+		tomb, ok := options.CloudDeletes[slug]
 		if !ok {
 			kept = append(kept, target)
 			continue
@@ -97,25 +110,22 @@ func applyCloudDeletes(ctx context.Context, state *syncstate.State, targets []Sy
 		// 本地这份是不是被删掉的那个：基线里记的 id 与删除记录一致才算。
 		mine := known && entry.SkillID != "" && entry.SkillID == tomb.ID
 		if !mine {
+			// 不是被删的那个：本地留着，但绝不能上传——云端删过，上传就是复活。
+			// 除非云端这个 slug 现在有活着的 Skill：那条删除记录已经过时
+			// （删掉之后又用同名重建过），这时按普通对账处理。
+			live, err := slugIsAlive(ctx, finder, alive, slug)
+			if err == nil && live {
+				kept = append(kept, target)
+				continue
+			}
 			results = append(results, syncResult{Name: target.Name, Path: target.Path,
 				Outcome: Skipped,
 				Detail:  "云端已删除这个 Skill，本机这份不与之对账，也不上传（避免复活）"})
 			continue
 		}
-		if options.DryRun {
-			results = append(results, syncResult{Name: target.Name, Path: target.Path,
-				Outcome: WouldDelete, Detail: "云端已删除，演练：本地将被移入回收站"})
-			continue
-		}
-		result, err := deleteLocalCopy(entry)
-		if err != nil {
-			results = append(results, syncResult{Name: target.Name, Path: target.Path,
-				Outcome: Failed, Detail: err.Error()})
-			continue
-		}
-		// 基线一起清掉：留着它，下一轮会把删掉的东西又传回云端。
-		state.Remove(entry.Name, entry.Agent)
-		results = append(results, result)
+		// 就是被删的那个：本地这份跟着删。slug 上后来有没有重建的 Skill
+		// 不影响这一步——删完之后 sync 会把重建的那个拉下来。
+		results = append(results, deleteMine(state, entry, target, options))
 	}
 	if len(results) > 0 && !options.DryRun {
 		if err := state.Save(Cfg.ConfigDir); err != nil {
@@ -124,6 +134,46 @@ func applyCloudDeletes(ctx context.Context, state *syncstate.State, targets []Sy
 		}
 	}
 	return results, kept
+}
+
+// deleteMine 处理「本地这份就是被删掉的那个」：移进本机回收站，基线一起清掉。
+//
+// 基线不清掉不行：留着它，下一轮同步会把删掉的东西又传回云端。
+func deleteMine(state *syncstate.State, entry syncstate.Entry, target SyncTarget,
+	options SyncOptions) syncResult {
+
+	if options.DryRun {
+		return syncResult{Name: target.Name, Path: target.Path,
+			Outcome: WouldDelete, Detail: "云端已删除，演练：本地将被移入回收站"}
+	}
+	result, err := deleteLocalCopy(entry)
+	if err != nil {
+		return syncResult{Name: target.Name, Path: target.Path,
+			Outcome: Failed, Detail: err.Error()}
+	}
+	state.Remove(entry.Name, entry.Agent)
+	return result
+}
+
+// slugIsAlive 判断云端现在有没有活着的 Skill 占着这个 slug，结果按 slug 缓存。
+//
+// 查不到（网络问题）时按「不活」处理：宁可先不传，也不要把云端删掉的 Skill
+// 复活——那是用户最不能接受的结果。
+func slugIsAlive(ctx context.Context, finder slugFinder, cache map[string]bool,
+	slug string) (bool, error) {
+
+	if value, ok := cache[slug]; ok {
+		return value, nil
+	}
+	if finder == nil {
+		return false, nil
+	}
+	_, found, err := finder.FindSkillBySlug(ctx, slug)
+	if err != nil {
+		return false, err
+	}
+	cache[slug] = found
+	return found, nil
 }
 
 // slugOf 算本地这份在云端对应的 slug：目录名转的，与发布时用的是同一套规则。

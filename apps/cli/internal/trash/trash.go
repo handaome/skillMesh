@@ -61,9 +61,10 @@ func (s *Store) Items() ([]Item, error) {
 	}
 	var items []Item
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+		// 不过滤类型，全列出来：Agent 目录下的 Skill 可能是一个 junction，
+		// Windows 上它连 ModeSymlink 都不报（模式位是 irregular），
+		// 按类型过滤会把它们漏掉——用户看着「删了却找不回」。
+		// 回收站是这个目录的唯一使用者，里面不会混进别的东西。
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -85,10 +86,12 @@ func (s *Store) Items() ([]Item, error) {
 // Restore 把回收站里的一条放回目标路径。
 func (s *Store) Restore(entry, to string) error {
 	from := filepath.Join(s.dir, entry)
-	if _, err := os.Stat(from); err != nil {
+	// 用 Lstat：条目可能是个链接，Stat 会跟着它走，
+	// 目标目录没了就变成「回收站里没有这条」——明明还在。
+	if _, err := os.Lstat(from); err != nil {
 		return fmt.Errorf("回收站里没有 %s", entry)
 	}
-	if _, err := os.Stat(to); err == nil {
+	if _, err := os.Lstat(to); err == nil {
 		return fmt.Errorf("目标已存在，先处理掉它：%s", to)
 	}
 	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {

@@ -30,6 +30,9 @@ public final class ZipManifest {
     /** 制品里最多这么多 entry。清单整份存进 jsonb，条数没上限能把库撑爆。 */
     public static final int MAX_ENTRIES = 10_000;
 
+    /** zip 本地文件头的魔数（PK\x03\x04）。 */
+    private static final byte[] ZIP_MAGIC = {0x50, 0x4B, 0x03, 0x04};
+
     /** 解压后的总字节上限。压缩包本身有 50MB 上限，解压后可以大出几十倍。 */
     public static final long MAX_TOTAL_BYTES = 200L << 20;
 
@@ -40,6 +43,59 @@ public final class ZipManifest {
     public static final long MAX_FILE_BYTES = 20L << 20;
 
     private ZipManifest() {}
+
+    /**
+     * 确认这批字节是一份 zip 归档。
+     *
+     * Java 的 ZipInputStream 对不是 zip 的字节**不报错**：它扫不到本地文件头就
+     * 直接返回空清单。于是一份 tar.gz、一段 JSON 错误页，都能被当成「空制品」
+     * 收下、发布出去，直到客户端安装时才炸（Go 的 archive/zip 是严格的，直接报
+     * not a valid zip file）。发布这道闸得自己把住。
+     */
+    public static void requireZip(byte[] bytes) {
+        if (bytes.length >= ZIP_MAGIC.length
+            && bytes[0] == ZIP_MAGIC[0] && bytes[1] == ZIP_MAGIC[1]
+            && bytes[2] == ZIP_MAGIC[2] && bytes[3] == ZIP_MAGIC[3]) {
+            return;
+        }
+        throw new ApiException(422, ErrorCodes.VALIDATION_FAILED,
+            "上传内容不是 zip 归档：制品必须是 zip（收到的是 " + describeFormat(bytes) + "）");
+    }
+
+    /**
+     * 清单里有没有 Skill 根。
+     *
+     * 口径与 CLI 安装器的 findSkillRoot 一致：根目录下的 SKILL.md，
+     * 或者只包了一层目录（{@code <目录>/SKILL.md}）。
+     */
+    public static boolean hasSkillRoot(List<Map<String, Object>> manifest) {
+        if (find(manifest, "SKILL.md") != null) {
+            return true;
+        }
+        for (Map<String, Object> item : manifest) {
+            String path = String.valueOf(item.get("path"));
+            int slash = path.indexOf('/');
+            if (slash > 0 && path.indexOf('/', slash + 1) < 0 && path.endsWith("/SKILL.md")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 说清收到的是什么格式，省得用户对着一个 422 猜。 */
+    private static String describeFormat(byte[] bytes) {
+        if (bytes.length == 0) {
+            return "空内容";
+        }
+        if (bytes.length >= 2 && (bytes[0] & 0xFF) == 0x1F && (bytes[1] & 0xFF) == 0x8B) {
+            return "gzip 压缩包（tar.gz？）";
+        }
+        if (bytes.length >= 4 && bytes[0] == '<' && bytes[1] == '!' && bytes[2] == 'D'
+            && bytes[3] == 'O') {
+            return "HTML 页面";
+        }
+        return "非 zip 字节";
+    }
 
     /**
      * 逐文件算摘要，按路径排序。

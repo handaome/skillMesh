@@ -205,6 +205,7 @@ public class UploadService {
             // 算清单的同时验包：重名 entry 的包是非法制品，不能变成正式制品。
             content = readArtifact(promoted.storageKey());
             manifest = ZipManifest.of(content);
+            requireSkillRoot(manifest);
             // 详细设计 §13：服务端重新计算归档内实际路径和哈希，并与上传声明比对。
             // 比对的结果是用真值——声明跟真包不符也照收，但记一笔，
             // 免得发布方以为声明说了算，审核面板却列着另一份文件清单。
@@ -301,6 +302,18 @@ public class UploadService {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "云端已被别人改动（你看到的是 " + ContentDigest.shortDigest(expected) + "，现在是 "
                     + ContentDigest.shortDigest(cloud) + "），请重新对账");
+        }
+    }
+
+    /**
+     * 包里得有 Skill 根：客户端装完要能找到 SKILL.md。
+     *
+     * 找不到就是一份装不起来的制品——发布时就拒，别等用户装的时候才炸。
+     */
+    private void requireSkillRoot(List<Map<String, Object>> manifest) {
+        if (!ZipManifest.hasSkillRoot(manifest)) {
+            throw new ApiException(422, ErrorCodes.VALIDATION_FAILED,
+                "制品里没有 SKILL.md：Skill 根目录必须有 SKILL.md");
         }
     }
 

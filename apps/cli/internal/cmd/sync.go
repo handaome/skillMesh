@@ -150,7 +150,7 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 		return nil, syncqueue.Queue{}, err
 	}
 	// 清单按 slug 索引，删哪些得等扫出本地有哪些才知道。
-	deleteResults, targets := applyCloudDeletes(ctx, &state, targets, options)
+	deleteResults, targets := applyCloudDeletes(ctx, client, &state, targets, options)
 	if !cloud.Known {
 		deleteResults = append(deleteResults, syncResult{Name: "云端删除同步",
 			Outcome: Failed, Detail: describeListError(cloud.ListError)})
