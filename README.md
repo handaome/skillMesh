@@ -78,9 +78,17 @@ cd apps/api && ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 
 ### 4. 构建 CLI
 
+需要 Go 1.26+。
+
 ```bash
+# Linux / macOS
+cd apps/cli && go build -o skillmesh ./cmd/skillmesh
+
+# Windows
 cd apps/cli && go build -o skillmesh.exe ./cmd/skillmesh
 ```
+
+也可以用交叉编译：`GOOS=linux GOARCH=amd64 go build -o skillmesh ./cmd/skillmesh`。
 
 ### 5. 启动前端
 

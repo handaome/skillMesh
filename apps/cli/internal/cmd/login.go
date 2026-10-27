@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
@@ -23,12 +24,14 @@ import (
 const loopbackPort = 53682
 
 func newLoginCmd() *cobra.Command {
+	var manual bool
 	cmd := &cobra.Command{
 		Use:   "login [服务端地址]",
 		Short: "通过浏览器授权码 + PKCE 登录",
 		Long: "登录 SkillMesh。位置参数是服务端地址（设计文档 §7.4 的用法），\n" +
 			"登录所需的 OIDC issuer 从服务端的公开配置里取；\n" +
-			"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer。",
+			"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer。\n" +
+			"没有图形界面时加 --manual：打印授权地址，手动粘贴回调 URL。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var issuerURL string
@@ -55,7 +58,7 @@ func newLoginCmd() *cobra.Command {
 				return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
 					"或设环境变量 SM_KEYCLOAK_ISSUER")
 			}
-			tokens, err := runPkceFlow(cmd.Context(), issuerURL, clientID)
+			tokens, err := runPkceFlow(cmd.Context(), issuerURL, clientID, manual)
 			if err != nil {
 				return err
 			}
@@ -69,6 +72,8 @@ func newLoginCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&manual, "manual", false,
+		"无浏览器环境：打印授权地址，手动粘贴回调 URL")
 	return cmd
 }
 
@@ -94,16 +99,42 @@ type callbackResult struct {
 
 // runPkceFlow 打开浏览器让用户登录，回调端口在环回地址上一次性监听。
 // CLI 不接收用户密码（详细设计 §2.1 身份认证）。
-func runPkceFlow(ctx context.Context, issuer, clientID string) (auth.Tokens, error) {
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", loopbackPort))
-	if err != nil {
-		return auth.Tokens{}, fmt.Errorf("监听回调端口 %d 失败: %w", loopbackPort, err)
-	}
-	defer listener.Close()
-
+//
+// manual 用于没有图形界面的机器：不监听端口，也不开浏览器，
+// 由用户把浏览器跳转后的地址粘回来。
+func runPkceFlow(ctx context.Context, issuer, clientID string, manual bool) (auth.Tokens, error) {
 	verifier := auth.NewCodeVerifier()
 	state := auth.RandomState()
 	redirect := fmt.Sprintf("http://127.0.0.1:%d/callback", loopbackPort)
+
+	issuer = strings.TrimRight(issuer, "/")
+	oauthConfig := oauth2.Config{
+		ClientID:    clientID,
+		RedirectURL: redirect,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  issuer + "/protocol/openid-connect/auth",
+			TokenURL: issuer + "/protocol/openid-connect/token",
+		},
+		Scopes: []string{"openid", "profile", "email"},
+	}
+	authURL := appendQuery(oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline), map[string]string{
+		"code_challenge":        verifier.Challenge,
+		"code_challenge_method": "S256",
+	})
+	fmt.Println("在浏览器中打开以下地址完成登录：")
+	fmt.Println(authURL)
+
+	if manual {
+		return manualCallback(ctx, oauthConfig, verifier, state)
+	}
+	openBrowser(authURL)
+
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", loopbackPort))
+	if err != nil {
+		return auth.Tokens{}, fmt.Errorf(
+			"监听回调端口 %d 失败（无图形界面时加 --manual）: %w", loopbackPort, err)
+	}
+	defer listener.Close()
 
 	done := make(chan callbackResult, 1)
 	server := &http.Server{
@@ -137,24 +168,6 @@ func runPkceFlow(ctx context.Context, issuer, clientID string) (auth.Tokens, err
 	go server.Serve(listener)
 	defer server.Shutdown(context.Background())
 
-	issuer = strings.TrimRight(issuer, "/")
-	oauthConfig := oauth2.Config{
-		ClientID:    clientID,
-		RedirectURL: redirect,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  issuer + "/protocol/openid-connect/auth",
-			TokenURL: issuer + "/protocol/openid-connect/token",
-		},
-		Scopes: []string{"openid", "profile", "email"},
-	}
-	authURL := appendQuery(oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline), map[string]string{
-		"code_challenge":        verifier.Challenge,
-		"code_challenge_method": "S256",
-	})
-	fmt.Println("在浏览器中打开以下地址完成登录：")
-	fmt.Println(authURL)
-	openBrowser(authURL)
-
 	select {
 	case result := <-done:
 		if result.err != nil {
@@ -165,13 +178,55 @@ func runPkceFlow(ctx context.Context, issuer, clientID string) (auth.Tokens, err
 		if err != nil {
 			return auth.Tokens{}, err
 		}
-		return auth.Tokens{
-			AccessToken:  token.AccessToken,
-			RefreshToken: token.RefreshToken,
-			ExpiresAt:    token.Expiry,
-		}, nil
+		return authTokens(token), nil
 	case <-time.After(5 * time.Minute):
 		return auth.Tokens{}, fmt.Errorf("登录超时（5 分钟）")
+	}
+}
+
+// manualCallback 让用户粘贴浏览器跳转后的完整地址。
+//
+// 浏览器跳到的 127.0.0.1:53682 是打开它的那台机器的回环地址，
+// 页面通常打不开，但地址栏里带着 code，复制回来就能换令牌。
+func manualCallback(ctx context.Context, config oauth2.Config,
+	verifier auth.Verifier, state string) (auth.Tokens, error) {
+
+	fmt.Println("登录后浏览器会跳到 http://127.0.0.1:53682/callback?code=...；")
+	fmt.Println("页面打不开没关系，把地址栏里的完整 URL 粘贴到这里回车：")
+
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line = strings.Trim(strings.TrimSpace(line), `"'`)
+	if err != nil && line == "" {
+		return auth.Tokens{}, fmt.Errorf("读取回调地址失败: %w", err)
+	}
+	parsed, err := url.Parse(line)
+	if err != nil {
+		return auth.Tokens{}, fmt.Errorf("回调地址看不懂: %w", err)
+	}
+	query := parsed.Query()
+	if query.Get("state") != state {
+		return auth.Tokens{}, fmt.Errorf("state 不匹配：粘贴的可能是另一次登录的地址")
+	}
+	if desc := query.Get("error"); desc != "" {
+		return auth.Tokens{}, fmt.Errorf("授权失败: %s", desc)
+	}
+	code := query.Get("code")
+	if code == "" {
+		return auth.Tokens{}, fmt.Errorf("地址里没有 code 参数")
+	}
+	token, err := config.Exchange(ctx, code,
+		oauth2.SetAuthURLParam("code_verifier", verifier.Verifier))
+	if err != nil {
+		return auth.Tokens{}, err
+	}
+	return authTokens(token), nil
+}
+
+func authTokens(token *oauth2.Token) auth.Tokens {
+	return auth.Tokens{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		ExpiresAt:    token.Expiry,
 	}
 }
 

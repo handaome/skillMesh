@@ -1,9 +1,10 @@
 # CLI 使用手册
 
-`skillmesh` 的完整用法：装、发布、更新、同步、诊断。
+`skillmesh` 的完整用法：登录、同步、安装、发布、更新、排障。
 安装与启动见 [README](../README.md#快速开始)，团队与审核见 [团队治理](团队治理.md)。
 
 每个命令的参数说明看 `skillmesh <命令> --help`，本文只讲**行为、规则和坑**。
+示例按 Windows 写成 `./skillmesh.exe`，Linux/macOS 上换成 `./skillmesh`。
 
 ## 命令速查
 
@@ -17,27 +18,38 @@
 ./skillmesh.exe info <skill-id>                      # 看详情
 ```
 
-`skillmesh --help` 只列这些常用命令。团队治理、Git 来源、运维排障那些
-（`add` / `source` / `review` / `group` / `cloud` / `trash` /
-`watch` / `doctor` / `logs` / `update` 等）
-**仍然可用**，只是不占帮助版面——`skillmesh help <命令>` 或本文档下面各节照旧。
+`skillmesh --help` 只列这些常用命令。其余命令（Git 来源、云端删除、回收站、
+后台监听、团队集合、诊断等）**仍然可用**，只是不占帮助版面——
+`skillmesh help <命令>` 或看下面各节。
+
+## 登录
 
 ```bash
-# 从 Git 仓库安装（两步：先 resolve 看目录，再 add 装）
-./skillmesh.exe source resolve git@github.com:owner/agent-skills
-./skillmesh.exe add git@github.com:owner/agent-skills.git \
-  --path skills/java-debug --agent claude-code --scope user
-
-# 从注册中心安装单个
-./skillmesh.exe install <skill-id> --agent claude-code --scope user
-
-# 发布到团队/组织（会停在待审核）
-./skillmesh.exe publish ./skills/java-debug --org acme --team platform
-
-# 回滚
-./skillmesh.exe install java-debug --version 1.0.0   # 装回旧版本
+skillmesh login http://127.0.0.1:8080/api/v1   # 浏览器授权码 + PKCE
+skillmesh logout                                # 清除本地登录态
 ```
 
+登录所需的 OIDC issuer 从服务端的公开配置里取，也可以用环境变量 `SM_KEYCLOAK_ISSUER` 直接指定。
+
+### 无浏览器登录（Linux 服务器 / SSH）
+
+`login` 默认打开本机浏览器。服务器没有图形界面时加 `--manual`：
+
+```bash
+skillmesh login --manual http://your-server/api/v1
+```
+
+终端会打印授权地址。把地址复制到**任何一台有浏览器的机器**上打开、完成登录，浏览器会跳到 `http://127.0.0.1:53682/callback?code=...`——页面打不开没关系，把地址栏里的完整 URL 复制下来，粘回终端回车即可。`state` 校验不通过会直接拒绝。
+
+也可以走 SSH 端口转发，让回调直接回到服务器，不用手动粘贴：
+
+```bash
+ssh -L 53682:127.0.0.1:53682 <服务器>
+```
+
+### 令牌过期自动续期
+
+access token 过期时，CLI 用登录时存下的 refresh token 换一个新的（续期后的令牌会写回凭据管理器），所以常驻同步不会因为令牌过期而停摆。只有 refresh token 也失效了（被撤销、或登出过）才需要重新 `skillmesh login`——这时 watch 的日志里会写「令牌已过期且续期失败，请重新执行 skillmesh login」。
 
 ## 同步：两端对齐，冲突不自动覆盖
 
@@ -117,9 +129,7 @@ skillmesh watch logs --tail 50
 
 监听启动时先做一次全量对账，弥补错过的文件系统通知。触发是**文件监听 + 轮询兜底**：文件事件带 2 秒防抖（编辑器写文件常分好几次，立刻扫会扫到写了一半的内容），轮询每 `--interval` 兜一次（默认 30 秒）。
 
-盯的是**用户级** Agent 目录（`~/.claude/skills` 这类），项目里的 `.claude/skills` 不在自动同步范围。
-
-**令牌过期会自动续期**：access token 过期时，CLI 用登录时存下的 refresh token 换一个新的（续期后的令牌会写回凭据管理器），所以常驻同步不会因为令牌过期而停摆。只有 refresh token 也失效了（被撤销、或登出过）才需要重新 `skillmesh login`——这时 watch 的日志里会写「令牌已过期且续期失败，请重新执行 skillmesh login」。
+盯的是**用户级** Agent 目录（`~/.claude/skills` 这类），项目里的 `.claude/skills` 不在自动同步范围。令牌过期由 CLI 自动续期，见[登录](#登录)。
 
 ## 换设备装回自己的 Skill
 
@@ -139,6 +149,53 @@ skillmesh watch logs --tail 50
 - **本地是别的东西就不碰**：本地有同名目录但不受 SkillMesh 管理时跳过，不替人做决定。
 - **本地有未同步的改动就跳过**：不覆盖你可能还没上传的修改，提示你用 `sync` 的 `--resolve` 决定。
 - **装完记下同步基线**：之后云端更新了，下次 `sync` 直接拉回来，不会误报成冲突。
+
+## 安装前先看来源与风险
+
+```bash
+./skillmesh.exe info <skill-id>
+```
+
+`info` 给出来源、可见性、最新版本与状态、许可证、版本列表（通道 / 状态 / 扫描结果 / SHA256）和风险提示。
+
+**扫描是服务端做的**：制品定版后立刻解包扫一遍，结论写进 `skill_scans`，随版本列表返回。命中凭据（AWS Key、GitHub Token、OpenAI Key、Slack Token、Google API Key、私钥正文）或路径穿越的包**不会发布**，版本状态停在 `rejected`。客户端也扫一遍，但只用来当场提示——绕开 CLI 直接调 API 一样会被服务端拦下。
+
+扫描分两档：**密钥命中会阻断发布**（版本停在 `rejected`），**可疑内容只提示**——脚本里的 `curl | sh`、`rm -rf /`、`chmod 777`、关证书校验、读凭据文件、装依赖、引用外部地址，都会连文件:行号一起列出来让你自己判断。只扫脚本与配置文件，`.md` 里的链接不算问题，否则告警会被噪音淹没。`skillmesh scan` 会把这两类分开列（`疑似敏感` / `可疑内容`），`install` 时也会把可疑内容打出来。
+
+扫描列显示 `未扫描` 的，是 v1.1 之前发布的版本，那会儿没有服务端扫描。
+
+**制品签名**（[设计文档 §10](设计文档.md) 制品完整性）：服务端在制品定版时对**清单摘要**做 Ed25519 签名，签名随版本列表返回。客户端装之前验两件事——签名对不对得上，以及装下来的内容摘要和清单对不对得上。`install` 会打印结果（`已验签（内容与签名一致）` / `未签名` / `验签失败：…`）；**验签不通过就不装**——失败会带着原因退出，东西不会进 Agent 目录。
+
+客户端从 `GET /api/v1/keys/verify` 取公钥。要把「注册中心当前的密钥」变成「我信任的密钥」，在 `config.yaml` 里钉死它：
+
+```yaml
+verify:
+  pinned_key_id: 2026-10
+  pinned_public_key: <base64 原始 32 字节>
+```
+
+钉了之后，服务端换密钥而你没更新配置，验签会**硬失败**（不会只看「签名能不能验过」）。没钉也没配服务端密钥时，CLI 会明说「未验证来源」——能确认内容摘要对得上，但不能确认是谁签的。服务端怎么生成与配置签名密钥见 [部署与排障](部署与排障.md#制品签名密钥)。
+
+**被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
+
+## 从注册中心装一个 Skill
+
+```bash
+./skillmesh.exe install <skill-id> --agent claude-code --scope user
+```
+
+从 SkillMesh 云端拉已发布的版本。`--version` 指定版本（不填取最新已发布的），`--dry-run` 只演练不落盘。
+
+装完会写进 `skillmesh.lock.yaml`（Skill ID、版本号、制品 SHA-256、作用域、目标 Agent），所以 `list` 立刻能看到它。装完还会打印一行许可证识别结果和密钥风险提示——识别只是粗匹配，不代表可以再分发，条款要自己看。
+
+CI 里没有浏览器也没有凭据管理器，用环境变量传令牌：
+
+```bash
+export SKILLMESH_TOKEN=<access-token>
+./skillmesh.exe install <skill-id> --locked
+```
+
+`--locked` 会校验远端解析结果与 `skillmesh.lock.yaml` 是否一致，不一致直接失败，防止构建环境静默漂移。
 
 ## 从 Git 仓库装一个 Skill：两步
 
@@ -188,24 +245,40 @@ skillmesh watch logs --tail 50
 
 这是防止误删你手写的 Skill。反过来，`uninstall` 也不会删不受管理的目录，除非加 `--force`。
 
-## 从注册中心装一个 Skill
+## 从本地目录或 zip 装
+
+内网、离线或者还没进注册中心的东西，也能装：
 
 ```bash
-./skillmesh.exe install <skill-id> --agent claude-code --scope user
+# 从本地目录装
+./skillmesh.exe add --local ./my-skills --agent claude-code --scope user
+
+# 从本地 zip 装
+./skillmesh.exe install --file ./my-skill.zip --agent claude-code --scope user
 ```
 
-从 SkillMesh 云端拉已发布的版本。`--version` 指定版本（不填取最新已发布的），`--dry-run` 只演练不落盘。
+**这类安装不进注册中心。** 本地来源没有签名、没走过服务端的扫描与审核，
+登记上去等于让未验证的内容冒充发布方的版本。它们只装到本机，
+来源写进锁文件（`source_type: local`），更新与卸载照常按锁文件走。
 
-装完会写进 `skillmesh.lock.yaml`（Skill ID、版本号、制品 SHA-256、作用域、目标 Agent），所以 `list` 立刻能看到它。装完还会打印一行许可证识别结果和密钥风险提示——识别只是粗匹配，不代表可以再分发，条款要自己看。
+两个不同的本地目录装同一个名字会被认成不同来源，不会互相覆盖。
 
-CI 里没有浏览器也没有凭据管理器，用环境变量传令牌：
+## 技能集合
+
+集合是「命名的一组 Skill」：团队把一套规范收成一个集合，新人一键装齐。
 
 ```bash
-export SKILLMESH_TOKEN=<access-token>
-./skillmesh.exe install <skill-id> --locked
+./skillmesh.exe group list                       # 列出我可见的集合
+./skillmesh.exe group show team-baseline        # 成员与我装了几个
+./skillmesh.exe group create team-baseline     --name "团队基线" --skill dogfood --skill skill-creator
+./skillmesh.exe group install team-baseline --agent claude-code   # 装齐
 ```
 
-`--locked` 会校验远端解析结果与 `skillmesh.lock.yaml` 是否一致，不一致直接失败，防止构建环境静默漂移。
+- 成员用 `--skill` 指定，slug 或 id 都行；可重复。
+- 建集合与改成员走 CLI，网页端看集合与已装情况——跟发布走 CLI 是同一个道理。
+- 徽标只算「我装了几个」：本人可见的数据。团队级覆盖率（谁在哪台机器上装了多少）
+  是另一种可见性，单独授权，不在这里混进来。
+- `group install` 逐个装：一个装不上不影响后面的，结果逐条报出来。
 
 ## 把本地 Skill 发布到云端
 
@@ -239,7 +312,21 @@ export SKILLMESH_TOKEN=<access-token>
 - **隐藏文件与忽略目录不进包**。`.skillmesh-install`、`.git`、`node_modules`、`__pycache__` 之类不会发到云端——发出去的文件与本地算摘要、扫密钥的是同一批。
 - **Windows 上发布的包会丢掉脚本的可执行位**。Windows 没有 Unix 可执行位，Go 一律报 0666；Skill 里如果有 shell 脚本，在 Unix 上装完可能需要 `chmod +x`。
 
-## 回滚到旧版本
+## 更新与回滚
+
+### 更新前先看差异，本地改过就不覆盖
+
+```bash
+./skillmesh.exe update <name> --dry-run
+```
+
+输出是文件级的：哪些文件修改了（带行数增减）、新增了哪些、删了哪些。
+
+判重和「本地有没有被改过」都用**内容摘要**（对「路径 + 逐文件 SHA-256」排序后哈希），不用 zip 的 sha256——同一份内容重新打包，压缩实现或权限位一变摘要就变，会把没变误判成变。装的时候摘要记进锁文件的 `installed_hash`。
+
+本地有未提交修改时，`update` 会打印「跳过 xxx —— 本地有改动，保留本地版本」，不动你的文件、锁文件也不改，退出码仍是 0（其余 Skill 照常更新）。
+
+### 回滚到旧版本
 
 ```bash
 ./skillmesh.exe install <skill-name> --version <旧版本>
@@ -269,7 +356,7 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 | `blocked` | 服务端记的那一版在云端已经不能用了（撤回、驳回） |
 | `active` | 一切正常（内容对不上但云端没动时是 `active` + 「本地改过」） |
 
-## 本地项目状态
+## 其余命令一览
 
 | 命令 | 作用 |
 | --- | --- |
@@ -289,47 +376,6 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。作用域（`user` 还是 `project`）记在锁文件里，`update`/`uninstall`/`list` 都以记录为准，不会把项目级安装误当成用户级。
 
 **`list` 和 `search` 看的不是一回事**：`list` 是**本地装了什么**（读项目里的 `skillmesh.lock.yaml`），`search` 是**云端有什么**（调 `/api/v1/skills`）。`publish` 只把 Skill 发到云端、**不在本地装任何东西**，所以发布完 `list` 仍然是空的——这是设计如此。
-
-## 更新前先看差异，本地改过就不覆盖
-
-```bash
-./skillmesh.exe update <name> --dry-run
-```
-
-输出是文件级的：哪些文件修改了（带行数增减）、新增了哪些、删了哪些。
-
-判重和「本地有没有被改过」都用**内容摘要**（对「路径 + 逐文件 SHA-256」排序后哈希），不用 zip 的 sha256——同一份内容重新打包，压缩实现或权限位一变摘要就变，会把没变误判成变。装的时候摘要记进锁文件的 `installed_hash`。
-
-本地有未提交修改时，`update` 会打印「跳过 xxx —— 本地有改动，保留本地版本」，不动你的文件、锁文件也不改，退出码仍是 0（其余 Skill 照常更新）。
-
-
-## 装之前看一眼来源与风险
-
-```bash
-./skillmesh.exe info <skill-id>
-```
-
-`info` 给出来源、可见性、最新版本与状态、许可证、版本列表（通道 / 状态 / 扫描结果 / SHA256）和风险提示。
-
-**扫描是服务端做的**：制品定版后立刻解包扫一遍，结论写进 `skill_scans`，随版本列表返回。命中凭据（AWS Key、GitHub Token、OpenAI Key、Slack Token、Google API Key、私钥正文）或路径穿越的包**不会发布**，版本状态停在 `rejected`。客户端也扫一遍，但只用来当场提示——绕开 CLI 直接调 API 一样会被服务端拦下。
-
-扫描分两档：**密钥命中会阻断发布**（版本停在 `rejected`），**可疑内容只提示**——脚本里的 `curl | sh`、`rm -rf /`、`chmod 777`、关证书校验、读凭据文件、装依赖、引用外部地址，都会连文件:行号一起列出来让你自己判断。只扫脚本与配置文件，`.md` 里的链接不算问题，否则告警会被噪音淹没。`skillmesh scan` 会把这两类分开列（`疑似敏感` / `可疑内容`），`install` 时也会把可疑内容打出来。
-
-扫描列显示 `未扫描` 的，是 v1.1 之前发布的版本，那会儿没有服务端扫描。
-
-**制品签名**（[设计文档 §10](设计文档.md) 制品完整性）：服务端在制品定版时对**清单摘要**做 Ed25519 签名，签名随版本列表返回。客户端装之前验两件事——签名对不对得上，以及装下来的内容摘要和清单对不对得上。`install` 会打印结果（`已验签（内容与签名一致）` / `未签名` / `验签失败：…`）；**验签不通过就不装**——失败会带着原因退出，东西不会进 Agent 目录。
-
-客户端从 `GET /api/v1/keys/verify` 取公钥。要把「注册中心当前的密钥」变成「我信任的密钥」，在 `config.yaml` 里钉死它：
-
-```yaml
-verify:
-  pinned_key_id: 2026-10
-  pinned_public_key: <base64 原始 32 字节>
-```
-
-钉了之后，服务端换密钥而你没更新配置，验签会**硬失败**（不会只看「签名能不能验过」）。没钉也没配服务端密钥时，CLI 会明说「未验证来源」——能确认内容摘要对得上，但不能确认是谁签的。服务端怎么生成与配置签名密钥见 [部署与排障](部署与排障.md#制品签名密钥)。
-
-**被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
 
 ## 日志与审计：谁动过什么
 
@@ -461,42 +507,9 @@ cp apps/cli/skills/manage-skills/SKILL.md ~/.claude/skills/manage-skills/SKILL.m
 
 契约里也带了 `--json` 输出与退出码的说明，Agent 脚本化调用时不用再猜。
 
-## 本地来源：--local 与 --file
+## 诊断
 
-内网、离线或者还没进注册中心的东西，也能装：
-
-```bash
-# 从本地目录装
-./skillmesh.exe add --local ./my-skills --agent claude-code --scope user
-
-# 从本地 zip 装
-./skillmesh.exe install --file ./my-skill.zip --agent claude-code --scope user
-```
-
-**这类安装不进注册中心。** 本地来源没有签名、没走过服务端的扫描与审核，
-登记上去等于让未验证的内容冒充发布方的版本。它们只装到本机，
-来源写进锁文件（`source_type: local`），更新与卸载照常按锁文件走。
-
-两个不同的本地目录装同一个名字会被认成不同来源，不会互相覆盖。
-
-## 技能集合
-
-集合是「命名的一组 Skill」：团队把一套规范收成一个集合，新人一键装齐。
-
-```bash
-./skillmesh.exe group list                       # 列出我可见的集合
-./skillmesh.exe group show team-baseline        # 成员与我装了几个
-./skillmesh.exe group create team-baseline     --name "团队基线" --skill dogfood --skill skill-creator
-./skillmesh.exe group install team-baseline --agent claude-code   # 装齐
-```
-
-- 成员用 `--skill` 指定，slug 或 id 都行；可重复。
-- 建集合与改成员走 CLI，网页端看集合与已装情况——跟发布走 CLI 是同一个道理。
-- 徽标只算「我装了几个」：本人可见的数据。团队级覆盖率（谁在哪台机器上装了多少）
-  是另一种可见性，单独授权，不在这里混进来。
-- `group install` 逐个装：一个装不上不影响后面的，结果逐条报出来。
-
-## 诊断包
+### 诊断包
 
 提交 issue 时把诊断包一起给出去，省得来回问「你的配置长什么样」：
 
@@ -511,7 +524,7 @@ cp apps/cli/skills/manage-skills/SKILL.md ~/.claude/skills/manage-skills/SKILL.m
 日志逐行再脱敏一遍（脱敏功能上线前写的历史日志没有脱敏过）。
 诊断包是要往外发的，别把原始文件直接贴出来。
 
-## 环境检查
+### 环境检查与配置
 
 ```bash
 ./skillmesh.exe doctor        # 服务端地址、配置目录、git、登录状态、各 Agent 目录能否写
