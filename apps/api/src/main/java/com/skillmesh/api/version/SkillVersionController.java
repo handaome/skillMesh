@@ -1,6 +1,7 @@
 package com.skillmesh.api.version;
 
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.version.dto.RevokeVersionRequest;
 import com.skillmesh.api.version.dto.SkillVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
@@ -9,7 +10,6 @@ import com.skillmesh.api.version.dto.EditFileRequest;
 import com.skillmesh.api.version.dto.EditFileResponse;
 import com.skillmesh.api.version.dto.VersionFileContentResponse;
 import com.skillmesh.api.version.dto.VersionFilesResponse;
-import com.skillmesh.api.version.dto.VersionPage;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.Map;
@@ -57,8 +57,10 @@ public class SkillVersionController {
     }
 
     @GetMapping("/skills/{skillId}/versions")
-    public VersionPage list(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID skillId) {
-        return versions.list(currentUserService.current(jwt), skillId);
+    public CursorPage<SkillVersionResponse> list(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID skillId,
+                            @RequestParam(required = false) Integer limit,
+                            @RequestParam(required = false) String cursor) {
+        return versions.list(currentUserService.current(jwt), skillId, limit, cursor);
     }
 
     /**

@@ -40,7 +40,9 @@ const (
 	Conflicted syncOutcome = "冲突"
 	// PendingDelete 本地删掉了文件，等用户确认再往云端传播。
 	PendingDelete syncOutcome = "待确认"
-	Failed        syncOutcome = "失败"
+	// Deleted 云端删掉了这个 Skill，本地那份也跟着进了回收站。
+	Deleted syncOutcome = "已删除"
+	Failed  syncOutcome = "失败"
 )
 
 // SyncOptions 是一次同步的可调项。
@@ -55,6 +57,10 @@ type SyncOptions struct {
 	// AllowDelete 确认把「本地删掉的文件」也传到云端。
 	// 不确认就不传：目录扫不到不该等于云端被删（设计文档 §6.3）。
 	AllowDelete bool
+	// CloudDeletionsKnown 是本次同步探测到的服务端状态，不是命令行参数：
+	// 成功拿到了云端的已删除清单没有。拿不到就不能上传——不知道云端删了什么，
+	// 上传会把删掉的 Skill 复活（云端查不到 → 判定为「该上传」）。
+	CloudDeletionsKnown bool
 }
 
 func newSyncCmd() *cobra.Command {
@@ -109,18 +115,26 @@ type syncResult struct {
 	Path    string
 	Outcome syncOutcome
 	Detail  string
+	// SkillID 是这次涉及的云端 Skill（没有就是纯本地的事）。
+	// 上报审计时用它当目标：本地日志自己知道目标是谁，
+	// 服务端那边得靠它把这条流水挂到 Skill 上。
+	SkillID string
 }
 
 func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.Queue, error) {
-	targets, err := SyncTargets(options)
-	if err != nil {
-		return nil, syncqueue.Queue{}, err
-	}
 	client, err := newClient(ctx)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
-	state, err := syncstate.Load(Cfg.ConfigDir)
+	// 云端删掉的先处理：本地那份要先移走，
+	// 否则它会被当成「云端没有、本地有」又传回云端。
+	state, deleteResults, deletionsKnown, err := loadStateForSync(ctx, client, options)
+	if err != nil {
+		return nil, syncqueue.Queue{}, err
+	}
+	// 记下这次有没有拿到删除清单：拿不到的话下面一律不上传。
+	options.CloudDeletionsKnown = deletionsKnown
+	targets, err := SyncTargets(options)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
@@ -131,6 +145,11 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	targets = filterByBackoff(targets, queue, options)
 
 	var results []syncResult
+	results = append(results, deleteResults...)
+	// 云端删了、本地跟着删的这次也要留痕：这是最需要事后能查清的一类动作。
+	for _, result := range deleteResults {
+		recordSyncResult(ctx, client, SyncTarget{Name: result.Name, Path: result.Path}, result)
+	}
 	// 同一份内容可能同时出现在多个位置：多个 Agent 目录、符号链接目录、
 	// 甚至是某个 Skill 内部的嵌套子 Skill。按内容摘要去重，只同步一次。
 	Uploaded := map[string]string{}
@@ -150,10 +169,13 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 		}
 		result, entry, err := syncOne(ctx, client, target, options)
 		if err != nil {
-			results = append(results, failedResult(target, err.Error()))
+			failed := failedResult(target, err.Error())
+			recordSyncResult(ctx, client, target, failed)
+			results = append(results, failed)
 			progressDone(string(Failed)+"："+oneLine(err.Error()), time.Since(started))
 			continue
 		}
+		recordSyncResult(ctx, client, target, result)
 		progressDone(progressText(result, options.DryRun), time.Since(started))
 		if result.Outcome == Failed || result.Outcome == Conflicted {
 			// 没同步成的不算数，别把后面同内容的也一起挡掉
@@ -415,11 +437,24 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 		if err != nil {
 			// 只有服务端明确判了冲突才算冲突。服务端自己出错（500/404/403）
 			// 是失败：失败才进重试队列，报成冲突会让用户去 --resolve 白折腾。
-			return OutcomeForError(target, err), syncstate.Entry{}, nil
+			if !errors.Is(err, ErrConflict) {
+				return OutcomeForError(target, err), syncstate.Entry{}, nil
+			}
+			// 服务端说冲突：用户没给处理方式就报冲突；给了就按他的来。
+			// 原来这里直接返回冲突，用户就算加了 --resolve 也走不到处理分支——
+			// 冲突永远解不开（服务端那一次校验挡住了后面的路）。
+			if options.Resolve == "" {
+				return OutcomeForError(target, err), syncstate.Entry{}, nil
+			}
+			decision = syncstate.Conflict
 		}
 	}
 	result, entry, err := ApplyDecision(ctx, client, target, decision, local, localHash,
 		skill, found, options)
+	if result.SkillID == "" {
+		// 云端给的 ID 才是真的：拿它去挂审计流水，别拿本机记的旧值。
+		result.SkillID = target.SkillID
+	}
 	if changeset != "" && result.Outcome == Uploaded {
 		result.Detail += "（云端记录 " + short(changeset) + "）"
 	}
@@ -514,6 +549,7 @@ func ApplyDecision(ctx context.Context, client *apiclient.Client, target SyncTar
 		Name: target.Name, Agent: target.Agent,
 		BaseHash: target.BaseHash, SkillID: target.SkillID,
 		BaseFiles: target.BaseFiles, BaseSnapshot: target.BaseSnapshot,
+		Path: target.Path,
 	}
 
 	switch decision {
@@ -557,6 +593,13 @@ func ApplyDecision(ctx context.Context, client *apiclient.Client, target SyncTar
 			// 本次不上传：本地领先这个事实没变，基线也不动。
 			return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
 				Detail: "本地有更新，本次只下载"}, entry, nil
+		}
+		if !options.CloudDeletionsKnown {
+			// 拿不到云端的已删除清单就不能上传：云端查不到的 Skill 会被判成
+			// 「该上传」，上传就在云端新建一个同名的——把人家删掉的 Skill 复活了。
+			// 宁可这次不传，等清单拿到了再说。
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: Failed,
+				Detail: "拿不到云端已删除清单，为免把云端删掉的 Skill 复活，本次不上传"}, entry, nil
 		}
 		if options.DryRun {
 			detail := "将上传新版本（演练，未真的上传）"
@@ -675,6 +718,11 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target SyncT
 			Detail: "保留本地，已上传 " + result.Version}, entry, nil
 
 	case "keep-cloud":
+		if options.Direction == "upload" {
+			// 本次只上传：拉云端跟方向反着来，用户说了要保留云端就别硬传。
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
+				Detail: "本次只上传，不能保留云端；要按云端来请用 --direction both"}, entry, nil
+		}
 		version, err := DownloadInto(ctx, client, target, skill)
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
@@ -835,7 +883,8 @@ func localHashOf(files map[string]string) string {
 }
 
 func failedResult(target SyncTarget, why string) syncResult {
-	return syncResult{Name: target.Name, Path: target.Path, Outcome: Failed, Detail: why}
+	return syncResult{Name: target.Name, Path: target.Path, Outcome: Failed,
+		Detail: why, SkillID: target.SkillID}
 }
 
 func ManifestDigest(entries []packager.Entry) string {
@@ -925,9 +974,9 @@ func reportSync(results []syncResult, queue syncqueue.Queue) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，冲突 %d，待确认 %d，失败 %d\n",
+	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，冲突 %d，待确认 %d，已删除 %d，失败 %d\n",
 		counts[Skipped], counts[Uploaded], counts[fetched], counts[Conflicted],
-		counts[PendingDelete], counts[Failed])
+		counts[PendingDelete], counts[Deleted], counts[Failed])
 	if counts[Conflicted] > 0 {
 		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[Conflicted])
 	}

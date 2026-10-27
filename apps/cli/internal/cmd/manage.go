@@ -11,6 +11,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
+	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
 	"github.com/handaome/skillmesh/apps/cli/internal/trash"
 	"github.com/spf13/cobra"
 )
@@ -194,6 +195,8 @@ func newUninstallCmd() *cobra.Command {
 					fmt.Printf("已移到回收站 %s（%d KiB，skillmesh trash restore 可找回）\n",
 						item.Entry, item.SizeKiB)
 				}
+				opLog().Record(oplog.ActionUninstall, entry.Name, target,
+					map[string]string{"agent": agentName})
 			}
 			lock.Remove(entry.Name)
 			if err := lock.Save(projectRoot); err != nil {

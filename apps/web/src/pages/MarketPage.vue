@@ -2,7 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { downloadArtifact, getSkill, getVersions, searchSkills } from '../api'
-import { useSkillList } from '../composables/useSkillList'
+import { usePagedList } from '../composables/usePagedList'
 import { SCAN_STATUS_TEXT, VERSION_STATUS_TEXT, VISIBILITY_TEXT } from '../constants/status'
 import type { Skill, SkillVersion } from '../types'
 import { errorText } from '../utils/errorText'
@@ -18,7 +18,12 @@ const searched = ref(false)
 /** 可见性筛选。空串表示不过滤（看全部能看见的）。 */
 const visibility = ref('')
 
-/** 列表。服务端按游标翻页，超过一页的这里能接着往下取。 */
+/**
+ * 列表。服务端按游标翻页，超过一页的这里能接着往下取。
+ *
+ * 查询词与筛选条件是这次查询的条件：翻页时用同一组条件接着查，
+ * 条件变了就重新 load——拿旧条件的游标查新条件，页面对不上。
+ */
 const {
   items: skills,
   loadingMore,
@@ -27,13 +32,34 @@ const {
   countText,
   load: loadPage,
   loadMore,
-} = useSkillList(searchSkills)
+} = usePagedList<Skill, { q: string; filters: Record<string, string> }>(
+  (params, cursor) => searchSkills(params.q, cursor, params.filters),
+  { unit: '个' },
+)
 
 const openId = ref<string | null>(null)
 const detail = ref<Skill | null>(null)
-const versions = ref<SkillVersion[]>([])
-/** 版本表正在读。读失败不是「这个 Skill 没有版本」。 */
-const versionsLoading = ref(false)
+
+/**
+ * 版本列表。
+ *
+ * 版本只增不减（每发一版 +1），一次全量返回迟早把响应撑爆：
+ * 后面的版本谁都看不见，所以要能一页一页往下翻。
+ *
+ * 换 Skill 就重置：旧 Skill 的版本还挂在屏幕上会让人以为看的是新的。
+ */
+const {
+  items: versions,
+  loading: versionsLoading,
+  loadingMore: versionsLoadingMore,
+  error: versionsError,
+  hasMore: versionsHasMore,
+  load: loadVersions,
+  loadMore: loadMoreVersions,
+  reset: resetVersions,
+} = usePagedList<SkillVersion, string>((skillId, cursor) =>
+  getVersions(skillId, undefined, cursor))
+
 /** 正在浏览哪个版本的文件。空串表示没展开。 */
 const browseVersion = ref('')
 
@@ -69,7 +95,7 @@ async function search() {
   const q = query.value
   const filters: Record<string, string> = {}
   if (visibility.value) filters.visibility = visibility.value
-  await loadPage(q, filters)
+  await loadPage({ q, filters })
   if (query.value !== q || error.value) return
   searched.value = true
 }
@@ -83,8 +109,7 @@ async function search() {
 async function open(id: string) {
   openId.value = id
   detail.value = null
-  versions.value = []
-  versionsLoading.value = false
+  resetVersions()
   // 换 Skill 就收起文件浏览：展开的是上一个 Skill 的文件。
   browseVersion.value = ''
   error.value = ''
@@ -97,15 +122,10 @@ async function open(id: string) {
     const skill = await getSkill(id)
     if (openId.value !== id) return
     detail.value = skill
-    versionsLoading.value = true
-    const page = await getVersions(id)
-    if (openId.value !== id) return
-    versions.value = page.items
+    await loadVersions(id)
   } catch (e) {
     if (openId.value !== id) return
     error.value = errorText(e)
-  } finally {
-    if (openId.value === id) versionsLoading.value = false
   }
 }
 
@@ -118,21 +138,14 @@ async function open(id: string) {
 async function onEdited(version?: string) {
   if (!detail.value) return
   const id = detail.value.id
-  try {
-    const page = await getVersions(id)
-    if (detail.value?.id !== id) return
-    versions.value = page.items
-    if (version) browseVersion.value = version
-  } catch (e) {
-    error.value = errorText(e)
-  }
+  await loadVersions(id)
+  if (version) browseVersion.value = version
 }
 
 function back() {
   openId.value = null
   detail.value = null
-  versions.value = []
-  versionsLoading.value = false
+  resetVersions()
   browseVersion.value = ''
   error.value = ''
   const next = { ...route.query }
@@ -183,6 +196,10 @@ onMounted(search)
         表格只在有数据时渲染：读失败不是「没有版本」，
         跟上面的错误条并排会把人读歪。
       -->
+      <p v-if="versionsError" class="sm-note sm-note--error sm-mb-12" data-test="versions-error">
+        {{ versionsError }}
+      </p>
+
       <div v-if="versionsLoading" class="sm-empty">加载中…</div>
       <div v-else-if="versions.length" class="sm-table-scroll">
         <table class="sm-table sm-table--flush">
@@ -239,9 +256,21 @@ onMounted(search)
         </table>
       </div>
       <EmptyState
-        v-if="!versionsLoading && !error && !versions.length"
+        v-if="!versionsLoading && !versionsError && !versions.length"
         text="还没有版本"
       />
+
+      <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+      <div v-if="versionsHasMore" class="sm-row sm-mt-16">
+        <button
+          class="sm-btn sm-btn--quiet sm-btn--sm"
+          data-test="load-more-versions"
+          :disabled="versionsLoadingMore"
+          @click="loadMoreVersions"
+        >
+          {{ versionsLoadingMore ? '加载中…' : '加载更多版本' }}
+        </button>
+      </div>
 
       <!-- 在线浏览这个版本里的文件。挂载即打开抽屉。 -->
       <FileBrowser

@@ -1,6 +1,7 @@
 package com.skillmesh.api.version;
 
 import jakarta.persistence.LockModeType;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -35,6 +36,24 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
     List<SkillVersionEntity> findByArtifactId(UUID artifactId);
 
     /**
+     * 某个 Skill 的版本，按创建时间倒序（同一秒用 id 兜底），带游标翻页。
+     *
+     * 游标比较的是 (created_at, id)：只用 created_at 不够——
+     * 同一秒建的版本顺序不定，翻页会漏掉或重复。
+     */
+    @Query(value = """
+        select v.* from skill_versions v
+        where v.skill_id = :skillId
+          and (cast(:cursorTime as timestamptz) is null
+               or (v.created_at, v.id) < (:cursorTime, :cursorId))
+        order by v.created_at desc, v.id desc
+        """, nativeQuery = true)
+    List<SkillVersionEntity> findBySkillIdAfterCursor(@Param("skillId") UUID skillId,
+                                                       @Param("cursorTime") OffsetDateTime cursorTime,
+                                                       @Param("cursorId") UUID cursorId,
+                                                       Pageable pageable);
+
+    /**
      * 待审版本：只返回「我在其所属范围里是 reviewer 及以上」的。
      *
      * 可见性与分页都在 SQL 里判：先按角色过滤、再排序、最后取 limit——
@@ -42,6 +61,9 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
      *
      * 角色的取法跟 {@code OrgService.roleIn} 一致：团队成员行优先，没有才回落组织成员行。
      * 两条都查不到就没有角色——个人 Skill 也不进审核流，organization_id 为空即排除。
+     *
+     * 游标比较的是 (submitted_at, created_at, id) 三级：排序本身就是三级，
+     * 游标少了哪一级，同一时刻的多条待审顺序就不定，翻页会漏掉或重复。
      *
      * @param reviewerRoles 能审的角色集合：owner/admin/publisher/reviewer
      */
@@ -56,11 +78,18 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
                 (select o.role from organization_memberships o
                   where o.organization_id = s.organization_id and o.user_id = :owner)
               ) = any(string_to_array(:reviewerRoles, ','))
+          and (cast(:cursorSubmittedAt as timestamptz) is null
+               or (v.submitted_at, v.created_at, v.id) < (cast(:cursorSubmittedAt as timestamptz),
+                                                          cast(:cursorCreatedAt as timestamptz),
+                                                          cast(:cursorId as uuid)))
         order by v.submitted_at desc nulls last, v.created_at desc, v.id desc
         """, nativeQuery = true)
     List<SkillVersionEntity> findReviewable(@Param("owner") UUID owner,
                                              @Param("status") String status,
                                              @Param("reviewerRoles") String reviewerRoles,
+                                             @Param("cursorSubmittedAt") OffsetDateTime cursorSubmittedAt,
+                                             @Param("cursorCreatedAt") OffsetDateTime cursorCreatedAt,
+                                             @Param("cursorId") UUID cursorId,
                                              Pageable pageable);
 
     /**

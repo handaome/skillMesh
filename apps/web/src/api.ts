@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, ReviewDetail, AuditEvent, RecycleFile } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -157,8 +157,16 @@ export function getSkill(id: string, token?: string): Promise<Skill> {
   return request<Skill>(`/skills/${id}`, 'GET', undefined, token)
 }
 
-export function getVersions(id: string, token?: string): Promise<VersionPage> {
-  return request<VersionPage>(`/skills/${id}/versions`, 'GET', undefined, token)
+/**
+ * 某个 Skill 的版本列表，按游标翻页。
+ *
+ * 版本只增不减（每发一版 +1），一次全量返回迟早把响应撑爆：
+ * 客户端只取前 N 条，后面的版本谁都看不见。
+ */
+export function getVersions(id: string, token?: string, cursor?: string): Promise<VersionPage> {
+  const params = new URLSearchParams({ limit: '50' })
+  if (cursor) params.set('cursor', cursor)
+  return request<VersionPage>(`/skills/${id}/versions?${params}`, 'GET', undefined, token)
 }
 
 /** 某版本里的文件清单。服务端从真 zip 算出来的那份，不是发布方自填的。 */
@@ -292,14 +300,25 @@ export function acceptInvitation(token: string): Promise<AcceptedInvitation> {
     `/invitations/${encodeURIComponent(token)}/accept`, 'POST')
 }
 
-/** 待审队列。服务端默认 limit=50。 */
-export function listReviews(status = 'pending_review'): Promise<PendingReview[]> {
-  return request<PendingReview[]>(`/reviews?status=${encodeURIComponent(status)}`)
+/**
+ * 待审队列，按游标翻页。
+ *
+ * 待审数没有上限：团队一直发版，队列就一直长。只给一页的话，
+ * 排在窗口外的待审版本永远没人看得见。
+ */
+export function listReviews(status = 'pending_review', cursor?: string): Promise<PendingReviewPage> {
+  const params = new URLSearchParams({ status, limit: '50' })
+  if (cursor) params.set('cursor', cursor)
+  return request<PendingReviewPage>(`/reviews?${params}`, 'GET')
 }
 
 /** 最近放行或被拒的版本。审核页要看得见历史，不只是当下的待办。 */
-export function listRecentReviews(status: 'published' | 'rejected'): Promise<PendingReview[]> {
-  return request<PendingReview[]>(`/reviews?status=${encodeURIComponent(status)}&limit=20`)
+export function listRecentReviews(
+  status: 'published' | 'rejected', cursor?: string,
+): Promise<PendingReviewPage> {
+  const params = new URLSearchParams({ status, limit: '20' })
+  if (cursor) params.set('cursor', cursor)
+  return request<PendingReviewPage>(`/reviews?${params}`, 'GET')
 }
 
 export function getReviewDetail(skillId: string, version: string): Promise<ReviewDetail> {
@@ -314,6 +333,41 @@ export function approveVersion(skillId: string, version: string, comment = ''): 
 export function rejectVersion(skillId: string, version: string, comment = ''): Promise<unknown> {
   return request<unknown>(
     `/skills/${skillId}/versions/${encodeURIComponent(version)}/reject`, 'POST', { comment })
+}
+
+/**
+ * 删除一个 Skill。
+ *
+ * 软删除：数据留着，status 变成 archived，slug 让出来——同名能重建。
+ * 各端同步时据此把本地那份一起删掉。
+ */
+export function deleteSkill(id: string): Promise<void> {
+  return request<void>(`/skills/${id}`, 'DELETE')
+}
+
+/**
+ * 还原一个被删除的 Skill。
+ *
+ * 还原完它就回到删除前的样子，重新出现在「我的 Skill」里。
+ */
+export function restoreSkill(id: string): Promise<Skill> {
+  return request<Skill>(`/skills/${id}/restore`, 'POST')
+}
+
+/**
+ * 我删掉过哪些 Skill。
+ *
+ * 服务端只返回当前用户自己删掉的那些。分页与别的列表一个口径：
+ * has_more 说清还有没有，next_cursor 是下一页的起点。
+ *
+ * 路径是 /deleted-skills 而不是 /skills/deleted：后者会被
+ * GET /skills/{skillId} 抢走——skillId 那一段是变量，deleted 被当 UUID 解析，
+ * 报出来的是「参数格式不对」，看不出是路由撞了。
+ */
+export function listDeletedSkills(cursor?: string): Promise<DeletedSkillPage> {
+  const params = new URLSearchParams({ limit: '100' })
+  if (cursor) params.set('cursor', cursor)
+  return request<DeletedSkillPage>(`/deleted-skills?${params}`, 'GET')
 }
 
 /**
@@ -350,11 +404,14 @@ export async function downloadArtifact(artifactId: string): Promise<Blob> {
  * 我可见的审计流水（设计文档 §4 审计）。
  *
  * 服务端只返回我能看见的 Skill 的事件——审计不是所有人都能翻的。
+ *
+ * 按游标翻页：流水只增不减，只拉一页的话旧的就再也翻不到了。
  */
-export function listAuditEvents(action?: string, limit = 100): Promise<AuditEvent[]> {
-  const params = new URLSearchParams({ limit: String(limit) })
+export function listAuditEvents(action?: string, cursor?: string): Promise<AuditEventPage> {
+  const params = new URLSearchParams({ limit: '50' })
   if (action) params.set('action', action)
-  return request<AuditEvent[]>(`/audit-events?${params}`, 'GET')
+  if (cursor) params.set('cursor', cursor)
+  return request<AuditEventPage>(`/audit-events?${params}`, 'GET')
 }
 
 /**

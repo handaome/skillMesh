@@ -1,8 +1,8 @@
 package com.skillmesh.api.skill;
 
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
-import com.skillmesh.api.skill.dto.SkillPage;
 import com.skillmesh.api.skill.dto.SkillResponse;
 import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import jakarta.validation.Valid;
@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -40,7 +41,7 @@ public class SkillController {
     }
 
     @GetMapping
-    public SkillPage list(@AuthenticationPrincipal Jwt jwt,
+    public CursorPage<SkillResponse> list(@AuthenticationPrincipal Jwt jwt,
                           @RequestParam(required = false) String q,
                           @RequestParam(required = false) String visibility,
                           @RequestParam(required = false) String tag,
@@ -63,5 +64,25 @@ public class SkillController {
                                 @PathVariable UUID skillId,
                                 @Valid @RequestBody UpdateSkillRequest req) {
         return skills.update(currentUserService.current(jwt), skillId, req);
+    }
+
+    /**
+     * 删除一个 Skill。
+     *
+     * 软删除：数据留着，status 改成 archived，回收期内能还原。
+     * 客户端同步时据此把本地那份一起删掉。
+     */
+    @DeleteMapping("/{skillId}")
+    public ResponseEntity<Void> archive(@AuthenticationPrincipal Jwt jwt,
+                                        @PathVariable UUID skillId) {
+        skills.archive(currentUserService.current(jwt), skillId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** 还原被删除的 Skill。 */
+    @PostMapping("/{skillId}/restore")
+    public SkillResponse restore(@AuthenticationPrincipal Jwt jwt,
+                                 @PathVariable UUID skillId) {
+        return skills.restore(currentUserService.current(jwt), skillId);
     }
 }

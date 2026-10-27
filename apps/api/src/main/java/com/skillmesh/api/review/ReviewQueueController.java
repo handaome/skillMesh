@@ -2,9 +2,9 @@ package com.skillmesh.api.review;
 
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.review.dto.PendingReviewItem;
 import com.skillmesh.api.review.dto.ReviewDetailResponse;
-import java.util.List;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -28,11 +28,12 @@ public class ReviewQueueController {
     }
 
     @GetMapping
-    public List<PendingReviewItem> pending(@AuthenticationPrincipal Jwt jwt,
-                                           @RequestParam(required = false) String status,
-                                           @RequestParam(defaultValue = "50") int limit) {
+    public CursorPage<PendingReviewItem> pending(@AuthenticationPrincipal Jwt jwt,
+                              @RequestParam(required = false) String status,
+                              @RequestParam(required = false) Integer limit,
+                              @RequestParam(required = false) String cursor) {
         CurrentUser user = currentUserService.current(jwt);
-        return queue.pending(user, status, limit);
+        return queue.pending(user, status, limit, cursor);
     }
 
     @GetMapping("/{skillId}/{version}")

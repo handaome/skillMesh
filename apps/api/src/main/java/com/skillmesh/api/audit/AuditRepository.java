@@ -1,6 +1,7 @@
 package com.skillmesh.api.audit;
 
 import com.skillmesh.api.skill.VisibleSkills;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.Pageable;
@@ -33,10 +34,36 @@ public interface AuditRepository extends JpaRepository<AuditEventEntity, Long> {
         where e.target_type = 'skill'
           and """ + VisibleSkills.WHERE + """
           and (cast(:action as text) is null or e.action = :action)
+          and (cast(:cursorTime as timestamptz) is null
+               or (e.occurred_at, e.id) < (cast(:cursorTime as timestamptz),
+                                          cast(:cursorId as bigint)))
         order by e.occurred_at desc, e.id desc
         limit cast(:limit as int)
         """, nativeQuery = true)
     List<AuditEventEntity> findVisibleForUser(@Param("owner") UUID owner,
                                               @Param("action") String action,
+                                              @Param("cursorTime") OffsetDateTime cursorTime,
+                                              @Param("cursorId") Long cursorId,
                                               @Param("limit") int limit);
+
+    /**
+     * 某个 Skill 的流水，带游标翻页。
+     *
+     * 游标是 (occurred_at, id)：时间只到微秒，同一瞬间写下的两条事件
+     * 顺序不定，少了 id 那一半，翻页会漏掉或重复。
+     */
+    @Query(value = """
+        select e.* from audit_events e
+        where e.target_type = :targetType
+          and e.target_id = :targetId
+          and (cast(:cursorTime as timestamptz) is null
+               or (e.occurred_at, e.id) < (cast(:cursorTime as timestamptz),
+                                          cast(:cursorId as bigint)))
+        order by e.occurred_at desc, e.id desc
+        """, nativeQuery = true)
+    List<AuditEventEntity> findForTargetAfterCursor(@Param("targetType") String targetType,
+                                                     @Param("targetId") String targetId,
+                                                     @Param("cursorTime") OffsetDateTime cursorTime,
+                                                     @Param("cursorId") Long cursorId,
+                                                     Pageable pageable);
 }

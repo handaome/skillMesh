@@ -12,6 +12,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
+	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 	"github.com/spf13/cobra"
 )
@@ -155,6 +156,9 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		// 不登记的话 installations 永远是空的，这个功能等于没有。
 		reportInstallation(ctx, client, req, agentName, installPath)
 		fmt.Printf("已安装 %s@%s 到 %s\n", name, req.Version.Version, installPath)
+		opLog().Record(oplog.ActionInstall, name,
+			fmt.Sprintf("%s@%s", req.Version.Version, installPath),
+			map[string]string{"agent": agentName, "path": installPath})
 	}
 	if err := RecordInstall(InstallRecord{
 		ProjectRoot:   projectRoot,

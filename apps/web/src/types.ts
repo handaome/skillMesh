@@ -10,13 +10,45 @@ export interface Skill {
   latest_version: string | null
   created_at: string
   updated_at: string
+  /** 属主用户。团队/组织归属另看下面两项。 */
+  owner_user_id?: string | null
+  organization_id?: string | null
+  owner_team_id?: string | null
+  /** 描述之外的自定义键值。 */
+  metadata?: Record<string, unknown>
 }
 
-export interface SkillPage {
-  items: Skill[]
+/**
+ * 游标分页的一页。
+ *
+ * 服务端所有分页端点都是这个形状：条目、下一页游标、还有没有更多。
+ * 各端点只差 items 里的元素类型，所以只在这里定义一次。
+ */
+export interface Page<T> {
+  items: T[]
   next_cursor: string | null
   has_more: boolean
 }
+
+export type SkillPage = Page<Skill>
+
+/**
+ * 已删除（归档）的 Skill。
+ *
+ * 服务端只返回当前用户自己删掉的那些——别人删的不在这儿。
+ * slug 让了出来，所以同名能重建；这条记录留着是为了让各端知道
+ * 「云端删过了，本地那份也跟着删」。
+ */
+export interface DeletedSkill {
+  id: string
+  slug: string
+  name: string
+  /** 删除时间。ISO 串，带时区。 */
+  deleted_at: string
+}
+
+/** 已删除 Skill 的一页。与 SkillPage 同一个游标口径。 */
+export type DeletedSkillPage = Page<DeletedSkill>
 
 /**
  * 服务端给的公开配置。
@@ -66,11 +98,7 @@ export interface ScanSummary {
   }[]
 }
 
-export interface VersionPage {
-  items: SkillVersion[]
-  next_cursor: string | null
-  has_more: boolean
-}
+export type VersionPage = Page<SkillVersion>
 
 /** 某版本里的文件清单。服务端从真 zip 算出来的那份。 */
 export interface VersionFiles {
@@ -136,11 +164,7 @@ export interface Invitation {
 }
 
 // 邀请列表的一页：与服务端的 InvitationPage 同形状，跟 SkillPage 一个口径。
-export interface InvitationPage {
-  items: Invitation[]
-  next_cursor: string | null
-  has_more: boolean
-}
+export type InvitationPage = Page<Invitation>
 
 export interface CreatedInvitation {
   id: string
@@ -233,6 +257,17 @@ export interface AuditEvent {
   outcome: 'success' | 'denied' | 'failure'
   details: Record<string, unknown>
 }
+
+/**
+ * 审计流水的一页。
+ *
+ * 流水只增不减——只给最近 N 条的话，旧的就再也翻不到了，
+ * 「上个月那次改动是谁做的」这种问题就答不上来。
+ */
+export type AuditEventPage = Page<AuditEvent>
+
+/** 待审队列的一页。待审数没有上限，同样要能往下翻。 */
+export type PendingReviewPage = Page<PendingReview>
 
 /** 回收站里被删掉的文件（设计文档 §6.4：软删除、回收期内能找回）。 */
 export interface RecycleFile {

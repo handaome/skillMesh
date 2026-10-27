@@ -6,6 +6,8 @@ import com.skillmesh.api.artifact.ArtifactStorage;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
+import com.skillmesh.api.common.CursorCodec;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
@@ -19,7 +21,6 @@ import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.scan.ScanEntity;
 import com.skillmesh.api.scan.ScanRepository;
 import com.skillmesh.api.version.dto.SkillVersionResponse;
-import com.skillmesh.api.version.dto.VersionPage;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -28,11 +29,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class SkillVersionService {
+
+    /** 版本列表一页的默认条数与上限。 */
+    private static final int DEFAULT_PAGE_SIZE = 50;
+    private static final int MAX_PAGE_SIZE = 100;
 
     private final SkillVersionRepository versions;
     private final SkillRepository skills;
@@ -151,22 +157,28 @@ public class SkillVersionService {
     }
 
     @Transactional(readOnly = true)
-    public VersionPage list(CurrentUser user, UUID skillId) {
+    public CursorPage<SkillVersionResponse> list(CurrentUser user, UUID skillId, Integer limit,
+            String cursor) {
         skillService.requireVisibleSkill(user, skillId);
-        List<SkillVersionEntity> rows = versions.findBySkillIdOrderByCreatedAtDesc(skillId);
+        int size = limit == null ? DEFAULT_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
+        CursorCodec.Cursor decoded = CursorCodec.decodeOrEmpty(cursor);
+        List<SkillVersionEntity> rows = versions.findBySkillIdAfterCursor(skillId, decoded.time(),
+            decoded.id(), PageRequest.of(0, size + 1));
+        CursorPage<SkillVersionEntity> page = CursorPage.of(rows, size, SkillVersionService::nextCursorOf);
         // 制品与扫描一次批量拿齐：逐个版本查一次，在远程库上就是 2N 次往返
         // （本机到库的往返几十毫秒，一个版本多的 Skill 光这一页就要等好几秒）。
-        Map<UUID, ArtifactEntity> artifactById = artifacts.byIds(rows.stream()
+        Map<UUID, ArtifactEntity> artifactById = artifacts.byIds(page.items().stream()
             .map(SkillVersionEntity::getArtifactId).filter(Objects::nonNull).toList());
         Map<UUID, ScanEntity> scanByVersionId =
-            scans.findLatestByVersionIds(rows.stream().map(SkillVersionEntity::getId).toList());
-        List<SkillVersionResponse> items = new ArrayList<>(rows.size());
-        for (SkillVersionEntity version : rows) {
-            items.add(toResponse(version,
+            scans.findLatestByVersionIds(page.items().stream().map(SkillVersionEntity::getId).toList());
+        return page.map(items -> items.stream().map(version -> toResponse(version,
                 artifactOf(version, artifactById),
-                scanByVersionId.get(version.getId())));
-        }
-        return new VersionPage(items, null, false);
+                scanByVersionId.get(version.getId()))).toList());
+    }
+
+    /** 下一页的起点：这一页最后一条的 (created_at, id)。 */
+    private static String nextCursorOf(SkillVersionEntity version) {
+        return CursorCodec.encode(version.getCreatedAt(), version.getId());
     }
 
     /**

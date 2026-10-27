@@ -6,6 +6,8 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.UserEntity;
 import com.skillmesh.api.auth.UserRepository;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.CursorCodec;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.diff.ArtifactDiffService;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.Roles;
@@ -51,6 +53,10 @@ public class ReviewQueueService {
     private static final String REVIEWER_ROLES = String.join(",",
         Roles.ORG_RANK.subList(0, Roles.ORG_RANK.indexOf("reviewer") + 1));
 
+    /** 队列一页的默认条数与上限。 */
+    private static final int DEFAULT_PAGE_SIZE = 50;
+    private static final int MAX_PAGE_SIZE = 200;
+
     private final SkillVersionRepository versions;
     private final SkillRepository skills;
     private final SourceRepository sources;
@@ -76,15 +82,23 @@ public class ReviewQueueService {
 
     /** 待审列表。 */
     @Transactional(readOnly = true)
-    public List<PendingReviewItem> pending(CurrentUser user, String status, int limit) {
+    public CursorPage<PendingReviewItem> pending(CurrentUser user, String status, Integer limit,
+            String cursor) {
         String wanted = status == null || status.isBlank() ? "pending_review" : status;
-        int capped = Math.clamp(limit, 1, 200);
+        int size = limit == null ? DEFAULT_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
+        CursorCodec.Cursor3 decoded = CursorCodec.decode3OrEmpty(cursor);
         List<SkillVersionEntity> rows = versions.findReviewable(user.id(), wanted, REVIEWER_ROLES,
-                PageRequest.of(0, capped));
+            decoded.time(), decoded.time2(), decoded.id(), PageRequest.of(0, size + 1));
+        CursorPage<SkillVersionEntity> page = CursorPage.of(rows, size, ReviewQueueService::nextCursorOf);
         // 一页里的技能、扫描、来源、人各查一次：逐条查就是 4N 次往返，
         // 本机到远程库一次往返几十毫秒，一页 50 条就是 200 次。
-        Lookups lookups = lookupsOf(rows);
-        return rows.stream().map(version -> toItem(version, lookups)).toList();
+        Lookups lookups = lookupsOf(page.items());
+        return page.map(items -> items.stream().map(version -> toItem(version, lookups)).toList());
+    }
+
+    /** 下一页的起点：这一页最后一条的 (submitted_at, created_at, id)。 */
+    private static String nextCursorOf(SkillVersionEntity version) {
+        return CursorCodec.encode3(version.getSubmittedAt(), version.getCreatedAt(), version.getId());
     }
 
     /**

@@ -31,6 +31,11 @@
 # 回滚与换设备
 ./skillmesh.exe rollback java-debug --to 1.0.0
 ./skillmesh.exe restore
+
+# 删掉云端的 Skill（软删除，可还原）
+./skillmesh.exe cloud delete java-debug
+./skillmesh.exe cloud deleted           # 看自己删过哪些
+./skillmesh.exe cloud restore java-debug # 找回来
 ```
 
 
@@ -78,6 +83,26 @@ skillmesh recycle list --skill demo        # 不在 Skill 目录里时用 --skil
 ```
 
 回收期 30 天。恢复走的是**正常发版流程**——扫描、审核那道闸一样要过，恢复回来的内容不会被绕开审核直接上线。
+
+## 删掉云端的 Skill
+
+```bash
+skillmesh cloud delete java-debug       # 删（软删除）
+skillmesh cloud deleted                 # 看自己删过哪些
+skillmesh cloud restore java-debug      # 找回来
+```
+
+删除是**软删除**：版本、制品、安装记录都留着，Skill 不再出现在列表里、也不能再被安装，回收期内随时能还原。删掉之后 **slug 让了出来**——可以用同一个名字重新建一个新的。
+
+删除权限与发布权同档：个人 Skill 只有属主能删，团队/组织的要 publisher 及以上。
+
+**各端同步时，本地那份会一起删掉**：下一次 `skillmesh sync` 看到云端明确删过了，就把本地目录移进本机回收站（`skillmesh trash list` 能找回），并清掉这条同步基线——留着基线的话，下一轮同步会把删掉的东西又传回云端。
+
+同步只认服务端明确记下的删除，不会靠「云端查不到」去推断：换台服务器、连了个空库，都不会把本机的 Skill 误删。删完又用同一个 slug 重建了一个的，云端那个是活的，本地那份就继续跟它对账，不会被删。
+
+> **拿不到「已删除清单」就不上传**：同步开头先拉这份清单。拉不到（服务端版本太旧、没有 `/deleted-skills` 接口，或者网络不通）时，本次同步**一个都不上传**，直接报失败。原因是老逻辑里「云端查不到 = 该上传」——那时候没有删除的概念，上传会在云端新建一个同名的 Skill，把人家删掉的复活。宁可这次不传，等清单拿到了再说。
+
+> 后台同步（`watch` / `daemon`）也会跟着删——但删掉的东西是进了本机回收站，不是直接抹掉，误删还能找回来。
 
 ## 后台同步
 
@@ -297,6 +322,37 @@ verify:
 钉了之后，服务端换密钥而你没更新配置，验签会**硬失败**（不会只看「签名能不能验过」）。没钉也没配服务端密钥时，CLI 会明说「未验证来源」——能确认内容摘要对得上，但不能确认是谁签的。服务端怎么生成与配置签名密钥见 [部署与排障](部署与排障.md#制品签名密钥)。
 
 **被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
+
+## 日志与审计：谁动过什么
+
+两处记录，视角不同，别混：
+
+| 记在哪 | 记什么 | 怎么看 |
+| --- | --- | --- |
+| 服务端审计流水 | 谁、什么时候、对哪个 Skill 做了什么（跨设备、权威） | 控制台「审计」页、`GET /api/v1/audit-events` |
+| 本机操作日志 | 这台机器上发生过什么（本机细节） | `skillmesh logs` |
+
+```bash
+./skillmesh.exe logs                 # 最近 50 条
+./skillmesh.exe logs --tail 200
+./skillmesh.exe logs --skill yuanbao # 只看某个 Skill
+```
+
+日志在 `<缓存目录>/operations.log`（Windows 是 `%LOCALAPPDATA%\SkillMesh\Cache\operations.log`），一行一条 JSON，机器也读得动。
+
+| 动作 | 什么时候记 |
+| --- | --- |
+| `sync.uploaded` | 同步把本地内容传上云端 |
+| `sync.downloaded` | 同步把云端版本拉回本地 |
+| `sync.local_deleted` | 云端删了，本地那份跟着进了回收站 |
+| `sync.conflicted` / `sync.failed` | 冲突 / 失败 |
+| `skill.published` | 发布 |
+| `skill.installed` / `skill.uninstalled` | 安装 / 卸载 |
+| `skill.archived` / `skill.restored` | 云端删除 / 还原 |
+
+「无变化」不记：每次同步都刷一遍没有变化，日志会被噪声淹掉。
+
+同步的这几类结果同时上报给服务端记审计——「本地那份被云端的删除带走了」只有客户端看得见，服务端那边只有版本记录。服务端审计的完整动作清单见[团队治理](团队治理.md#审计)。
 
 ## 诊断
 

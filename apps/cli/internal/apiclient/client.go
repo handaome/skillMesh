@@ -182,9 +182,32 @@ func (c *Client) Skill(ctx context.Context, id string) (Skill, error) {
 	return out, c.do(ctx, http.MethodGet, "/skills/"+url.PathEscape(id), nil, &out)
 }
 
+// Versions 取某个 Skill 的全部版本。
+//
+// 服务端按游标分页，一页只有 limit 条。CLI 的调用点（选版本、算云端摘要、
+// 回滚到旧版）都假设拿到的是全部，所以这里把页翻完——CLI 是低频操作，
+// 多几次往返比「找不到那个老版本」强。
 func (c *Client) Versions(ctx context.Context, id string) (VersionPage, error) {
-	var out VersionPage
-	return out, c.do(ctx, http.MethodGet, "/skills/"+url.PathEscape(id)+"/versions", nil, &out)
+	query := url.Values{}
+	query.Set("limit", "100")
+	var all []SkillVersion
+	cursor := ""
+	for {
+		if cursor == "" {
+			query.Del("cursor")
+		} else {
+			query.Set("cursor", cursor)
+		}
+		var page VersionPage
+		if err := c.do(ctx, http.MethodGet, "/skills/"+url.PathEscape(id)+"/versions", query, &page); err != nil {
+			return VersionPage{}, err
+		}
+		all = append(all, page.Items...)
+		if !page.HasMore || page.NextCursor == nil {
+			return VersionPage{Items: all}, nil
+		}
+		cursor = *page.NextCursor
+	}
 }
 
 // DownloadArtifact 取版本制品字节。走 stream 而不是 presigned URL，

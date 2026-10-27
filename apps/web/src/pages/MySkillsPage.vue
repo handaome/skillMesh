@@ -2,16 +2,19 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   createSkill,
+  deleteSkill,
   getVersions,
+  listDeletedSkills,
   listRecycleFiles,
-  revokeVersion,
   restoreRecycleFile,
+  restoreSkill,
+  revokeVersion,
   searchMySkills,
   updateSkill,
 } from '../api'
-import { useSkillList } from '../composables/useSkillList'
+import { usePagedList } from '../composables/usePagedList'
 import { VERSION_STATUS_TEXT, VISIBILITY_TEXT } from '../constants/status'
-import type { RecycleFile, Skill, SkillVersion } from '../types'
+import type { DeletedSkill, RecycleFile, Skill, SkillVersion } from '../types'
 import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
@@ -27,7 +30,12 @@ const SEARCH_DEBOUNCE_MS = 300
 
 const query = ref('')
 
-/** 列表。服务端按游标翻页，超过一页的这里能接着往下取。 */
+/**
+ * 列表。服务端按游标翻页，超过一页的这里能接着往下取。
+ *
+ * 查询词是这次查询的条件：翻页时用同一个词接着查，
+ * 词变了就重新 load——拿旧词的游标查新词，页面对不上。
+ */
 const {
   items: skills,
   loading,
@@ -37,15 +45,57 @@ const {
   countText,
   load: loadPage,
   loadMore,
-} = useSkillList(searchMySkills)
+} = usePagedList<Skill, string>((q, cursor) => searchMySkills(q, cursor), { unit: '个' })
 
 /** 选中的 Skill。右侧详情面板显示的就是它。 */
 const selected = ref<Skill | null>(null)
-const versions = ref<SkillVersion[]>([])
-const versionsLoading = ref(false)
-const versionsError = ref('')
+
+/**
+ * 版本列表。
+ *
+ * 版本只增不减（每发一版 +1），一次全量返回迟早把响应撑爆：
+ * 后面的版本谁都看不见，所以要能一页一页往下翻。
+ *
+ * 换 Skill 就重置：旧 Skill 的版本还挂在屏幕上会让人以为看的是新的。
+ */
+const {
+  items: versions,
+  loading: versionsLoading,
+  loadingMore: versionsLoadingMore,
+  error: versionsError,
+  hasMore: versionsHasMore,
+  countText: versionsCountText,
+  load: loadVersions,
+  loadMore: loadMoreVersions,
+  reset: resetVersions,
+} = usePagedList<SkillVersion, string>((skillId, cursor) =>
+  getVersions(skillId, undefined, cursor), { unit: '个' })
+
+/**
+ * 已删除的 Skill（云端归档的）。
+ *
+ * 客户端靠它判断「云端删过的、本地也要跟着删」——
+ * 只有服务端明确记下过删除，本地才敢动。
+ */
+const {
+  items: deleted,
+  loading: deletedLoading,
+  error: deletedError,
+  hasMore: deletedHasMore,
+  countText: deletedCountText,
+  load: loadDeleted,
+  loadMore: loadMoreDeleted,
+} = usePagedList<DeletedSkill>((_params, cursor) => listDeletedSkills(cursor), { unit: '个' })
+
 const actionError = ref('')
 const notice = ref('')
+/** 已删除区块展开与否。第一次展开才去拉数据——没人看就别打这个请求。 */
+const deletedOpen = ref(false)
+/** 拉过没有。拉过就不在每次展开时重拉。 */
+const deletedLoaded = ref(false)
+/** 列表级动作（删除、还原）的提示。放在页面顶部：列表里没有详情面板可依附。 */
+const listNotice = ref('')
+const listActionError = ref('')
 
 /** 回收站里的文件。空数组表示没查过或没有。 */
 const recycle = ref<RecycleFile[]>([])
@@ -123,19 +173,9 @@ async function select(skill: Skill) {
   actionError.value = ''
   // 换 Skill 就收起文件浏览：展开的是上一个 Skill 的文件。
   browseVersion.value = ''
-  versions.value = []
-  versionsLoading.value = true
-  versionsError.value = ''
-  try {
-    const page = await getVersions(skill.id)
-    if (selected.value?.id !== skill.id) return
-    versions.value = page.items
-  } catch (e) {
-    if (selected.value?.id !== skill.id) return
-    versionsError.value = errorText(e)
-  } finally {
-    if (selected.value?.id === skill.id) versionsLoading.value = false
-  }
+  // 旧 Skill 的版本还挂在屏幕上会让人以为看的是新的，先清掉。
+  resetVersions()
+  await loadVersions(skill.id)
   await loadRecycle(skill.id)
 }
 
@@ -176,14 +216,12 @@ async function restoreFile(file: RecycleFile) {
   }
   notice.value = `${file.path} 已恢复，发出了新版本。`
   await loadRecycle(skill.id)
-  const page = await getVersions(skill.id)
-  versions.value = page.items
+  await loadVersions(skill.id)
 }
 
 function clearSelection() {
   selected.value = null
-  versions.value = []
-  versionsError.value = ''
+  resetVersions()
   actionError.value = ''
   notice.value = ''
   browseVersion.value = ''
@@ -198,15 +236,9 @@ function clearSelection() {
 async function onEdited(version?: string) {
   if (!selected.value) return
   const skill = selected.value
-  try {
-    const page = await getVersions(skill.id)
-    if (selected.value?.id !== skill.id) return
-    versions.value = page.items
-    // 抽屉跟着新版本走：编辑产出的是新版本，接着改得基于它。
-    if (version) browseVersion.value = version
-  } catch (e) {
-    versionsError.value = errorText(e)
-  }
+  await loadVersions(skill.id)
+  // 抽屉跟着新版本走：编辑产出的是新版本，接着改得基于它。
+  if (version) browseVersion.value = version
 }
 
 /** 保存展示性元数据。 */
@@ -244,12 +276,62 @@ async function revoke(version: SkillVersion) {
   try {
     await revokeVersion(skill.id, version.version, '在控制台撤回')
     notice.value = `版本 ${version.version} 已撤回。`
-    const page = await getVersions(skill.id)
-    if (selected.value?.id !== skill.id) return
-    versions.value = page.items
+    await loadVersions(skill.id)
   } catch (e) {
     actionError.value = errorText(e)
   }
+}
+
+/** 展开/收起已删除区块。第一次展开才去拉数据：没人看就别打这个请求。 */
+async function toggleDeleted() {
+  deletedOpen.value = !deletedOpen.value
+  if (deletedOpen.value && !deletedLoaded.value) {
+    await loadDeleted()
+    deletedLoaded.value = true
+  }
+}
+
+/**
+ * 删除一个 Skill。
+ *
+ * 软删除：云端的数据留着，可以从「已删除」里还原回来；但各端同步后本地那份
+ * 也会被删掉——这步不可逆（本地那份删了就是删了），所以先问一句。
+ */
+async function remove(skill: Skill) {
+  const ok = window.confirm(
+    `删除「${skill.name}」？\n删除后可在「已删除」里还原；各端同步后本地那份也会被删掉。`,
+  )
+  if (!ok) return
+  listActionError.value = ''
+  listNotice.value = ''
+  try {
+    await deleteSkill(skill.id)
+  } catch (e) {
+    listActionError.value = errorText(e)
+    return
+  }
+  listNotice.value = `已删除「${skill.name}」，可在「已删除」里还原。`
+  await load()
+  await loadDeleted()
+}
+
+/**
+ * 还原一个被删除的 Skill。
+ *
+ * 还原完它回到删除前的样子，重新出现在「我的 Skill」里——两个列表都得刷新。
+ */
+async function restore(item: DeletedSkill) {
+  listActionError.value = ''
+  listNotice.value = ''
+  try {
+    await restoreSkill(item.id)
+  } catch (e) {
+    listActionError.value = errorText(e)
+    return
+  }
+  listNotice.value = `已还原「${item.name}」。`
+  await load()
+  await loadDeleted()
 }
 
 /** 新建 Skill 的元数据。内容（版本）仍由 CLI 发布。 */
@@ -318,6 +400,14 @@ onUnmounted(() => {
       {{ listError }}
     </p>
 
+    <!-- 删除、还原的提示。列表级动作没有详情面板可依附，放在页面顶部。 -->
+    <p v-if="listActionError" class="sm-note sm-note--error sm-mb-16" data-test="list-error">
+      {{ listActionError }}
+    </p>
+    <p v-if="listNotice" class="sm-note sm-note--success sm-mb-16" data-test="list-notice">
+      {{ listNotice }}
+    </p>
+
     <!--
       没选中时列表占满整屏：这一屏问的是「我名下有什么」，
       列表就是答案，右边留一栏空白反而像缺了东西。
@@ -345,24 +435,28 @@ onUnmounted(() => {
         />
 
         <div v-else-if="skills.length" class="sm-list">
-          <button
+          <!--
+            行本身不再整行是按钮：行里要放「删除」，按钮套按钮浏览器会把它拆开。
+            左边那块仍然是按钮，点它打开详情。
+          -->
+          <div
             v-for="skill in skills"
             :key="skill.id"
-            class="sm-item sm-item-btn"
+            class="sm-item"
             :class="{ 'sm-item-on': selected?.id === skill.id }"
-            data-test="mine-item"
-            @click="select(skill)"
           >
-            <div class="sm-item-body">
-              <div class="sm-item-head">
-                <strong class="sm-item-title sm-truncate">{{ skill.name }}</strong>
-                <!-- slug 与名字常常一样，重复两遍只是噪声。 -->
-                <code v-if="skill.slug !== skill.name" class="sm-mono sm-muted sm-meta sm-truncate">
-                  {{ skill.slug }}
-                </code>
+            <button class="sm-item-btn sm-grow" data-test="mine-item" @click="select(skill)">
+              <div class="sm-item-body">
+                <div class="sm-item-head">
+                  <strong class="sm-item-title sm-truncate">{{ skill.name }}</strong>
+                  <!-- slug 与名字常常一样，重复两遍只是噪声。 -->
+                  <code v-if="skill.slug !== skill.name" class="sm-mono sm-muted sm-meta sm-truncate">
+                    {{ skill.slug }}
+                  </code>
+                </div>
+                <p class="sm-muted sm-meta sm-truncate">{{ skill.description || '（没有描述）' }}</p>
               </div>
-              <p class="sm-muted sm-meta sm-truncate">{{ skill.description || '（没有描述）' }}</p>
-            </div>
+            </button>
             <div class="sm-row sm-mine-meta">
               <span :class="visibilityPill(skill.visibility)">
                 {{ VISIBILITY_TEXT[skill.visibility] ?? skill.visibility }}
@@ -370,8 +464,15 @@ onUnmounted(() => {
               <span class="sm-muted sm-meta sm-num">
                 <span class="sm-faint">最新</span> {{ skill.latest_version ?? '—' }}
               </span>
+              <button
+                class="sm-btn sm-btn--danger sm-btn--sm"
+                data-test="delete-skill"
+                @click="remove(skill)"
+              >
+                删除
+              </button>
             </div>
-          </button>
+          </div>
         </div>
 
         <!-- 还有下一页：说清还有，不假装这就是全部。 -->
@@ -439,7 +540,7 @@ onUnmounted(() => {
           <div class="sm-panel">
             <div class="sm-panel-head">
               <h2 class="sm-section">版本</h2>
-              <span class="sm-meta">{{ versions.length }} 个</span>
+              <span class="sm-meta">{{ versionsCountText }}</span>
             </div>
 
             <p v-if="versionsError" class="sm-note sm-note--error sm-mb-12" data-test="versions-error">
@@ -493,6 +594,18 @@ onUnmounted(() => {
                 </div>
               </li>
             </ul>
+
+            <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+            <div v-if="versionsHasMore" class="sm-row sm-mt-12">
+              <button
+                class="sm-btn sm-btn--quiet sm-btn--sm"
+                data-test="load-more-versions"
+                :disabled="versionsLoadingMore"
+                @click="loadMoreVersions"
+              >
+                {{ versionsLoadingMore ? '加载中…' : '加载更多版本' }}
+              </button>
+            </div>
           </div>
 
           <!--
@@ -540,6 +653,69 @@ onUnmounted(() => {
           </div>
         </template>
       </div>
+    </div>
+
+    <!--
+      已删除：云端归档的 Skill。删掉的先在这儿躺着，可以还原回去。
+      默认收起：多数人没删过东西，摊开一屏空列表只是噪声。
+    -->
+    <div class="sm-panel sm-mt-24">
+      <div class="sm-panel-head">
+        <h2 class="sm-section">已删除</h2>
+        <div class="sm-row">
+          <span v-if="deletedLoaded" class="sm-meta">{{ deletedCountText }}</span>
+          <button
+            class="sm-btn sm-btn--quiet sm-btn--sm"
+            data-test="toggle-deleted"
+            @click="toggleDeleted"
+          >
+            {{ deletedOpen ? '收起' : '展开' }}
+          </button>
+        </div>
+      </div>
+
+      <template v-if="deletedOpen">
+        <p v-if="deletedError" class="sm-note sm-note--error sm-mb-12" data-test="deleted-error">
+          {{ deletedError }}
+        </p>
+
+        <div v-if="deletedLoading" class="sm-empty">加载中…</div>
+
+        <EmptyState
+          v-else-if="!deletedError && !deleted.length"
+          text="还没有删除过 Skill。删掉的会先放到这儿，随时能还原回去。"
+        />
+
+        <ul v-else class="sm-list">
+          <li v-for="item in deleted" :key="item.id" class="sm-item sm-item-static">
+            <div class="sm-grow">
+              <div class="sm-item-head">
+                <strong class="sm-item-title sm-truncate">{{ item.name }}</strong>
+                <code class="sm-mono sm-muted sm-meta sm-truncate">{{ item.slug }}</code>
+              </div>
+              <p class="sm-muted sm-sm">删除于 {{ formatDateTime(item.deleted_at) }}</p>
+            </div>
+            <button
+              class="sm-btn sm-btn--quiet sm-btn--sm"
+              data-test="restore-skill"
+              @click="restore(item)"
+            >
+              还原
+            </button>
+          </li>
+        </ul>
+
+        <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+        <div v-if="deletedHasMore" class="sm-row sm-mt-12">
+          <button
+            class="sm-btn sm-btn--quiet sm-btn--sm"
+            data-test="deleted-more"
+            @click="loadMoreDeleted"
+          >
+            加载更多
+          </button>
+        </div>
+      </template>
     </div>
 
     <!--

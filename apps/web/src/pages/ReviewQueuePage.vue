@@ -2,17 +2,33 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { listRecentReviews, listReviews } from '../api'
+import { usePagedList } from '../composables/usePagedList'
 import { SCAN_STATUS_TEXT } from '../constants/status'
 import type { PendingReview } from '../types'
-import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 
 const router = useRouter()
-const reviews = ref<PendingReview[]>([])
+
+/**
+ * 待审队列，按游标往下翻。
+ *
+ * 待审数没有上限：团队一直发版，队列就一直长。只显示一页的话，
+ * 排在窗口外的待审版本永远没人看得见。
+ */
+const {
+  items: reviews,
+  loading,
+  loadingMore,
+  error,
+  hasMore,
+  countText,
+  load,
+  loadMore,
+} = usePagedList<PendingReview>((_params, cursor) => listReviews('pending_review', cursor))
+
+/** 最近放行的版本。只是背景信息，一次取一页即可。 */
 const recent = ref<PendingReview[]>([])
-const error = ref('')
-const loading = ref(false)
 
 /**
  * 最近放行的版本，同一个 Skill 只留最新的一版。
@@ -27,21 +43,17 @@ function dedupe(items: PendingReview[]): PendingReview[] {
   })
 }
 
-async function load() {
-  loading.value = true
-  error.value = ''
+/**
+ * 取最近放行的版本。
+ *
+ * 取不到不算错：这一段只是背景，待办才是正事。
+ */
+async function loadRecent() {
   try {
-    // 两块并行：待办要立刻看到，最近放行只是背景，晚一点到无妨。
-    const [pending, done] = await Promise.all([
-      listReviews(),
-      listRecentReviews('published').catch(() => [] as PendingReview[]),
-    ])
-    reviews.value = pending
-    recent.value = dedupe(done)
-  } catch (e) {
-    error.value = errorText(e)
-  } finally {
-    loading.value = false
+    const page = await listRecentReviews('published')
+    recent.value = dedupe(page.items)
+  } catch {
+    recent.value = []
   }
 }
 
@@ -49,7 +61,10 @@ function open(review: PendingReview) {
   router.push(`/reviews/${review.skill_id}/${review.version}`)
 }
 
-onMounted(load)
+onMounted(async () => {
+  // 两块并行：待办要立刻看到，最近放行只是背景，晚一点到无妨。
+  await Promise.all([load(), loadRecent()])
+})
 </script>
 
 <template>
@@ -59,7 +74,7 @@ onMounted(load)
         <h1 class="sm-title">待审版本</h1>
         <p class="sm-sub">团队与组织可见的版本不会直接发布，要在这里有人放行。</p>
       </div>
-      <span class="sm-muted sm-sm sm-num">{{ reviews.length }} 个待审</span>
+      <span class="sm-muted sm-sm sm-num">{{ countText }}</span>
     </div>
 
     <p v-if="error" class="sm-note sm-note--error sm-mb-16" data-test="error">
@@ -112,6 +127,18 @@ onMounted(load)
             <!-- 「待放行」列表里的药丸说的是扫描结论，不是审核结果：不带「扫描」二字，绿色的「通过」会被读成「审核已通过」。 -->
             扫描{{ SCAN_STATUS_TEXT[review.scan.status] ?? review.scan.status }}
           </span>
+        </button>
+      </div>
+
+      <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+      <div v-if="hasMore" class="sm-row sm-mt-16">
+        <button
+          class="sm-btn sm-btn--quiet sm-btn--sm"
+          data-test="load-more"
+          :disabled="loadingMore"
+          @click="loadMore"
+        >
+          {{ loadingMore ? '加载中…' : '加载更多' }}
         </button>
       </div>
     </div>

@@ -1,6 +1,8 @@
 package com.skillmesh.api.audit;
 
 import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.common.CursorCodec;
+import com.skillmesh.api.common.CursorPage;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -27,6 +29,10 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 public class AuditService {
 
     private static final Logger log = LoggerFactory.getLogger(AuditService.class);
+
+    /** 流水一页的默认条数与上限。 */
+    private static final int DEFAULT_PAGE_SIZE = 50;
+    private static final int MAX_PAGE_SIZE = 200;
 
     private final AuditRepository repository;
 
@@ -145,8 +151,30 @@ public class AuditService {
      * 可见性在 SQL 里判（与搜索共用同一份条件），不在内存里筛。
      */
     @Transactional(readOnly = true)
-    public List<AuditEventEntity> recentVisible(CurrentUser user, String action, int limit) {
+    public CursorPage<AuditEventEntity> recentVisible(CurrentUser user, String action, Integer limit,
+            String cursor) {
         String filter = action == null || action.isBlank() ? null : action;
-        return repository.findVisibleForUser(user.id(), filter, Math.clamp(limit, 1, 200));
+        int size = limit == null ? DEFAULT_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
+        CursorCodec.NumericCursor decoded = CursorCodec.decodeNumericOrEmpty(cursor);
+        List<AuditEventEntity> rows = repository.findVisibleForUser(user.id(), filter,
+            decoded.time(), decoded.id(), size + 1);
+        return CursorPage.of(rows, size, AuditService::nextCursorOf);
+    }
+
+    /**
+     * 某个 Skill 的流水，带游标翻页。
+     */
+    @Transactional(readOnly = true)
+    public CursorPage<AuditEventEntity> recentForSkill(UUID skillId, Integer limit, String cursor) {
+        int size = limit == null ? DEFAULT_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
+        CursorCodec.NumericCursor decoded = CursorCodec.decodeNumericOrEmpty(cursor);
+        List<AuditEventEntity> rows = repository.findForTargetAfterCursor("skill", skillId.toString(),
+            decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
+        return CursorPage.of(rows, size, AuditService::nextCursorOf);
+    }
+
+    /** 下一页的起点：这一页最后一条的 (occurred_at, id)。 */
+    private static String nextCursorOf(AuditEventEntity event) {
+        return CursorCodec.encodeNumeric(event.getOccurredAt(), event.getId());
     }
 }

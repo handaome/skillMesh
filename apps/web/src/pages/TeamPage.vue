@@ -15,6 +15,7 @@ import {
 } from '../api'
 import { currentOrg } from '../auth/currentOrg'
 import { loadMe, meError } from '../auth/session'
+import { usePagedList } from '../composables/usePagedList'
 import type { Invitation, Member, Team } from '../types'
 import { errorText } from '../utils/errorText'
 import EmptyState from '../components/EmptyState.vue'
@@ -26,15 +27,26 @@ const membersLoading = ref(true)
 /** 当前表格里的行属于哪个范围（组织/团队）。切范围时旧行得先清掉。 */
 const membersScope = ref('')
 const members = ref<Member[]>([])
-const invitations = ref<Invitation[]>([])
-/** 下一页的起点；null 表示没有更多了。 */
-const invitationCursor = ref<string | null>(null)
-/** 服务端说还有没有更多。 */
-const invitationsHasMore = ref(false)
-/** 正在取下一页。 */
-const invitationsLoadingMore = ref(false)
-/** 邀请区正在读。 */
-const invitationsLoading = ref(true)
+/**
+ * 邀请列表。服务端按游标翻页，超过一页的这里能接着往下取。
+ *
+ * 组织 id 是这次查询的条件：翻页时用同一个组织接着查——
+ * 换了组织就重新 load，拿旧组织的游标查新组织，页面对不上。
+ */
+const {
+  items: invitations,
+  loading: invitationsLoading,
+  loadingMore: invitationsLoadingMore,
+  error: invitationsError,
+  hasMore: invitationsHasMore,
+  countText: invitationCountText,
+  load: loadInvitations,
+  loadMore: loadMoreInvitations,
+  reset: resetInvitations,
+} = usePagedList<Invitation, string>((orgId, cursor) => listInvitations(orgId, cursor), {
+  unit: '个',
+  initialLoading: true,
+})
 /** 成员区的错（改角色、读成员、读团队） */
 const memberError = ref('')
 /** 邀请区的错（生成、撤销、读邀请） */
@@ -63,14 +75,6 @@ const TEAM_ROLE_OPTIONS = ['admin', 'publisher', 'reviewer', 'member', 'viewer']
 
 /** 角色下拉的选项：选了团队就是团队角色，没选就是组织角色。 */
 const roleOptions = computed(() => (selectedTeam.value ? TEAM_ROLE_OPTIONS : ORG_ROLE_OPTIONS))
-
-/**
- * 条数说明。有下一页时不能说「共 N 个」——服务端只给了一页，那个数不是总数。
- */
-const invitationCountText = computed(() =>
-  invitationsHasMore.value
-    ? `已显示 ${invitations.value.length} 个，还有更多`
-    : `${invitations.value.length} 个`)
 
 /**
  * 角色是什么意思。表头只说「角色」时没人知道改的是哪一层——
@@ -142,7 +146,7 @@ async function load() {
   const orgId = org.value?.id
   if (!orgId) {
     membersLoading.value = false
-    invitationsLoading.value = false
+    resetInvitations()
     return
   }
   memberError.value = ''
@@ -176,46 +180,6 @@ async function load() {
   // 邀请列表单独拉：它在远程库上要好几秒，跟成员表并行会把整页拖住，
   // 让人先看到半张空页面。成员表先落地，邀请后到。
   void loadInvitations(orgId)
-}
-
-async function loadInvitations(orgId: string) {
-  invitationsLoading.value = true
-  try {
-    const page = await listInvitations(orgId)
-    if (org.value?.id !== orgId) return
-    invitations.value = page.items
-    invitationCursor.value = page.next_cursor
-    invitationsHasMore.value = page.has_more
-  } catch (e) {
-    if (org.value?.id !== orgId) return
-    inviteError.value = errorText(e)
-  } finally {
-    invitationsLoading.value = false
-  }
-}
-
-/**
- * 取下一页的邀请，追加到已有的后面。
- *
- * 翻页失败不清列表：已经取到的那几页还在，用户重试就行。
- */
-async function loadMoreInvitations() {
-  const orgId = org.value?.id
-  const cursor = invitationCursor.value
-  if (!orgId || !cursor || invitationsLoadingMore.value) return
-  invitationsLoadingMore.value = true
-  try {
-    const page = await listInvitations(orgId, cursor)
-    if (org.value?.id !== orgId) return
-    invitations.value = [...invitations.value, ...page.items]
-    invitationCursor.value = page.next_cursor
-    invitationsHasMore.value = page.has_more
-  } catch (e) {
-    if (org.value?.id !== orgId) return
-    inviteError.value = errorText(e)
-  } finally {
-    invitationsLoadingMore.value = false
-  }
 }
 
 async function invite() {
@@ -335,9 +299,7 @@ async function createTeamNow() {
 watch(() => org.value?.id, async () => { selectedTeam.value = ''
   teams.value = []
   members.value = []
-  invitations.value = []
-  invitationCursor.value = null
-  invitationsHasMore.value = false
+  resetInvitations()
   inviteLink.value = ''
   inviteToken.value = ''
   notice.value = ''
@@ -590,6 +552,11 @@ onMounted(load)
           {{ inviteError }}
         </p>
 
+        <!-- 邀请列表读失败要说出来：读失败不是「没有发出过邀请」。 -->
+        <p v-if="invitationsError" class="sm-note sm-note--error sm-mb-12" data-test="invitations-error">
+          {{ invitationsError }}
+        </p>
+
         <!-- 邀请区同理：读失败不是「没有发出过邀请」。 -->
         <div v-if="invitations.length" class="sm-table-scroll">
           <table class="sm-table sm-table--flush sm-table--stack">
@@ -643,7 +610,7 @@ onMounted(load)
         </div>
         <div v-if="invitationsLoading && !invitations.length" class="sm-muted sm-meta">正在读邀请…</div>
         <EmptyState
-          v-if="!invitationsLoading && !inviteError && !invitations.length"
+          v-if="!invitationsLoading && !invitationsError && !invitations.length"
           text="还没有发出过邀请"
         />
         <p v-if="invitations.length" class="sm-muted sm-meta sm-mt-12">

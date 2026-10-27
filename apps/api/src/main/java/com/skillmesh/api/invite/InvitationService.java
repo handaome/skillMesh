@@ -5,8 +5,8 @@ import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.CursorCodec;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.common.ErrorCodes;
-import com.skillmesh.api.invite.dto.InvitationPage;
 import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrgRepository;
 import com.skillmesh.api.org.OrgService;
@@ -181,36 +181,31 @@ public class InvitationService {
      * 一个组织攒下几十份邀请就够这个页面卡住。
      */
     @Transactional(readOnly = true)
-    public InvitationPage listSummaries(UUID organizationId, Integer limit, String cursor) {
+    public CursorPage<InvitationSummary> listSummaries(UUID organizationId, Integer limit, String cursor) {
         int size = limit == null ? DEFAULT_LIMIT : Math.clamp(limit, 1, MAX_LIMIT);
-        OffsetDateTime cursorTime = null;
-        UUID cursorId = null;
-        if (cursor != null && !cursor.isBlank()) {
-            CursorCodec.Cursor decoded = CursorCodec.decode(cursor);
-            cursorTime = decoded.time();
-            cursorId = decoded.id();
-        }
+        CursorCodec.Cursor decoded = CursorCodec.decodeOrEmpty(cursor);
         List<InvitationEntity> rows = invitations.pageByOrganizationId(organizationId,
-            cursorTime, cursorId, PageRequest.of(0, size + 1));
-        boolean hasMore = rows.size() > size;
-        List<InvitationEntity> page = hasMore ? rows.subList(0, size) : rows;
+            decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
+        CursorPage<InvitationEntity> page = CursorPage.of(rows, size, InvitationService::nextCursorOf);
         Map<UUID, OrganizationEntity> orgById = organizations.findAllById(
-                page.stream().map(InvitationEntity::getOrganizationId).toList())
+                page.items().stream().map(InvitationEntity::getOrganizationId).toList())
             .stream().collect(Collectors.toMap(OrganizationEntity::getId, org -> org));
         Map<UUID, TeamEntity> teamById = teams.findAllById(
-                page.stream().map(InvitationEntity::getTeamId).filter(Objects::nonNull).toList())
+                page.items().stream().map(InvitationEntity::getTeamId).filter(Objects::nonNull).toList())
             .stream().collect(Collectors.toMap(TeamEntity::getId, team -> team));
-        List<InvitationSummary> out = new ArrayList<>(page.size());
-        for (InvitationEntity row : page) {
-            out.add(toSummary(row, orgById.get(row.getOrganizationId()),
-                row.getTeamId() == null ? null : teamById.get(row.getTeamId())));
-        }
-        String next = null;
-        if (hasMore && !page.isEmpty()) {
-            InvitationEntity last = page.get(page.size() - 1);
-            next = CursorCodec.encode(last.getCreatedAt(), last.getId());
-        }
-        return new InvitationPage(out, next, hasMore);
+        return page.map(items -> {
+            List<InvitationSummary> out = new ArrayList<>(items.size());
+            for (InvitationEntity row : items) {
+                out.add(toSummary(row, orgById.get(row.getOrganizationId()),
+                    row.getTeamId() == null ? null : teamById.get(row.getTeamId())));
+            }
+            return out;
+        });
+    }
+
+    /** 下一页的起点：这一页最后一条的 (created_at, id)。 */
+    private static String nextCursorOf(InvitationEntity row) {
+        return CursorCodec.encode(row.getCreatedAt(), row.getId());
     }
 
     /** 单份邀请的摘要（公开页用）。 */

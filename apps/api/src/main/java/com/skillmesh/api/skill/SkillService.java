@@ -1,15 +1,17 @@
 package com.skillmesh.api.skill;
 
 import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.CursorCodec;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
+import com.skillmesh.api.skill.dto.DeletedSkillResponse;
 import com.skillmesh.api.skill.dto.SkillSourceInput;
 import com.skillmesh.api.skill.dto.UpdateSkillRequest;
-import com.skillmesh.api.skill.dto.SkillPage;
 import com.skillmesh.api.skill.dto.SkillResponse;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -25,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class SkillService {
 
+    private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
 
     private final SkillRepository skills;
@@ -32,10 +35,14 @@ public class SkillService {
     private final OrgService orgs;
     private final SourceRepository sources;
 
-    public SkillService(SkillRepository skills, OrgService orgs, SourceRepository sources) {
+    private final AuditService audit;
+
+    public SkillService(SkillRepository skills, OrgService orgs, SourceRepository sources,
+                        AuditService audit) {
         this.skills = skills;
         this.orgs = orgs;
         this.sources = sources;
+        this.audit = audit;
     }
 
     @Transactional
@@ -44,16 +51,13 @@ public class SkillService {
         // 个人空间与组织空间是两套命名空间：只有建个人 Skill 时才查个人名下。
         // 原来不区分——用户自己有个个人 demo 时，在组织里建 demo 会被误挡，
         // 而唯一索引 uq_skills_org_slug 本来允许（它只约束组织内）。
-        if (req.organization_id() == null
-                && skills.existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(user.id(), req.slug())) {
-            throw new ApiException(409, ErrorCodes.SLUG_TAKEN, "slug 已被占用: " + req.slug());
-        }
-        if (req.organization_id() != null
-                && skills.existsByOrganizationIdAndSlug(req.organization_id(), req.slug())) {
+        // 归档（删除）的 Skill 不占 slug：只查 active 的那些。
+        if (slugTaken(req.organization_id(), user.id(), req.slug(), null)) {
             // 组织内的 slug 唯一（uq_skills_org_slug），团队之间也共用一个命名空间。
             // 预检拦住才回 409；撞唯一索引会变成 500，客户端看不出是重名。
+            String where = req.organization_id() == null ? "" : "在该组织下";
             throw new ApiException(409, ErrorCodes.SLUG_TAKEN,
-                "slug 在该组织下已被占用: " + req.slug());
+                "slug " + where + "已被占用: " + req.slug());
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         SkillEntity entity = new SkillEntity();
@@ -72,6 +76,8 @@ public class SkillService {
         entity.setUpdatedAt(now);
         SkillEntity saved = skills.save(entity);
         recordSource(user, saved, req.source());
+        audit.record(user, "skill.created", "skill", saved.getId(), "success",
+            Map.of("slug", saved.getSlug(), "visibility", saved.getVisibility()));
         return toResponse(saved);
     }
 
@@ -113,25 +119,148 @@ public class SkillService {
         if (!user.id().equals(entity.getOwnerUserId())) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能改这个 Skill");
         }
+        // 改了哪些字段要留下：光记「改过」看不出改了什么。
+        List<String> changed = new ArrayList<>();
         if (req.name() != null) {
             entity.setName(req.name());
+            changed.add("name");
         }
         if (req.description() != null) {
             entity.setDescription(req.description());
+            changed.add("description");
         }
         if (req.tags() != null) {
             entity.setTags(req.tags().toArray(new String[0]));
+            changed.add("tags");
         }
         if (req.metadata() != null) {
             entity.setMetadataJson(req.metadata());
+            changed.add("metadata");
         }
         entity.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
-        return toResponse(skills.save(entity));
+        SkillEntity saved = skills.save(entity);
+        audit.record(user, "skill.updated", "skill", saved.getId(), "success",
+            Map.of("fields", String.join(",", changed), "slug", saved.getSlug()));
+        return toResponse(saved);
     }
 
     @Transactional(readOnly = true)
     public SkillResponse get(CurrentUser user, UUID id) {
         return toResponse(requireVisibleSkill(user, id));
+    }
+
+    /**
+     * 归档一个 Skill：软删除，数据全留着，回收期内能还原。
+     *
+     * 删除不是抹掉：版本、制品、安装记录都还在，status 改成 archived、
+     * 记下归档时间就够了。客户端据此把本地那份一起删掉——
+     * 本地只认服务端明确记下的删除，靠「查不到」推断会把换服务器导致的
+     * 空库误当成删除，把本机内容全清掉（syncstate 里那个坑）。
+     */
+    @Transactional
+    public void archive(CurrentUser user, UUID id) {
+        SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
+        requireArchiveRight(user, entity);
+        if (!SkillStatus.ACTIVE.equals(entity.getStatus())) {
+            // 已经删过了：不给第二次删除留入口，也别把归档当成功返回
+            throw ApiException.notFound("Skill");
+        }
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        entity.setStatus(SkillStatus.ARCHIVED);
+        entity.setArchivedAt(now);
+        entity.setUpdatedAt(now);
+        skills.save(entity);
+        audit.record(user, "skill.archived", "skill", entity.getId(), "success",
+            Map.of("slug", entity.getSlug()));
+    }
+
+    /**
+     * 还原一个归档的 Skill。
+     *
+     * 归档期间可能有人用同一个 slug 建了新的：那时恢复会撞 slug 唯一性，
+     * 直接报冲突，让人先把同名的处理掉。
+     */
+    @Transactional
+    public SkillResponse restore(CurrentUser user, UUID id) {
+        SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
+        requireArchiveRight(user, entity);
+        if (SkillStatus.ACTIVE.equals(entity.getStatus())) {
+            return toResponse(entity);
+        }
+        if (!SkillStatus.ARCHIVED.equals(entity.getStatus())) {
+            throw ApiException.notFound("Skill");
+        }
+        if (slugTaken(entity.getOrganizationId(), entity.getOwnerUserId(),
+            entity.getSlug(), entity.getId())) {
+            throw new ApiException(409, ErrorCodes.SLUG_TAKEN,
+                "slug 已被占用，先处理掉同名的 Skill: " + entity.getSlug());
+        }
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        entity.setStatus(SkillStatus.ACTIVE);
+        entity.setArchivedAt(null);
+        entity.setUpdatedAt(now);
+        skills.save(entity);
+        audit.record(user, "skill.restored", "skill", entity.getId(), "success",
+            Map.of("slug", entity.getSlug()));
+        return toResponse(entity);
+    }
+
+    /**
+     * 列出自己删掉（归档）的 Skill。
+     *
+     * 客户端据此判断本地哪些要跟着删；人也要能看见自己删了什么、把它找回来。
+     */
+    @Transactional(readOnly = true)
+    public CursorPage<DeletedSkillResponse> deleted(CurrentUser user, Integer limit, String cursor) {
+        int size = limit == null ? DEFAULT_LIMIT : Math.clamp(limit, 1, MAX_LIMIT);
+        CursorCodec.Cursor decoded = decodeCursor(cursor);
+        List<SkillEntity> rows = skills.findArchived(user.id(), decoded.time(), decoded.id(),
+            PageRequest.of(0, size + 1));
+        return CursorPage.of(rows, size, SkillService::nextCursorOf)
+            .map(page -> page.stream().map(entity -> new DeletedSkillResponse(entity.getId(),
+                entity.getSlug(), entity.getName(), entity.getArchivedAt())).toList());
+    }
+
+    /**
+     * 删除权：个人 Skill 只有属主能删，团队/组织的要 publisher 及以上。
+     *
+     * 与发布权同一档：能往里塞版本的人，才能把整个 Skill 收走。
+     */
+    private void requireArchiveRight(CurrentUser user, SkillEntity entity) {
+        requireOwnerOrPublisher(user, entity, "只有属主能删除这个 Skill");
+    }
+
+    /**
+     * 属主或 publisher（团队/组织可见的）才能做这件事。
+     *
+     * 删除与发布是同一档权限：能往里塞版本的人，才能把整个 Skill 收走。
+     * 两件事的判定口径一样，所以只判一次——分开写迟早改一处漏一处。
+     */
+    private void requireOwnerOrPublisher(CurrentUser user, SkillEntity entity, String deniedMessage) {
+        if ("team".equals(entity.getVisibility())
+            || "organization".equals(entity.getVisibility())) {
+            requireOrgPublisher(user, entity.getOrganizationId());
+            return;
+        }
+        if (!user.id().equals(entity.getOwnerUserId())) {
+            throw ApiException.forbidden(deniedMessage);
+        }
+    }
+
+    /**
+     * 同一个 slug 下是不是已经有别的 active Skill。
+     *
+     * 归档的 Skill 不再占 slug（唯一索引只约束 active），
+     * 所以这里只查 active 的那些——包括用户归档之后新建的同名 Skill。
+     *
+     * excludeId 是要排除的那个：还原时排除自己，
+     * 否则它自己就把自己挡住了。
+     */
+    private boolean slugTaken(UUID organizationId, UUID ownerUserId, String slug, UUID excludeId) {
+        if (organizationId == null) {
+            return skills.existsInPersonalSpace(ownerUserId, slug, SkillStatus.ACTIVE, excludeId);
+        }
+        return skills.existsInOrganization(organizationId, slug, SkillStatus.ACTIVE, excludeId);
     }
 
     /**
@@ -150,32 +279,33 @@ public class SkillService {
     }
 
     @Transactional(readOnly = true)
-    public SkillPage search(CurrentUser user, String q, String visibility, String tag,
+    public CursorPage<SkillResponse> search(CurrentUser user, String q, String visibility, String tag,
                             boolean mine, Integer limit, String cursor) {
-        int size = limit == null ? 20 : Math.clamp(limit, 1, MAX_LIMIT);
-        OffsetDateTime cursorTime = null;
-        UUID cursorId = null;
-        if (cursor != null && !cursor.isBlank()) {
-            CursorCodec.Cursor decoded = CursorCodec.decode(cursor);
-            cursorTime = decoded.time();
-            cursorId = decoded.id();
-        }
+        int size = limit == null ? DEFAULT_LIMIT : Math.clamp(limit, 1, MAX_LIMIT);
+        CursorCodec.Cursor decoded = decodeCursor(cursor);
         // 团队/组织可见的 Skill：可见性条件交给 SQL 过滤，
         // 别把不该看到的查出来再在内存里筛——那等于没权限控制。
         List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibility, tag,
-            mine, cursorTime, cursorId, PageRequest.of(0, size + 1));
-        boolean hasMore = rows.size() > size;
-        List<SkillEntity> page = hasMore ? rows.subList(0, size) : rows;
-        List<SkillResponse> items = new ArrayList<>(page.size());
-        for (SkillEntity entity : page) {
-            items.add(toResponse(entity));
+            mine, decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
+        return CursorPage.of(rows, size, SkillService::nextCursorOf)
+            .map(page -> page.stream().map(SkillService::toResponse).toList());
+    }
+
+    /**
+     * 解码游标。没给游标就是第一页：时间与 id 都空着。
+     *
+     * 游标坏了是调用方的错，解码时统一报 400。
+     */
+    private static CursorCodec.Cursor decodeCursor(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return new CursorCodec.Cursor(null, null);
         }
-        String next = null;
-        if (hasMore && !page.isEmpty()) {
-            SkillEntity last = page.get(page.size() - 1);
-            next = CursorCodec.encode(last.getUpdatedAt(), last.getId());
-        }
-        return new SkillPage(items, next, hasMore);
+        return CursorCodec.decode(cursor);
+    }
+
+    /** 下一页的起点：这一页最后一条的 (updated_at, id)。 */
+    private static String nextCursorOf(SkillEntity entity) {
+        return CursorCodec.encode(entity.getUpdatedAt(), entity.getId());
     }
 
     /**
@@ -221,6 +351,29 @@ public class SkillService {
     private boolean isOrgAdmin(UUID organizationId, UUID userId) {
         String role = orgs.orgRoleOf(organizationId, userId);
         return role != null && Roles.ORG_ADMIN_ROLES.contains(role);
+    }
+
+    /**
+     * 我与这个 Skill 有没有关系：属主、组织成员或团队成员。
+     *
+     * 与 {@link #canView} 不是一回事：那判的是「看不看得见」
+     * （public 谁都看得见），这判的是「跟它有没有关系」——
+     * 往别人的审计流水里写东西要的是这个，光看得见不够。
+     *
+     * 读与写的口径刻意不同，别混：
+     *   看      —— public 谁都看得见。
+     *   有关系  —— 属主、组织成员、团队成员。
+     */
+    public boolean isRelated(CurrentUser user, SkillEntity entity) {
+        if (user.id().equals(entity.getOwnerUserId())) {
+            return true;
+        }
+        if (entity.getOrganizationId() == null) {
+            return false;
+        }
+        return orgs.isOrgMember(entity.getOrganizationId(), user.id())
+            || (entity.getOwnerTeamId() != null
+                && orgs.isTeamMember(entity.getOwnerTeamId(), user.id()));
     }
 
     /**
@@ -296,14 +449,7 @@ public class SkillService {
      * 只有发版不锁，契约自相矛盾。
      */
     public void requirePublishRight(CurrentUser user, SkillEntity skill) {
-        if ("team".equals(skill.getVisibility())
-            || "organization".equals(skill.getVisibility())) {
-            requireOrgPublisher(user, skill.getOrganizationId());
-            return;
-        }
-        if (!skill.getOwnerUserId().equals(user.id())) {
-            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能发新版本");
-        }
+        requireOwnerOrPublisher(user, skill, "只有属主能发新版本");
     }
 
     private static String normalize(String q) {

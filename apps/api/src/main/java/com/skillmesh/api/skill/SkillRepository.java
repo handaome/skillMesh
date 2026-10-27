@@ -24,15 +24,36 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
     @Query("select s from SkillEntity s where s.id = :id")
     Optional<SkillEntity> findByIdForUpdate(@Param("id") UUID id);
 
-    boolean existsByOwnerUserIdAndOrganizationIdIsNullAndSlug(UUID ownerUserId, String slug);
+    /**
+     * 个人空间里有没有这个 slug 的 active Skill。
+     *
+     * 只看 active：归档（删除）的 Skill 让出了 slug，可以重新建一个同名的。
+     *
+     * excludeId 是要排除的那个：还原时排除自己，否则它自己就把自己挡住了。
+     */
+    @Query("select case when count(s) > 0 then true else false end from SkillEntity s "
+        + "where s.ownerUserId = :owner and s.organizationId is null "
+        + "and s.slug = :slug and s.status = :status "
+        + "and (:excludeId is null or s.id <> :excludeId)")
+    boolean existsInPersonalSpace(@Param("owner") UUID owner,
+                                  @Param("slug") String slug,
+                                  @Param("status") String status,
+                                  @Param("excludeId") UUID excludeId);
 
     /**
-     * 组织内是否已经有这个 slug。
+     * 组织空间里有没有这个 slug 的 active Skill。与个人空间同一口径。
      *
      * 对应唯一索引 uq_skills_org_slug：同一个组织里 slug 是唯一的，
      * 团队之间也共用这一个命名空间。
      */
-    boolean existsByOrganizationIdAndSlug(UUID organizationId, String slug);
+    @Query("select case when count(s) > 0 then true else false end from SkillEntity s "
+        + "where s.organizationId = :organizationId "
+        + "and s.slug = :slug and s.status = :status "
+        + "and (:excludeId is null or s.id <> :excludeId)")
+    boolean existsInOrganization(@Param("organizationId") UUID organizationId,
+                                 @Param("slug") String slug,
+                                 @Param("status") String status,
+                                 @Param("excludeId") UUID excludeId);
 
     /**
      * 搜索当前用户可见的 Skill。
@@ -55,7 +76,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
           and (cast(:visibility as text) is null or s.visibility = :visibility)
           and (cast(:tag as text) is null or s.tags @> ARRAY[cast(:tag as text)])
           and (not cast(:mine as boolean) or s.owner_user_id = :owner)
-          and s.status = 'active'
+          and s.status = """ + SkillStatus.ACTIVE_SQL + """
           and (cast(:cursorTime as timestamptz) is null
                or (s.updated_at, s.id) < (:cursorTime, :cursorId))
         order by s.updated_at desc, s.id desc
@@ -68,4 +89,30 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
                              @Param("cursorTime") OffsetDateTime cursorTime,
                              @Param("cursorId") UUID cursorId,
                              Pageable pageable);
+
+    /**
+     * 列出已归档（删除）的 Skill。
+     *
+     * 归档的 Skill 对普通路径不可见：搜索只返回 active，列表接口也走同一口径。
+     * 但「删过哪些」要能被本人看见——客户端据此把本地那份一起删掉，
+     * 人也要能看见自己删了什么、把它找回来。
+     *
+     * 范围是「我删过的」：owner_user_id 是本人。删团队 Skill 也要有 publisher 资格，
+     * 所以本人删掉的一定在列表里；别人删的团队 Skill 不在这儿出现。
+     *
+     * 排序用 updated_at：归档时它被刷新，与删除时间同序，
+     * 游标还是那个 (updated_at, id) 复合键，不用另起一套。
+     */
+    @Query(value = """
+        select s.* from skills s
+        where s.owner_user_id = :owner
+          and s.status = """ + SkillStatus.ARCHIVED_SQL + """
+          and (cast(:cursorTime as timestamptz) is null
+               or (s.updated_at, s.id) < (:cursorTime, :cursorId))
+        order by s.updated_at desc, s.id desc
+        """, nativeQuery = true)
+    List<SkillEntity> findArchived(@Param("owner") UUID owner,
+                                    @Param("cursorTime") OffsetDateTime cursorTime,
+                                    @Param("cursorId") UUID cursorId,
+                                    Pageable pageable);
 }

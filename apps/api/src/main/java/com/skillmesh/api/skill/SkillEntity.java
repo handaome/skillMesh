@@ -57,6 +57,14 @@ public class SkillEntity {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    /**
+     * 归档（软删除）时间。
+     *
+     * status 为 archived 时才有值：删除不是抹掉，回收期内能还原。
+     */
+    @Column(name = "archived_at")
+    private OffsetDateTime archivedAt;
+
     public UUID getId() {
         return id;
     }
@@ -167,5 +175,13 @@ public class SkillEntity {
 
     public void setUpdatedAt(OffsetDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public OffsetDateTime getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(OffsetDateTime archivedAt) {
+        this.archivedAt = archivedAt;
     }
 }

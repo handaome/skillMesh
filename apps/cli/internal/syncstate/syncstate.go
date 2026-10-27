@@ -26,6 +26,9 @@ type Entry struct {
 	Agent    string `yaml:"agent"`
 	SkillID  string `yaml:"skill_id,omitempty"`
 	BaseHash string `yaml:"base_hash,omitempty"`
+	// Path 是本地目录的绝对路径。云端把这个 Skill 删了时，
+	// 要知道去哪把它移进本机回收站——光有名字找不到地方。
+	Path string `yaml:"path,omitempty"`
 	// BaseFiles 是上次同步时每个文件的摘要，冲突时用来判断「谁改了哪些文件」
 	// （设计文档 §6.3：已变更且不同文件 → 按文件合并）。
 	BaseFiles map[string]string `yaml:"base_files,omitempty"`
@@ -96,4 +99,17 @@ func (s *State) Discover(name, agentName string) Entry {
 func (s State) New(name, agentName string) bool {
 	entry, ok := s.Find(name, agentName)
 	return ok && entry.BaseHash == ""
+}
+
+// Remove 去掉一条基线。
+//
+// 云端把这个 Skill 删掉时用：留着它，下一轮同步会把它当成
+// 「云端没有、本地有」，把删掉的东西又传回云端。
+func (s *State) Remove(name, agentName string) {
+	for i := range s.Skills {
+		if s.Skills[i].Name == name && s.Skills[i].Agent == agentName {
+			s.Skills = append(s.Skills[:i], s.Skills[i+1:]...)
+			return
+		}
+	}
 }

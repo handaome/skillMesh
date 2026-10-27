@@ -3,9 +3,9 @@ package com.skillmesh.api.audit;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.skill.SkillService;
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -35,26 +35,28 @@ public class AuditController {
     /**
      * 我可见的审计流水（详细设计 §12 的 /audit-events）。
      * 只返回我可见的 Skill 的事件——审计不是所有人都能翻的。
+     *
+     * 带游标翻页：流水只增不减，只给最近一页的话，
+     * 「上个月那次改动是谁做的」就再也答不上来了。
      */
     @GetMapping("/audit-events")
-    public List<EventResponse> recent(@AuthenticationPrincipal Jwt jwt,
-                                      @RequestParam(required = false) String action,
-                                      @RequestParam(defaultValue = "50") int limit) {
+    public CursorPage<EventResponse> recent(@AuthenticationPrincipal Jwt jwt,
+                            @RequestParam(required = false) String action,
+                            @RequestParam(required = false) Integer limit,
+                            @RequestParam(required = false) String cursor) {
         CurrentUser user = currentUserService.current(jwt);
-        return audit.recentVisible(user, action, limit).stream()
-            .map(EventResponse::of)
-            .toList();
+        return audit.recentVisible(user, action, limit, cursor)
+            .map(page -> page.stream().map(EventResponse::of).toList());
     }
 
     @GetMapping("/skills/{skillId}/audit")
-    public List<EventResponse> forSkill(@AuthenticationPrincipal Jwt jwt,
-                                        @PathVariable UUID skillId,
-                                        @RequestParam(defaultValue = "50") int limit) {
+    public CursorPage<EventResponse> forSkill(@AuthenticationPrincipal Jwt jwt,
+                              @PathVariable UUID skillId,
+                              @RequestParam(required = false) Integer limit,
+                              @RequestParam(required = false) String cursor) {
         skillService.requireVisibleSkill(currentUserService.current(jwt), skillId);
-        int capped = Math.clamp(limit, 1, 200);
-        return audit.recentForSkill(skillId, capped).stream()
-            .map(EventResponse::of)
-            .toList();
+        return audit.recentForSkill(skillId, limit, cursor)
+            .map(page -> page.stream().map(EventResponse::of).toList());
     }
 
     public record EventResponse(

@@ -2,9 +2,9 @@ package com.skillmesh.api.invite;
 
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.invite.dto.AcceptInvitationResponse;
 import com.skillmesh.api.invite.dto.CreateInvitationRequest;
-import com.skillmesh.api.invite.dto.InvitationPage;
 import com.skillmesh.api.invite.dto.InvitationResponse;
 import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrganizationEntity;
@@ -65,7 +65,7 @@ public class InvitationController {
     }
 
     @GetMapping("/organizations/{organizationId}/invitations")
-    public InvitationPage list(@AuthenticationPrincipal Jwt jwt,
+    public CursorPage<InvitationSummary> list(@AuthenticationPrincipal Jwt jwt,
                                @PathVariable UUID organizationId,
                                @RequestParam(required = false) Integer limit,
                                @RequestParam(required = false) String cursor) {

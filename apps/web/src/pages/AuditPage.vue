@@ -1,14 +1,27 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted } from 'vue'
 import { listAuditEvents } from '../api'
+import { usePagedList } from '../composables/usePagedList'
 import type { AuditEvent } from '../types'
-import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import EmptyState from '../components/EmptyState.vue'
 
-const events = ref<AuditEvent[]>([])
-const error = ref('')
-const loading = ref(false)
+/**
+ * 审计流水，按游标往下翻。
+ *
+ * 流水只增不减：只显示最近一页的话，「上个月那次改动是谁做的」
+ * 这种问题就再也答不上来了。
+ */
+const {
+  items: events,
+  loading,
+  loadingMore,
+  error,
+  hasMore,
+  countText,
+  load,
+  loadMore,
+} = usePagedList<AuditEvent>((_params, cursor) => listAuditEvents(undefined, cursor))
 
 /**
  * 动作的中文读法。
@@ -19,6 +32,10 @@ const loading = ref(false)
  */
 const ACTION_TEXT: Record<string, string> = {
   'access.denied': '访问被拒',
+  'skill.created': '创建 Skill',
+  'skill.updated': '改 Skill 元数据',
+  'skill.archived': '删除 Skill',
+  'skill.restored': '还原 Skill',
   'skill.publish': '发布版本',
   'skill.publish_rejected': '发布被拒',
   'skill.publish_quarantined': '发布被隔离',
@@ -33,6 +50,16 @@ const ACTION_TEXT: Record<string, string> = {
   'installation.unregister': '注销安装',
   'sync.commit': '同步提交',
   'sync.commit_conflict': '同步冲突',
+  'sync.uploaded': '同步上传',
+  'sync.downloaded': '同步拉取',
+  'sync.local_deleted': '本地随云端删除',
+  'sync.conflict_reported': '上报同步冲突',
+  'sync.retried': '同步重试',
+  'install.completed': '安装完成',
+  'install.failed': '安装失败',
+  'install.upgraded': '升级安装',
+  'install.rolled_back': '回滚安装',
+  'uninstall.completed': '卸载完成',
   'organization.create': '创建组织',
   'organization.membership.update': '改组织角色',
   'organization.membership.status': '改成员状态',
@@ -67,18 +94,6 @@ function targetText(event: AuditEvent): string {
   return event.target_id ?? '—'
 }
 
-async function load() {
-  loading.value = true
-  error.value = ''
-  try {
-    events.value = await listAuditEvents()
-  } catch (e) {
-    error.value = errorText(e)
-  } finally {
-    loading.value = false
-  }
-}
-
 onMounted(load)
 </script>
 
@@ -89,7 +104,7 @@ onMounted(load)
         <h1 class="sm-title">审计流水</h1>
         <p class="sm-sub">你可见的 Skill 上发生过的动作：发布、审批、下载、安装、同步与权限变更。</p>
       </div>
-      <span class="sm-muted sm-sm sm-num">{{ events.length }} 条</span>
+      <span class="sm-muted sm-sm sm-num">{{ countText }}</span>
     </div>
 
     <p v-if="error" class="sm-note sm-note--error sm-mb-16" data-test="error">
@@ -137,6 +152,18 @@ onMounted(load)
             </p>
           </div>
         </div>
+      </div>
+
+      <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+      <div v-if="hasMore" class="sm-row sm-mt-16">
+        <button
+          class="sm-btn sm-btn--quiet sm-btn--sm"
+          data-test="load-more"
+          :disabled="loadingMore"
+          @click="loadMore"
+        >
+          {{ loadingMore ? '加载中…' : '加载更多' }}
+        </button>
       </div>
     </div>
   </section>

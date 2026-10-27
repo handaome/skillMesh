@@ -10,6 +10,7 @@ import (
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
+	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
 	"github.com/handaome/skillmesh/apps/cli/internal/packager"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 	"github.com/spf13/cobra"
@@ -80,11 +81,15 @@ func newPublishCmd() *cobra.Command {
 				result, err := PublishOne(cmd.Context(), client, target, options)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "发布 %s 失败: %v\n", target.RelPath, err)
+					opLog().RecordFailure(oplog.ActionPublish, target.RelPath, err.Error())
 					Failed++
 					continue
 				}
 				fmt.Printf("%s %s -> %s（%s，%d 字节）\n",
 					result.Action, result.Name, result.SkillID, result.Version, result.SizeBytes)
+				opLog().Record(oplog.ActionPublish, result.Name,
+					fmt.Sprintf("%s（%s，%d 字节）", result.SkillID, result.Version, result.SizeBytes),
+					map[string]string{"path": target.Dir})
 				published++
 			}
 			fmt.Printf("\n%s %d 个，失败 %d 个\n", map[bool]string{true: "演练", false: "已发布"}[dryRun], published, Failed)
