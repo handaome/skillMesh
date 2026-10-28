@@ -17,6 +17,12 @@ import (
 
 var Cfg config.Config
 
+// timeoutCancel 取消 --timeout 设的那个整体超时。
+//
+// 不能在 PersistentPreRunE 里 defer：那个函数一返回，RunE 还没跑，
+// 上下文就被取消了，命令会莫名其妙地失败。
+var timeoutCancel context.CancelFunc
+
 // argsChecked 记录命令的参数校验是否已经通过。
 //
 // cobra 先校验参数、再跑 PersistentPreRunE，所以「没走到配置加载就失败」
@@ -24,7 +30,8 @@ var Cfg config.Config
 var argsChecked bool
 
 func newRootCmd() *cobra.Command {
-	var server string
+	var server, project, profile, timeout string
+	var noColor, assumeYes bool
 	argsChecked = false
 	root := &cobra.Command{
 		Use:           "skillmesh",
@@ -32,13 +39,21 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(c *cobra.Command, _ []string) error {
-			loaded, err := config.Load()
+			loaded, err := config.LoadProfile(profile)
 			if err != nil {
 				return err
 			}
 			Cfg = loaded
 			if server != "" {
 				Cfg.Server = server
+			}
+			if project != "" {
+				if err := setProjectRoot(project); err != nil {
+					return err
+				}
+			}
+			if err := applyTimeout(c, timeout); err != nil {
+				return err
 			}
 			argsChecked = true
 			// 还没支持 JSON 的命令要提前说清楚：用户加了 --json 却拿到
@@ -50,6 +65,11 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().StringVar(&server, "server", "", "覆盖服务端地址")
+	root.PersistentFlags().StringVar(&project, "project", "", "指定项目根目录（默认从当前目录向上找）")
+	root.PersistentFlags().StringVar(&profile, "profile", "", "使用指定的配置档（配置目录下的 profiles/<名字>.yaml）")
+	root.PersistentFlags().StringVar(&timeout, "timeout", "", "命令整体超时，如 30s、2m")
+	root.PersistentFlags().BoolVar(&noColor, "no-color", false, "禁用 ANSI 色彩（本 CLI 输出本来就没有色彩）")
+	root.PersistentFlags().BoolVar(&assumeYes, "yes", false, "对可安全自动确认的提示采用默认值（不绕过安全阻断与破坏性操作）")
 	root.PersistentFlags().BoolVar(&jsonOut, "json", false, "输出稳定 JSON，供脚本调用")
 	root.PersistentFlags().BoolVar(&quiet, "quiet", false, "减少普通提示，错误仍输出到 stderr")
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "显示平时隐藏的完整绝对路径")
@@ -68,6 +88,27 @@ func newRootCmd() *cobra.Command {
 	)
 	hideAdvancedCommands(root)
 	return root
+}
+
+// applyTimeout 给本次命令加一个整体超时。
+//
+// 超时是命令级的：过了点整个命令停，不是单个请求超时——
+// 单个请求的超时在配置里的 network.timeout_seconds。
+func applyTimeout(c *cobra.Command, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("--timeout 不是合法的时长（%q）：%w", raw, err)
+	}
+	if duration <= 0 {
+		return fmt.Errorf("--timeout 必须是正时长，收到 %q", raw)
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), duration)
+	timeoutCancel = cancel
+	c.SetContext(ctx)
+	return nil
 }
 
 // hideAdvancedCommands 把边缘命令从 --help 里收起来。
@@ -93,6 +134,11 @@ func hideAdvancedCommands(root *cobra.Command) {
 }
 
 func Execute() error {
+	defer func() {
+		if timeoutCancel != nil {
+			timeoutCancel()
+		}
+	}()
 	if err := newRootCmd().ExecuteContext(context.Background()); err != nil {
 		reportError(err)
 		return err

@@ -448,6 +448,51 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 
 同步的这几类结果同时上报给服务端记审计——「本地那份被云端的删除带走了」只有客户端看得见，服务端那边只有版本记录。服务端审计的完整动作清单见[团队治理](团队治理.md#审计)。
 
+## 全局参数
+
+几个参数对所有命令都生效，写在子命令前面：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--server URL` | 覆盖服务端地址（连测试服、连本机时用） |
+| `--json` | 输出稳定 JSON，供脚本调用（见下节） |
+| `--quiet` | 减少普通提示，错误仍输出到 stderr |
+| `--verbose` | 显示平时隐藏的完整绝对路径 |
+| `--project PATH` | 指定项目根目录，不在项目目录里跑时用 |
+| `--profile NAME` | 用指定的配置档（配置目录下的 `profiles/<名字>.yaml`） |
+| `--timeout DURATION` | 命令整体超时，如 `30s`、`2m` |
+| `--no-color` | 禁用 ANSI 色彩（本 CLI 输出本来就没有色彩，留着是为了脚本调用时不必判断） |
+| `--yes` | 对可安全自动确认的提示采用默认值（**不**绕过安全阻断、权限与破坏性操作） |
+
+**项目根目录**：默认从当前目录向上找带 `.git` 或 `skillmesh.yaml` 的目录——在仓库的子目录里跑命令，锁文件和项目级安装目录跟着仓库走，不跟着当前子目录走。`--project` 可以直接指定：
+
+```bash
+./skillmesh.exe --project D:/work/my-app list   # 看那个项目的安装清单
+```
+
+**配置档**：配置档是叠在 `config.yaml` 之上的一层，只写要改的项——换个服务端测一下不用把整套目录配置重抄一遍。放在配置目录的 `profiles/<名字>.yaml`：
+
+```yaml
+# %APPDATA%\SkillMesh\profiles\staging.yaml（Windows）
+# ~/.config/skillmesh/profiles/staging.yaml（Linux/macOS）
+server: http://127.0.0.1:8080/api/v1
+agents:
+  cursor:
+    enabled: false
+```
+
+```bash
+./skillmesh.exe --profile staging search react
+```
+
+配置档只写要改的项，没写的沿用 `config.yaml`。`agents.<名字>.enabled` 写 `false` 是显式关掉（布尔零值分不出「没写」与「显式关掉」，所以这一项按「写了就算」处理）。
+
+**整体超时**：`--timeout` 管的是整条命令（`network.timeout_seconds` 管的是单个请求）。CI 里给一条命令封顶时间很有用：
+
+```bash
+./skillmesh.exe --timeout 2m sync     # 最多跑两分钟，超了就算失败
+```
+
 ## 脚本与 CI 调用
 
 `--json` 是全局参数，作用在 stdout 与退出码上：stdout 只出 JSON，提示和错误都走 stderr，失败时按错误类型给出不同的退出码。脚本靠这两个判断「成没成」「该不该重试」。

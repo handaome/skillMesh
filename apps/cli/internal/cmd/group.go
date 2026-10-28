@@ -164,7 +164,7 @@ func newGroupInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projectRoot := mustGetwd()
+			projectRoot := projectRootDir()
 			installed, failed := 0, 0
 			for _, member := range group.Members {
 				if err := installGroupMember(cmd.Context(), client, projectRoot, member, agentNames,

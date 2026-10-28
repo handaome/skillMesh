@@ -154,7 +154,7 @@ func printRisks(blocked []string, findings []apiclient.ScanFinding) error {
 
 // localEntryByID 在本项目锁文件里找这个 Skill。
 func localEntryByID(skillID string) (lockfile.LockedSkill, bool) {
-	lock, err := lockfile.Load(mustGetwd())
+	lock, err := lockfile.Load(projectRootDir())
 	if err != nil {
 		return lockfile.LockedSkill{}, false
 	}

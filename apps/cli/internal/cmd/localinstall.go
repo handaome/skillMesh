@@ -49,7 +49,7 @@ func installFromDir(opts localInstallOptions) error {
 		return err
 	}
 
-	projectRoot := mustGetwd()
+	projectRoot := projectRootDir()
 	targetScope := opts.Scope
 	if targetScope == "" {
 		targetScope = "project"

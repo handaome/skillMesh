@@ -44,7 +44,7 @@ func newDoctorCmd() *cobra.Command {
 
 			// Agent 目录一览：用户级、项目级、以及额外扫描根。
 			// 这是原来 agents detect 的内容，并进 doctor 少一个命令。
-			projectRoot := mustGetwd()
+			projectRoot := projectRootDir()
 			for _, name := range agent.Names(Cfg) {
 				agentCfg := Cfg.Agents[name]
 				if !agentCfg.Enabled {

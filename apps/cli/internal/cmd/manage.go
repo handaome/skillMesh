@@ -56,7 +56,7 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projectRoot := mustGetwd()
+			projectRoot := projectRootDir()
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
 				return err
@@ -175,7 +175,7 @@ func newUninstallCmd() *cobra.Command {
 		Short: "移除安装内容与锁文件记录",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			projectRoot := mustGetwd()
+			projectRoot := projectRootDir()
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
 				return err

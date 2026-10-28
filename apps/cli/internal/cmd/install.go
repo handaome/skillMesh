@@ -51,7 +51,7 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			projectRoot := mustGetwd()
+			projectRoot := projectRootDir()
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
 				return err

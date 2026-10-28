@@ -483,7 +483,7 @@ func reconcile(ctx context.Context) error {
 // 用户确认后才应用是 notify 的语义（设计文档 §7.2）。
 // manual 的来源连查都不查。
 func applyAutoSafeUpdates(ctx context.Context) error {
-	projectRoot := mustGetwd()
+	projectRoot := projectRootDir()
 	lock, err := lockfile.Load(projectRoot)
 	if err != nil {
 		return err

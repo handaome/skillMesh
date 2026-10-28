@@ -145,7 +145,7 @@ func NewUpdateCmd() *cobra.Command {
 		Short: "检查或应用更新",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			projectRoot := mustGetwd()
+			projectRoot := projectRootDir()
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
 				return err

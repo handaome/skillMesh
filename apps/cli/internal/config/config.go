@@ -171,26 +171,60 @@ func markDetected(Cfg *Config) {
 
 // Load 按 环境变量 > 配置文件 > 默认值 的优先级读取配置。
 func Load() (Config, error) {
+	return load("")
+}
+
+// load 读配置，可选地叠一层配置档。
+func load(profileName string) (Config, error) {
 	Cfg := defaults()
+	applyEnv(&Cfg)
+	file, err := readBaseConfig(Cfg.ConfigDir)
+	if err != nil {
+		return Cfg, err
+	}
+	if profileName != "" {
+		profile, err := readProfile(filepath.Join(Cfg.ConfigDir, "profiles", profileName+".yaml"))
+		if err != nil {
+			return Cfg, err
+		}
+		file = mergeProfile(file, profile)
+	}
+	applyFile(&Cfg, file)
+	Cfg.Server = strings.TrimRight(Cfg.Server, "/")
+	markDetected(&Cfg)
+	return Cfg, nil
+}
+
+// applyEnv 用环境变量盖住配置里的同名项。
+func applyEnv(Cfg *Config) {
 	if v := os.Getenv("SKILLMESH_SERVER"); v != "" {
 		Cfg.Server = v
 	}
 	if v := os.Getenv("SKILLMESH_CLIENT_ID"); v != "" {
 		Cfg.ClientID = v
 	}
+}
 
-	data, err := os.ReadFile(filepath.Join(Cfg.ConfigDir, "config.yaml"))
+// readBaseConfig 读基础配置 config.yaml。
+//
+// 文件不存在不算错：没配过也是合法状态，用默认值就是。
+func readBaseConfig(configDir string) (Config, error) {
+	var file Config
+	data, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
 	if os.IsNotExist(err) {
-		markDetected(&Cfg) // 没配置文件也要探测：Cursor 路径本来就靠探测定
-		return Cfg, nil
+		return file, nil
 	}
 	if err != nil {
-		return Cfg, fmt.Errorf("读取 config.yaml: %w", err)
+		return file, fmt.Errorf("读取 config.yaml: %w", err)
 	}
-	var file Config
 	if err := yaml.Unmarshal(data, &file); err != nil {
-		return Cfg, fmt.Errorf("解析 config.yaml: %w", err)
+		return file, fmt.Errorf("解析 config.yaml: %w", err)
 	}
+	return file, nil
+}
+
+// applyFile 把配置文件里的项盖到默认值上。
+func applyFile(Cfg *Config, file Config) {
 	if file.Server != "" {
 		Cfg.Server = file.Server
 	}
@@ -227,9 +261,6 @@ func Load() (Config, error) {
 			Cfg.Sync.ExtraDirs = append(Cfg.Sync.ExtraDirs, expandHome(dir))
 		}
 	}
-	Cfg.Server = strings.TrimRight(Cfg.Server, "/")
-	markDetected(&Cfg)
-	return Cfg, nil
 }
 
 func expandHome(path string) string {

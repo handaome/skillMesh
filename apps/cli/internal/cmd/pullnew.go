@@ -38,7 +38,7 @@ func pullMissing(ctx context.Context, client *apiclient.Client, options SyncOpti
 	targets := restoreOptions{
 		Agents:      syncAgentNames(options.Agents),
 		Scope:       "user",
-		ProjectRoot: mustGetwd(),
+		ProjectRoot: projectRootDir(),
 		State:       state,
 	}
 	var results []syncResult

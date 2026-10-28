@@ -418,7 +418,7 @@ func sourceOf(dir, license string) *apiclient.SkillSource {
 
 // localEntryByName 在当前项目的锁文件里找一个 Skill。
 func localEntryByName(name string) (lockfile.LockedSkill, bool) {
-	lock, err := lockfile.Load(mustGetwd())
+	lock, err := lockfile.Load(projectRootDir())
 	if err != nil {
 		return lockfile.LockedSkill{}, false
 	}
