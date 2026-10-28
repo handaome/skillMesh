@@ -16,8 +16,11 @@ import (
 // 而 restore 和 sync 在用户眼里本来就是同一件事。
 //
 // 只拉个人私有空间（mine=true）：团队里别人的 Skill 不该被这个动作带下来。
+//
+// dropping 是这次要往云端传删除的 Skill id：它们马上就不在云端了，
+// 再拉回来等于删了个寂寞。
 func pullMissing(ctx context.Context, client *apiclient.Client, options SyncOptions,
-	state *syncstate.State) []syncResult {
+	state *syncstate.State, dropping map[string]bool) []syncResult {
 
 	// 只上传、只重试、要求新发现先别动，这三种情况都不该替用户往本机装东西。
 	if options.Direction == "upload" || options.OnlyExisting {
@@ -41,6 +44,9 @@ func pullMissing(ctx context.Context, client *apiclient.Client, options SyncOpti
 	var results []syncResult
 	for _, skill := range skills {
 		if local[skill.Slug] {
+			continue
+		}
+		if dropping[skill.ID] {
 			continue
 		}
 		if options.Only != "" && skill.Slug != options.Only {

@@ -62,6 +62,12 @@ type SyncOptions struct {
 	// AllowDelete 确认把「本地删掉的文件」也传到云端。
 	// 不确认就不传：目录扫不到不该等于云端被删（设计文档 §6.3）。
 	AllowDelete bool
+	// PropagateDelete 确认把「本地删掉的整个 Skill」也从云端删掉。
+	//
+	// 与 AllowDelete 是两回事：AllowDelete 传的是包里少了哪些文件，
+	// 这里传的是这个 Skill 本身没了。默认不开——目录扫不到可能只是
+	// 路径变了、网盘没挂上，扫不到不等于用户删了它。
+	PropagateDelete bool
 	// CloudDeletionsKnown 是本次同步探测到的服务端状态，不是命令行参数：
 	// 成功拿到了云端的已删除清单没有。拿不到就不能上传——不知道云端删了什么，
 	// 上传会把删掉的 Skill 复活（云端查不到 → 判定为「该上传」）。
@@ -82,7 +88,8 @@ func newSyncCmd() *cobra.Command {
 			"本机有而云端没有 → 传上去；云端有而本机没有 → 装下来；\n" +
 			"两边都有就比内容：只有一边变了顺着变，两边都变了按冲突处理，绝不自动覆盖。\n\n" +
 			"这是「本地 ↔ 个人云端」那条链路（设计文档 §3.1、§6.3），不是团队发布。\n" +
-			"只同步、从不删除云端内容——目录扫不到不该等于云端被删。",
+			"默认只同步、从不删除云端内容——目录扫不到不该等于云端被删；\n" +
+			"本地删掉整个 Skill 要往云端传删除，得加 --propagate-delete。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if options.Direction != "upload" && options.Direction != "download" &&
@@ -116,6 +123,8 @@ func newSyncCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "只报出会同步什么，不落盘")
 	cmd.Flags().BoolVar(&options.AllowDelete, "allow-delete", false,
 		"确认把本地删掉的文件也同步到云端（删除传播需要显式确认）")
+	cmd.Flags().BoolVar(&options.PropagateDelete, "propagate-delete", false,
+		"本地删掉的整个 Skill 也从云端删掉（软删除，回收期内可还原）")
 	return cmd
 }
 
@@ -145,12 +154,16 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	// 记下这次有没有拿到删除清单：拿不到的话下面一律不上传。
 	options.CloudDeletionsKnown = cloud.Known
 	options.CloudDeletes = cloud.Deletes
-	targets, err := SyncTargets(options)
+	// 删除传播默认关着：命令行 --propagate-delete 或配置 sync.propagate_delete 才开。
+	if !options.PropagateDelete {
+		options.PropagateDelete = Cfg.Sync.PropagateDelete
+	}
+	scanned, err := SyncTargets(options)
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
 	// 清单按 slug 索引，删哪些得等扫出本地有哪些才知道。
-	deleteResults, targets := applyCloudDeletes(ctx, client, &state, targets, options)
+	deleteResults, targets, dropping := applyDeletePropagation(ctx, client, &state, scanned, options)
 	if !cloud.Known {
 		deleteResults = append(deleteResults, syncResult{Name: "云端删除同步",
 			Outcome: Failed, Detail: describeListError(cloud.ListError)})
@@ -216,7 +229,7 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	// 云端有、本机没有的：一并装上。这是「多地同步」的另一半，
 	// 不让用户再去记一个 restore 命令。
 	if !options.OnlyExisting {
-		results = append(results, pullMissing(ctx, client, options, &state)...)
+		results = append(results, pullMissing(ctx, client, options, &state, dropping)...)
 	}
 	if !options.DryRun {
 		if err := state.Save(Cfg.ConfigDir); err != nil {
@@ -321,13 +334,20 @@ type SyncTarget struct {
 	BaseSnapshot string
 }
 
-// SyncTargets 列出所有要处理的 Skill，并带上各自的基线。
-func SyncTargets(options SyncOptions) ([]SyncTarget, error) {
-	state, err := syncstate.Load(Cfg.ConfigDir)
-	if err != nil {
-		return nil, err
-	}
-	var targets []SyncTarget
+// scanRoot 是一个要扫的根：Agent 的用户级目录、Agent 额外扫描的目录、自定义目录。
+type scanRoot struct {
+	dir       string
+	agent     string
+	recursive bool
+}
+
+// scanRoots 列出本次会扫的所有根。
+//
+// Agent 自己的用户级目录、它配的额外扫描目录、项目级与自定义目录都在里面。
+// 删除传播要靠它判断「这条基线还在不在扫描范围内」——范围变了就不能
+// 把扫不到当成用户删了。
+func scanRoots(options SyncOptions) ([]scanRoot, error) {
+	var roots []scanRoot
 	for _, agentName := range syncAgentNames(options.Agents) {
 		dir, err := agent.Dir(Cfg, agentName, "user", "")
 		if err != nil {
@@ -335,12 +355,10 @@ func SyncTargets(options SyncOptions) ([]SyncTarget, error) {
 		}
 		agentCfg := Cfg.Agents[agentName]
 		recursive := agent.RecursiveScan(agentCfg)
-		targets = append(targets, targetsIn(state, dir, agentName, options, recursive)...)
-		// 这个 Agent 自己配的额外扫描根（agents.<name>.extra_scan_dirs）。
-		// 它们挂在这个 Agent 名下，基线也按这个 Agent 记。
+		roots = append(roots, scanRoot{dir: dir, agent: agentName, recursive: recursive})
 		for _, extra := range agentCfg.ExtraScanDirs {
 			if extra != "" {
-				targets = append(targets, targetsIn(state, extra, agentName, options, recursive)...)
+				roots = append(roots, scanRoot{dir: extra, agent: agentName, recursive: recursive})
 			}
 		}
 	}
@@ -348,7 +366,24 @@ func SyncTargets(options SyncOptions) ([]SyncTarget, error) {
 	// 它们不属于任何 Agent，用 custom 当标识——同一个 Skill 在
 	// Agent 目录与自定义目录里各有一份时，两份各自记基线。
 	for _, dir := range Cfg.Sync.ExtraDirs {
-		targets = append(targets, targetsIn(state, dir, "custom", options, true)...)
+		roots = append(roots, scanRoot{dir: dir, agent: "custom", recursive: true})
+	}
+	return roots, nil
+}
+
+// SyncTargets 列出所有要处理的 Skill，并带上各自的基线。
+func SyncTargets(options SyncOptions) ([]SyncTarget, error) {
+	state, err := syncstate.Load(Cfg.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	roots, err := scanRoots(options)
+	if err != nil {
+		return nil, err
+	}
+	var targets []SyncTarget
+	for _, root := range roots {
+		targets = append(targets, targetsIn(state, root.dir, root.agent, options, root.recursive)...)
 	}
 	return dedupeTargets(targets), nil
 }

@@ -73,11 +73,27 @@ skillmesh sync --resolve keep-local   # 冲突时保留本地并上传
 skillmesh sync --resolve keep-cloud   # 冲突时保留云端并拉回
 skillmesh sync --resolve keep-both    # 本地备份一份，两边都留
 skillmesh sync --allow-delete         # 确认把「本地删掉的文件」也传播到云端
+skillmesh sync --propagate-delete     # 确认把「本地删掉的整个 Skill」也从云端删掉
 ```
 
 **本地删了文件不会静默传到云端**：同步发现「基线里有、本地没了、云端也没变」的文件时，这次上传会**停下**，报「待确认」并列出是哪些文件。确认要删就加 `--allow-delete` 再跑一次。
 
 > 后台同步（`watch`）**永远不会传播删除**——它们不传 `--allow-delete`。删除只能手动跑 `skillmesh sync --allow-delete` 确认：后台任务没人盯着，不该替人做删除这种不可逆的决定。
+
+**本地删掉整个 Skill，默认也不会删云端**：目录扫不到可能只是路径变了、网盘没挂上、Agent 目录搬了家——扫不到不等于你删了它。想让删除也传过去，加 `--propagate-delete`：
+
+```bash
+skillmesh sync --propagate-delete --dry-run   # 先看会删掉云端哪些 Skill
+skillmesh sync --propagate-delete             # 真删（云端软删除，回收期内能还原）
+```
+
+判定的是「本地确实删了」，不是「本地扫不到」——四条都满足才动云端：基线里记着这个 Skill 的云端 id、那个目录确实没了、本机别处没有同一份、路径还在本次扫描范围内。同一个 Skill 装在多个 Agent 目录下时，删掉一份不算删（别的目录里还装着它）；改了 Agent 目录导致老路径扫不到，也不算删。
+
+云端那边是**软删除**：版本和制品都留着，回收期内 `skillmesh cloud restore <slug>` 能找回来。
+
+> `--propagate-delete` 管的是**整个 Skill**；包里少了几个文件是另一回事，那个走 `--allow-delete`。
+>
+> 想让后台同步（`watch`）也照做，在配置里写 `sync.propagate_delete: true`——这是「明确配置并确认后才传播删除」里的那个「明确配置」。
 
 **首次发现不等于收编**：新出现在授权目录里的 Skill 默认会备份到个人私有空间，**不会自动公开**；`--only-existing` 则一个都不收编，先留在本地等你看过再说。首次发现的时间记在 `sync-state.yaml` 的 `first_seen_at`。
 
@@ -556,6 +572,10 @@ sync:
   extra_dirs:
     - ~/projects/app/.claude/skills
     - /srv/shared/skills
+  # 本地删掉了整个 Skill，要不要也往云端传删除（软删除）。
+  # 不填就是 false：目录扫不到不等于你删了它。
+  # 开了之后后台同步（watch）也会照做。
+  propagate_delete: false
 ```
 
 `sync` 与 `watch` 都会扫 `extra_dirs` 里的目录——放了目录，变更一样会被同步。

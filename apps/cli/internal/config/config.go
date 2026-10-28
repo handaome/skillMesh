@@ -36,6 +36,12 @@ type SyncConfig struct {
 	// 比如某个项目里的 .claude/skills，或团队约定的共享目录。
 	// 设计文档 §6.1：支持用户级目录、项目级目录和自定义目录。
 	ExtraDirs []string `yaml:"extra_dirs"`
+	// PropagateDelete 开着就把「本地删掉的整个 Skill」也往云端传删除。
+	//
+	// 默认关着：目录扫不到可能只是路径变了、网盘没挂上，
+	// 扫不到不等于用户删了它。开了之后，后台同步（watch）也会照做——
+	// 这就是「明确配置并确认后才传播删除」里的那个「明确配置」。
+	PropagateDelete bool `yaml:"propagate_delete"`
 }
 
 // VerifyConfig 是钉住的验签公钥（信任根）。
