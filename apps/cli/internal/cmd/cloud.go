@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
+
+	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
 	"github.com/spf13/cobra"
-	"os"
 )
 
 // newCloudCmd 云端 Skill 的删除与还原。
@@ -20,7 +23,7 @@ func newCloudCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 	}
 	cmd.AddCommand(newCloudDeleteCmd(), newCloudRestoreCmd(), newCloudDeletedCmd(),
-		newRecycleCmd())
+		newCloudRevokeCmd(), newRecycleCmd())
 	return cmd
 }
 
@@ -105,11 +108,24 @@ func newCloudDeletedCmd() *cobra.Command {
 				return nil
 			}
 			w := newTable(os.Stdout)
-			fmt.Fprintln(w, "SLUG\t名称\tID\t删除时间")
+			fmt.Fprintln(w, "SLUG\t名称\tID\t删除时间\t现状")
 			for _, item := range deleted {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item.Slug, item.Name, item.ID, item.DeletedAt)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", item.Slug, item.Name, item.ID,
+					item.DeletedAt, deletedState(cmd.Context(), client, item.Slug))
 			}
 			return w.Flush()
 		},
 	}
+}
+
+// deletedState 说明这个 slug 现在还有没有活着的 Skill。
+//
+// 归档让出了 slug：删掉之后又用同一个名字重建了一个是常事。
+// 不说清楚的话，那条删除记录看着像是「这个 Skill 还没恢复」。
+func deletedState(ctx context.Context, client *apiclient.Client, slug string) string {
+	skill, found, err := client.FindSkillBySlug(ctx, slug)
+	if err != nil || !found {
+		return "已删除"
+	}
+	return "已重建（" + skill.ID + "）"
 }

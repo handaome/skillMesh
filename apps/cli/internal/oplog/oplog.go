@@ -25,16 +25,17 @@ const FileName = "operations.log"
 // Action 是操作的动作名。与服务端的审计动作名保持同一套说法，
 // 两边对不上时排查会很痛苦。
 const (
-	ActionSyncUpload   = "sync.uploaded"
-	ActionSyncDownload = "sync.downloaded"
-	ActionSyncDeleted  = "sync.local_deleted"
-	ActionSyncConflict = "sync.conflicted"
-	ActionSyncFailed   = "sync.failed"
-	ActionPublish      = "skill.published"
-	ActionInstall      = "skill.installed"
-	ActionUninstall    = "skill.uninstalled"
-	ActionCloudDelete  = "skill.archived"
-	ActionCloudRestore = "skill.restored"
+	ActionSyncUpload    = "sync.uploaded"
+	ActionSyncDownload  = "sync.downloaded"
+	ActionSyncDeleted   = "sync.local_deleted"
+	ActionSyncConflict  = "sync.conflicted"
+	ActionSyncFailed    = "sync.failed"
+	ActionPublish       = "skill.published"
+	ActionInstall       = "skill.installed"
+	ActionUninstall     = "skill.uninstalled"
+	ActionCloudDelete   = "skill.archived"
+	ActionCloudRestore  = "skill.restored"
+	ActionVersionRevoke = "version.revoke"
 )
 
 // Event 是一条操作记录。
