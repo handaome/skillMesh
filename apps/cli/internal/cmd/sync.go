@@ -110,6 +110,13 @@ func newSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// 云端制品体检：坏掉的已发布版本早点说，别等人装的时候才炸。
+			// 体检只读，撤回要人点头——读不到输入（CI）时只报告不动手。
+			if !options.DryRun {
+				if client, clientErr := newClient(cmd.Context()); clientErr == nil {
+					reportArtifactHealth(cmd.Context(), client)
+				}
+			}
 			return reportErr
 		},
 	}

@@ -159,7 +159,7 @@ func (c *Client) putArtifactOnce(ctx context.Context, target UploadTarget,
 	for key, value := range target.Headers {
 		request.Header.Set(key, value)
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Authorization", bearerPrefix+c.token)
 	response, err := c.http.Do(request)
 	if err != nil {
 		return false, fmt.Errorf("上传制品失败: %w", err)

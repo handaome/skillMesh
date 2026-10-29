@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// bearerPrefix 是令牌请求头的取值前缀。
+const bearerPrefix = "Bearer "
+
 type Client struct {
 	base  string
 	token string
@@ -92,7 +95,7 @@ func (c *Client) doOnce(ctx context.Context, method, path string, query url.Valu
 		}
 	}
 	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Authorization", bearerPrefix+c.token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -226,7 +229,7 @@ func (c *Client) DownloadArtifact(ctx context.Context, artifactID string) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", bearerPrefix+c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -240,4 +243,36 @@ func (c *Client) DownloadArtifact(ctx context.Context, artifactID string) ([]byt
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// ArtifactHead 取制品的头几个字节。
+//
+// 体检云端制品时用：几十个 Skill 的所有版本全量下载太浪费，
+// 制品是不是 zip 看开头几个字节就知道。服务端不支持 Range 时会返回整个文件——
+// 读到够用的字节就停，不影响判断。
+func (c *Client) ArtifactHead(ctx context.Context, artifactID string, n int) ([]byte, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("取多少字节要大于 0，收到 %d", n)
+	}
+	target := c.base + "/artifacts/" + url.PathEscape(artifactID) + "/download?disposition=stream"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", bearerPrefix+c.token)
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", n-1))
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return nil, decodeProblem(resp)
+	}
+	buf := make([]byte, n)
+	read, _ := io.ReadFull(resp.Body, buf)
+	if read == 0 {
+		return nil, fmt.Errorf("制品是空的")
+	}
+	return buf[:read], nil
 }
