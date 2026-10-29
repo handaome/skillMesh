@@ -29,7 +29,6 @@
 ### 内置账号：用户名 + 密码
 
 ```bash
-skillmesh register http://127.0.0.1:8080/api/v1 --username wuss   # 注册并直接登录
 skillmesh login http://127.0.0.1:8080/api/v1 --username wuss      # 登录
 skillmesh login status                                          # 看当前登录的是谁
 skillmesh logout                                                # 清除本地登录态
@@ -37,6 +36,9 @@ skillmesh logout                                                # 清除本地�
 
 密码不给 `--password` 就在终端里输入（**不回显**）；也可以用环境变量 `SM_PASSWORD`。
 命令行参数会留在 shell 历史与进程列表里，密码别直接写在命令行上。
+
+CLI 不提供注册命令：账号由站点管理员在网页控制台的「账号」页建，
+建好后拿用户名密码来 `skillmesh login`。自助注册开着时，网页登录页也能直接注册。
 
 网页控制台的登录页也是用户名 + 密码，页面上可切换「注册一个」。
 
@@ -47,7 +49,8 @@ skillmesh logout                                                # 清除本地�
 | `skillmesh.auth.jwt-secret` | `SM_JWT_SECRET` | 随机 | 令牌的签名密钥。**生产必须配**：不配就是每次启动随机生成，重启后所有已登录的令牌都失效 |
 | `skillmesh.auth.allow-register` | `SM_ALLOW_REGISTER` | `true` | 能不能自助注册。关掉就注册不了 |
 
-**第一个注册出来的内置账号是管理员**（`role=admin`），其余是普通账号（`role=user`）。走企业 IdP 登录的老账号不算在内——他们不占这个位置。
+**管理员只有一个名额**：服务端建好第一个内置账号时它是管理员（`role=admin`），
+之后不管谁建号都只是普通账号（`role=user`）。走企业 IdP 登录的老账号不算在内——他们不占这个位置。
 
 ### 企业 IdP：浏览器授权码 + PKCE
 
