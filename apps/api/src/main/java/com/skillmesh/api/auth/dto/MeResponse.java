@@ -18,5 +18,7 @@ public record MeResponse(User user, List<OrgMembershipResponse> organizations) {
                        @JsonProperty("display_name") String displayName,
                        String email,
                        String status,
-                       String subject) {}
+                       String subject,
+                       /** 站内角色：admin 或 user。网页端据此决定要不要显示账号管理入口。 */
+                       String role) {}
 }

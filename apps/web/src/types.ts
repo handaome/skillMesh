@@ -344,3 +344,14 @@ export interface RecycleFile {
   created_at: string
   expires_at: string
 }
+
+/** 账号。username 为空的是外部 IdP 账号，只能禁用，不能改密码。 */
+export interface UserAccount {
+  id: string
+  username: string | null
+  display_name: string | null
+  email: string | null
+  status: string
+  role: string
+  created_at: string
+}

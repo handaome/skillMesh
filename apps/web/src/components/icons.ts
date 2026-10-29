@@ -19,6 +19,7 @@ export type IconName =
   | 'upload'
   | 'chevron-right'
   | 'chevron-down'
+  | 'account'
 
 /** 每条 path 的 d，渲染成 <path>。 */
 export const PATHS: Record<IconName, string[]> = {
@@ -28,6 +29,11 @@ export const PATHS: Record<IconName, string[]> = {
   users: [
     'M6 7.5a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5zM2 13.5c0-2.2 1.8-3.5 4-3.5s4 1.3 4 3.5',
     'M11 3.4a2.25 2.25 0 010 4.4M11.6 10.2c1.5.35 2.4 1.5 2.4 3.3',
+  ],
+  // 账号：跟「团队」的人形不同，这个带钥匙孔——管的是登录身份，不是花名册。
+  account: [
+    'M8 7.9a2.45 2.45 0 100-4.9 2.45 2.45 0 000 4.9zM3.2 13.6c0-2.4 2.1-3.9 4.8-3.9s4.8 1.5 4.8 3.9',
+    'M12.9 12.6h1.7v1.2h-1.7zM12.4 10.9h1.2v1.2h-1.2z',
   ],
   review: [
     'M8 2.2h4.2L14.5 4.5v9.3h-13V2.2z',

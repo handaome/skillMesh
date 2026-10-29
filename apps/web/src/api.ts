@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -497,4 +497,40 @@ export function restoreRecycleFile(
 ): Promise<EditFileResult> {
   return request<EditFileResult>(
     `/skills/${skillId}/recycle/restore`, 'POST', { path })
+}
+
+/**
+ * 账号列表。只有站点管理员拿得到，别人调这一下会吃 403。
+ *
+ * 自助注册关掉后，账号只能从管理员这儿来，这个列表就是花名册。
+ */
+export function listUsers(): Promise<UserAccount[]> {
+  return request<UserAccount[]>('/users', 'GET')
+}
+
+/**
+ * 建一个内置账号。
+ *
+ * 建出来的固定是普通用户（role=user），管理员名额不开放给这个接口。
+ */
+export function createUser(body: {
+  username: string
+  password: string
+  display_name?: string
+  email?: string
+}): Promise<UserAccount> {
+  return request<UserAccount>('/users', 'POST', body)
+}
+
+/**
+ * 禁用或启用一个账号。
+ *
+ * 禁用后登不进来，账号和它名下的数据都留着，恢复后不用重建。
+ * 外部 IdP 账号（username 为空）也归这里管——它们的账号在本系统里。
+ */
+export function updateUserStatus(
+  userId: string, status: 'active' | 'disabled',
+): Promise<UserAccount> {
+  return request<UserAccount>(
+    `/users/${encodeURIComponent(userId)}/status`, 'PATCH', { status })
 }

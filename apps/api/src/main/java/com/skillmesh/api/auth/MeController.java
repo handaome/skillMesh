@@ -29,7 +29,7 @@ public class MeController {
         List<OrgMembershipResponse> memberships = orgs.myOrganizations(user.id());
         return new MeResponse(
             new MeResponse.User(user.id(), user.displayName(), user.email(), user.status(),
-                user.subject()),
+                user.subject(), user.role()),
             memberships);
     }
 }

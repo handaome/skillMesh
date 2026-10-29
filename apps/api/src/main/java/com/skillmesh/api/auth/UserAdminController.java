@@ -2,11 +2,15 @@ package com.skillmesh.api.auth;
 
 import com.skillmesh.api.auth.dto.RegisterRequest;
 import com.skillmesh.api.auth.dto.UserAccount;
+import com.skillmesh.api.auth.dto.UserStatusRequest;
 import jakarta.validation.Valid;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -39,5 +43,11 @@ public class UserAdminController {
     @GetMapping
     public List<UserAccount> list(@AuthenticationPrincipal Jwt jwt) {
         return users.list(currentUserService.current(jwt));
+    }
+
+    @PatchMapping("/{id}/status")
+    public UserAccount setStatus(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
+                                  @RequestBody UserStatusRequest request) {
+        return users.setStatus(currentUserService.current(jwt), id, request.status());
     }
 }

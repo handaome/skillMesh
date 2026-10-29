@@ -12,6 +12,7 @@ const router = createRouter({
     { path: '/reviews', component: () => import('./pages/ReviewQueuePage.vue') },
     { path: '/groups', component: () => import('./pages/GroupsPage.vue') },
     { path: '/audit', component: () => import('./pages/AuditPage.vue') },
+    { path: '/accounts', component: () => import('./pages/AccountsPage.vue') },
     { path: '/reviews/:skillId/:version', component: () => import('./pages/ReviewDetailPage.vue') },
   ],
 })

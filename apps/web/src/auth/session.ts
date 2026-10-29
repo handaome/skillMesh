@@ -28,6 +28,8 @@ export interface Me {
   status: string
   /** OIDC 的 sub——邀请要绑到某个人时填的就是它。 */
   subject: string
+  /** 站内角色：admin 或 user。账号管理入口只对 admin 显示。 */
+  role: string
 }
 
 export interface OrgMembership {
