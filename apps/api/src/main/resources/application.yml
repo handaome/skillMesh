@@ -21,8 +21,9 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${SM_KEYCLOAK_ISSUER:}
-          jwk-set-uri: ${SM_KEYCLOAK_JWK_SET_URI:}
+          # 外部 IdP 的 issuer。留空就只认内置账号（自签令牌），不装 IdP 也能跑。
+          issuer-uri: ${SM_OIDC_ISSUER:}
+          jwk-set-uri: ${SM_OIDC_JWK_SET_URI:}
 
 server:
   port: 8080
@@ -38,9 +39,9 @@ skillmesh:
     bucket: ${SM_MINIO_BUCKET}
     temp-expire-days: ${SM_MINIO_TEMP_EXPIRE_DAYS:1}
   oidc:
-    issuer: ${SM_OIDC_ISSUER:${SM_KEYCLOAK_ISSUER:}}
+    issuer: ${SM_OIDC_ISSUER:}
     client-id: ${SM_OIDC_CLIENT_ID:skillmesh-cli}
-  # 内置账号：用户名 + 密码登录，不装 Keycloak 也能用。
+  # 内置账号：用户名 + 密码登录，不接外部 IdP 也能用。
   auth:
     # 令牌的签名密钥。没配就用随机的一次性密钥——重启后已登录的令牌全部失效，
     # 生产环境必须配 SM_JWT_SECRET。

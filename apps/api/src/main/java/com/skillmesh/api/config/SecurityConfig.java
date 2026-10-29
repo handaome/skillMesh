@@ -86,7 +86,7 @@ public class SecurityConfig {
      * 于是 issuer-uri 与 jwk-set-uri 只要都出现在配置里（哪怕一个是空串），
      * 就会注册出两个 JwtDecoder，应用直接起不来。
      *
-     * 没配外部 IdP 时只认本地令牌（HS256 自签），这样不装 Keycloak 也能跑。
+     * 没配外部 IdP 时只认本地令牌（HS256 自签），这样单靠服务端也能跑。
      * 配了外部 IdP 就两条路都认：先试本地，签名对不上再交给外部解码器。
      *
      * 给了 jwk-set-uri 就只验签名、不校验令牌里的 iss——容器内外 issuer 天然不一致

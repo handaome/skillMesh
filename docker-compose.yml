@@ -1,4 +1,4 @@
-# 生产/集成环境编排。本机开发不用它——MinIO 与 Keycloak 走 infra/scripts 里的原生进程脚本。
+# 生产/集成环境编排。本机开发不用它——MinIO 走 infra/scripts 里的原生进程脚本。
 #
 # 所有凭据从环境变量读取，不写在这里。复制 .env.example 成 .env 后再起。
 
@@ -34,20 +34,6 @@ services:
       timeout: 5s
       retries: 10
 
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.8.1
-    command: start-dev --http-relative-path=/kc
-    environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${SM_KEYCLOAK_ADMIN_USER}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SM_KEYCLOAK_ADMIN_PASSWORD}
-      KC_HOSTNAME: http://127.0.0.1:8180/kc
-      KC_HOSTNAME_STRICT: "false"
-    ports:
-      - "127.0.0.1:8180:8080"
-    volumes:
-      - ./infra/keycloak:/opt/keycloak/data/import:ro
-      - keycloak-data:/opt/keycloak/data
-
   api:
     build:
       context: ./apps/api
@@ -59,12 +45,11 @@ services:
       SM_MINIO_ACCESS_KEY: ${SM_MINIO_ACCESS_KEY}
       SM_MINIO_SECRET_KEY: ${SM_MINIO_SECRET_KEY}
       SM_MINIO_BUCKET: ${SM_MINIO_BUCKET:-skillmesh-artifacts}
-      # 验签走容器内地址（只有 api 自己要这个）。
-      SM_KEYCLOAK_JWK_SET_URI: http://keycloak:8080/kc/realms/skillmesh/protocol/openid-connect/certs
-      # 网页控制台要靠它拼登录地址：那是浏览器去访问，必须是宿主映射的端口，
-      # 不能是容器内的 keycloak:8080（浏览器解析不了）。
-      SM_OIDC_ISSUER: http://127.0.0.1:8180/kc/realms/skillmesh
-      SM_OIDC_CLIENT_ID: skillmesh-cli
+      # 内置账号的令牌签名密钥：固定下来，不配就是每次启动随机生成，
+      # 重启后所有已登录的令牌都失效。
+      SM_JWT_SECRET: ${SM_JWT_SECRET}
+      # 能不能自助注册。关掉就只能由管理员建号。
+      SM_ALLOW_REGISTER: ${SM_ALLOW_REGISTER:-true}
       # 限流（次/分钟）。0 表示关闭；首次同步大量 Skill 时默认值可能不够。
       SM_RATE_LIMIT_READ: ${SM_RATE_LIMIT_READ:-600}
       SM_RATE_LIMIT_WRITE: ${SM_RATE_LIMIT_WRITE:-300}
@@ -88,4 +73,3 @@ services:
 volumes:
   postgres-data:
   minio-data:
-  keycloak-data:

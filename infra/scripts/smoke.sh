@@ -9,7 +9,7 @@ set +a
 
 MINIO_API="${SM_MINIO_ENDPOINT:-http://127.0.0.1:9100}"
 MINIO_CONSOLE="${SM_MINIO_CONSOLE:-http://127.0.0.1:9101}"
-ISSUER="${SM_KEYCLOAK_ISSUER:-http://127.0.0.1:8180/kc/realms/skillmesh}"
+API="${SM_API_BASE:-http://127.0.0.1:8080/api/v1}"
 
 fail=0
 check() {
@@ -24,7 +24,7 @@ check() {
 echo "基础设施健康检查："
 check "MinIO 健康"          "$MINIO_API/minio/health/live"
 check "MinIO 控制台"        "$MINIO_CONSOLE/"
-check "Keycloak OIDC 发现"  "$ISSUER/.well-known/openid-configuration"
-check "Keycloak JWKS"       "$ISSUER/protocol/openid-connect/certs"
+# 公开配置在就行：登录方式（内置账号或外部 IdP）由它说了算。
+check "服务端公开配置"      "$API/config/public"
 
 exit $fail

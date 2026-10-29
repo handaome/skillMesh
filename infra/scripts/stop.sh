@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # 停止本机服务进程。
 #
-#   bash infra/scripts/stop.sh              # MinIO + Keycloak
+#   bash infra/scripts/stop.sh              # MinIO
 #   bash infra/scripts/stop.sh minio
-#   bash infra/scripts/stop.sh keycloak
 #
 # 不按 pid 文件停：Windows 上 PID 会复用，存下来的 pid 可能已指向别的进程
 # （实测 minio.pid 记的 pid 与真正在跑的 minio 对不上，kill -0 探不到就跳过了）。
-# Keycloak 更是隔着一层 cmd.exe，杀了 cmd 带不走底下的 java。
 # 改为按命令行特征找实际进程再停。
 set -uo pipefail
 
@@ -27,12 +25,10 @@ stop_matching() {
   [ "$found" = 1 ] || echo "$label 未在运行"
 }
 
-stop_minio()    { stop_matching "MinIO" "minio.exe" "minio.exe server"; }
-stop_keycloak() { stop_matching "Keycloak" "java.exe" "keycloak-"; }
+stop_minio() { stop_matching "MinIO" "minio.exe" "minio.exe server"; }
 
 case "${1:-all}" in
   minio)    stop_minio ;;
-  keycloak) stop_keycloak ;;
-  all)      stop_minio; stop_keycloak ;;
-  *)        echo "用法: $0 [minio|keycloak|all]" >&2; exit 2 ;;
+  all)      stop_minio ;;
+  *)        echo "用法: $0 [minio|all]" >&2; exit 2 ;;
 esac

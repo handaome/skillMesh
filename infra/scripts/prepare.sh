@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# 准备本机要用的二进制依赖：MinIO（源码构建）与 Keycloak（Maven Central 下载）。
+# 准备本机要用的二进制依赖：MinIO（源码构建）。
 #
-#   bash infra/scripts/prepare.sh            # 两个都准备
+#   bash infra/scripts/prepare.sh            # 准备
 #   bash infra/scripts/prepare.sh minio
-#   bash infra/scripts/prepare.sh keycloak
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -60,28 +59,8 @@ prepare_minio() {
   echo "MinIO 已构建到 $BIN/minio.exe"
 }
 
-prepare_keycloak() {
-  local version="${KEYCLOAK_VERSION:-26.8.1}"
-  local url="https://repo1.maven.org/maven2/org/keycloak/keycloak-quarkus-dist/${version}/keycloak-quarkus-dist-${version}.zip"
-  local zip="$BIN/keycloak-${version}.zip"
-
-  if [ -d "$BIN/keycloak-${version}" ]; then
-    echo "Keycloak ${version} 已存在，跳过下载"
-    return 0
-  fi
-
-  mkdir -p "$BIN"
-  [ -f "$zip" ] || curl -fSL --retry 3 --max-time 600 -o "$zip" "$url"
-  unzip -q -o "$zip" -d "$BIN"
-  rm -f "$zip"
-
-  test -f "$BIN/keycloak-${version}/bin/kc.bat"
-  echo "Keycloak ${version} 就绪：$BIN/keycloak-${version}"
-}
-
 case "${1:-all}" in
   minio)    prepare_minio ;;
-  keycloak) prepare_keycloak ;;
-  all)      prepare_minio; prepare_keycloak ;;
-  *)        echo "用法: $0 [minio|keycloak|all]" >&2; exit 2 ;;
+  all)      prepare_minio ;;
+  *)        echo "用法: $0 [minio|all]" >&2; exit 2 ;;
 esac
