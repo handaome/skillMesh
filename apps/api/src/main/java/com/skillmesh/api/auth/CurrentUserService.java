@@ -46,7 +46,7 @@ public class CurrentUserService {
             users.save(user);
         }
         return new CurrentUser(user.getId(), subject, user.getDisplayName(), user.getEmail(),
-            user.getStatus());
+            user.getStatus(), user.getRole());
     }
 
     /** 内置账号：按令牌里的用户主键找人。 */
@@ -60,7 +60,7 @@ public class CurrentUserService {
         }
         rejectIfDisabled(user);
         return new CurrentUser(user.getId(), user.getUsername(), user.getDisplayName(),
-            user.getEmail(), user.getStatus());
+            user.getEmail(), user.getStatus(), user.getRole());
     }
 
     private UserEntity provision(String issuer, String subject, Jwt jwt, OffsetDateTime now) {

@@ -15,7 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 内置账号：用户名 + 密码。
  *
- * 有了它，服务端不部署 Keycloak 也能用——这是「新增账户太繁琐」那条路的落点。
+ * 有了它，服务端不接外部 IdP 也能用——这是「新增账户太繁琐」那条路的落点。
  * 走外部 IdP 的账号照旧能用，两套并存。
  */
 @Service
@@ -42,6 +42,23 @@ public class LocalAuthService {
             throw new ApiException(403, ErrorCodes.FORBIDDEN,
                 "这个服务端不开放自助注册，让管理员建号吧");
         }
+        // 第一个内置账号是管理员：还没有别的内置账号时，谁先来谁管。
+        // 看的是「内置账号有几个」而不是「表里有几个人」——
+        // 走外部 IdP 登录的老账号不该占掉这个位置。
+        String role = users.countByUsernameNotNull() == 0 ? "admin" : "user";
+        return tokens.issue(createAccount(username, password, displayName, email, role));
+    }
+
+    /**
+     * 建号：自助注册与管理员建号共用这套查重与哈希逻辑。
+     *
+     * 密码哈希在这里算一次，两条路不会走偏。
+     *
+     * 事务由调用方负责（注册与管理员建号各自带事务）——本类内部调用不走代理，
+     * 挂 @Transactional 也只是摆设。
+     */
+    public UserEntity createAccount(String username, String password, String displayName,
+                                    String email, String role) {
         if (users.findByUsernameIgnoreCase(username).isPresent()) {
             throw new ApiException(409, ErrorCodes.USERNAME_TAKEN, "用户名已被占用");
         }
@@ -53,16 +70,12 @@ public class LocalAuthService {
             ? username : displayName.trim());
         user.setEmail(email == null || email.isBlank() ? null : email.trim());
         user.setStatus("active");
-        // 第一个内置账号是管理员：还没有别的内置账号时，谁先来谁管。
-        // 看的是「内置账号有几个」而不是「表里有几个人」——
-        // 走外部 IdP 登录的老账号不该占掉这个位置。
-        user.setRole(users.countByUsernameNotNull() == 0 ? "admin" : "user");
+        user.setRole(role);
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         user.setCreatedAt(now);
         user.setUpdatedAt(now);
         user.setLastLoginAt(now);
-        users.save(user);
-        return tokens.issue(user);
+        return users.save(user);
     }
 
     /** 登录：用户名不对与密码不对返回同一个错，不告诉外人哪个用户名存在。 */

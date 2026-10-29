@@ -1,5 +1,6 @@
 package com.skillmesh.api.auth;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -13,4 +14,7 @@ public interface UserRepository extends JpaRepository<UserEntity, UUID> {
 
     /** 内置账号有几个。用来判断「第一个内置账号」是谁。 */
     long countByUsernameNotNull();
+
+    /** 全部账号，按创建时间排。管理员看账号列表用。 */
+    List<UserEntity> findAllByOrderByCreatedAtAsc();
 }

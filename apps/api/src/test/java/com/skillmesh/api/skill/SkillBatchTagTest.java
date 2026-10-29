@@ -120,7 +120,7 @@ class SkillBatchTagTest {
         user.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         user.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         users.saveAndFlush(user);
-        return new CurrentUser(id, user.getOidcSubject(), name, null, "active");
+        return new CurrentUser(id, user.getOidcSubject(), name, null, "active", "user");
     }
 
     private UUID newSkill(CurrentUser skillOwner, String slug) {

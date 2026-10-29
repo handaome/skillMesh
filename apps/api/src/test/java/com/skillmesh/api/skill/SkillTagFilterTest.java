@@ -97,7 +97,7 @@ class SkillTagFilterTest {
         user.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         user.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         users.save(user);
-        return new CurrentUser(id, user.getOidcSubject(), name, null, "active");
+        return new CurrentUser(id, user.getOidcSubject(), name, null, "active", "user");
     }
 
     private UUID newSkill(CurrentUser skillOwner, String slug, String visibility, String[] tags) {

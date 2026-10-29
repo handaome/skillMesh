@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
  * 内置账号的令牌签发与校验。
  *
  * 令牌是自签的 JWT（HS256），不依赖任何外部 IdP：
- * 不装 Keycloak 也能登录。外部 IdP 登录的令牌仍按原来的路子验签，
+ * 不接外部 IdP 也能登录。外部 IdP 登录的令牌仍按原来的路子验签，
  * 两边的令牌在解码器里分流（见 SecurityConfig）。
  */
 @Component
