@@ -118,8 +118,36 @@ skillmesh cloud recycle list --skill demo  # 不在 Skill 目录里时用 --skil
 Claude Code、Codex 各有一份技能目录，同一个技能就存了两遍：磁盘占双倍空间，
 改一份要记得改另一份，同步时也多出一倍的条目（`sync` 的进度条会数到两遍）。
 
-让它们共用一份：实体只留在一个 Agent 的目录里，另一个 Agent 的目录里
-每个技能换成一个链接，指向那一份。
+### sync 自动统一到共享目录
+
+`sync` 每次跑都会顺手整理：各 Agent 目录里的技能**实体**搬进共享目录，
+原位置换成一个指向它的链接。默认共享目录是 `~/.agent/skills`：
+
+```
+~/.agent/skills/algorithmic-art/            ← 实体，只有一份
+~/.claude/skills/algorithmic-art  ->  ~/.agent/skills/algorithmic-art
+~/.codex/skills/algorithmic-art   ->  ~/.agent/skills/algorithmic-art
+```
+
+换个地方放：
+
+```yaml
+# ~/.config/skillmesh/config.yaml
+sync:
+  shared_dir: ~/.agent/skills
+```
+
+不想让它整理就加 `--no-share`（或把 `shared_dir` 配成空串）。
+
+整理只动**实体目录**，已经是链接的一律不碰。magpie 这类技能管理器
+自己建的链接，实体归它管——抢过来搬走，它的链接就全成了死链。
+
+共享目录里原本就有的技能（比如你自己放在 `~/.agent/skills` 里的那些）
+不会被塞进 Agent 目录：它们不在同步范围内，不会白传到云端。
+
+### 手动共享：share 命令
+
+想让两个 Agent 共用同一份、又不想等 `sync` 顺手整理：
 
 ```bash
 ./skillmesh.exe share codex --from claude-code --dry-run   # 先看会怎么动

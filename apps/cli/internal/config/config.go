@@ -42,6 +42,23 @@ type SyncConfig struct {
 	// 扫不到不等于用户删了它。开了之后，后台同步（watch）也会照做——
 	// 这就是「明确配置并确认后才传播删除」里的那个「明确配置」。
 	PropagateDelete bool `yaml:"propagate_delete"`
+	// SharedDir 是所有 Agent 共用的技能目录。
+	//
+	// 技能的实体统一放这里，各 Agent 目录里放指向它的链接——
+	// 同一份技能不用在每个 Agent 目录里各存一遍。
+	//
+	// nil 表示用默认值（~/.agent/skills）；指向空串表示明确关掉统一。
+	// 用指针而不是 string：空串得能跟「没配」区分开。
+	SharedDir *string `yaml:"shared_dir"`
+}
+
+// SharedSkillsDir 是共享目录的路径。没配就用默认的 ~/.agent/skills，
+// 配成空串表示关掉统一。
+func (s SyncConfig) SharedSkillsDir() string {
+	if s.SharedDir == nil {
+		return filepath.Join(homeDir(), ".agent", "skills")
+	}
+	return *s.SharedDir
 }
 
 // VerifyConfig 是钉住的验签公钥（信任根）。
@@ -101,6 +118,7 @@ func defaults() Config {
 		ClientID: DefaultClientID,
 		Network:  NetworkConfig{TimeoutSeconds: 30, MaxRetries: 5},
 		Verify:   VerifyConfig{},
+		Sync:     SyncConfig{},
 		Agents: map[string]Agent{
 			"claude-code": {
 				Enabled:       true,
@@ -260,6 +278,15 @@ func applyFile(Cfg *Config, file Config) {
 		if dir != "" {
 			Cfg.Sync.ExtraDirs = append(Cfg.Sync.ExtraDirs, expandHome(dir))
 		}
+	}
+	// 共享目录：没配就用默认的，配成空串就是明确关掉统一。
+	if file.Sync.SharedDir != nil {
+		shared := expandHome(*file.Sync.SharedDir)
+		Cfg.Sync.SharedDir = &shared
+	}
+	// 删除传播：配了才算数，默认关着。
+	if file.Sync.PropagateDelete {
+		Cfg.Sync.PropagateDelete = true
 	}
 }
 

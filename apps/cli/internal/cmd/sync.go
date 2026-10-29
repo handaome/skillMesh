@@ -45,7 +45,11 @@ const (
 	WouldPull syncOutcome = "将拉取"
 	// WouldDelete 演练时才会出现：云端已删，正式跑本地那份会进回收站。
 	WouldDelete syncOutcome = "将删除"
-	Failed      syncOutcome = "失败"
+	// Shared 本地那份搬进了共享目录，各 Agent 目录换成链接。
+	Shared syncOutcome = "已共享"
+	// WouldShare 演练时才会出现：正式跑会搬进共享目录并换成链接。
+	WouldShare syncOutcome = "将共享"
+	Failed     syncOutcome = "失败"
 )
 
 // SyncOptions 是一次同步的可调项。
@@ -77,6 +81,8 @@ type SyncOptions struct {
 	// 云端删过的东西不该再被上传上去：那叫复活。别的机器（基线里没记过
 	// 这个 Skill）尤其容易干出这种事——它不知道云端删过，只看到「云端没有」。
 	CloudDeletes map[string]apiclient.DeletedSkill
+	// NoShare 关掉「技能统一到共享目录」（sync.shared_dir）的自动整理。
+	NoShare bool
 }
 
 func newSyncCmd() *cobra.Command {
@@ -132,6 +138,8 @@ func newSyncCmd() *cobra.Command {
 		"确认把本地删掉的文件也同步到云端（删除传播需要显式确认）")
 	cmd.Flags().BoolVar(&options.PropagateDelete, "propagate-delete", false,
 		"本地删掉的整个 Skill 也从云端删掉（软删除，回收期内可还原）")
+	cmd.Flags().BoolVar(&options.NoShare, "no-share", false,
+		"不把技能统一到共享目录（默认统一到 sync.shared_dir）")
 	return cmd
 }
 
@@ -169,6 +177,15 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	if err != nil {
 		return nil, syncqueue.Queue{}, err
 	}
+	// 技能统一到共享目录：实体只存一份，各 Agent 目录放链接。
+	// 纯本地操作，放在对账之前——统一之后要处理的条目也少了。
+	shareResults, changed := unifySkills(scanned, options)
+	if changed && !options.DryRun {
+		// 目录结构变了：重新扫一遍，后面用的是统一之后的路径。
+		if rescanned, err := SyncTargets(options); err == nil {
+			scanned = rescanned
+		}
+	}
 	// 清单按 slug 索引，删哪些得等扫出本地有哪些才知道。
 	deleteResults, targets, dropping := applyDeletePropagation(ctx, client, &state, scanned, options)
 	if !cloud.Known {
@@ -182,6 +199,7 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	targets = filterByBackoff(targets, queue)
 
 	var results []syncResult
+	results = append(results, shareResults...)
 	results = append(results, deleteResults...)
 	// 云端删了、本地跟着删的这次也要留痕：这是最需要事后能查清的一类动作。
 	for _, result := range deleteResults {
@@ -1086,9 +1104,10 @@ func reportSync(results []syncResult, queue syncqueue.Queue) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，将拉取 %d，将删除 %d，冲突 %d，待确认 %d，已删除 %d，失败 %d\n",
+	fmt.Printf("\n无变化 %d，上传 %d，拉取 %d，将拉取 %d，将删除 %d，冲突 %d，待确认 %d，已删除 %d，共享 %d，失败 %d\n",
 		counts[Skipped], counts[Uploaded], counts[fetched], counts[WouldPull], counts[WouldDelete],
-		counts[Conflicted], counts[PendingDelete], counts[Deleted], counts[Failed])
+		counts[Conflicted], counts[PendingDelete], counts[Deleted],
+		counts[Shared]+counts[WouldShare], counts[Failed])
 	if counts[Conflicted] > 0 {
 		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[Conflicted])
 	}
