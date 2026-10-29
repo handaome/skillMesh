@@ -26,6 +26,11 @@ public class CurrentUserService {
 
     @Transactional
     public CurrentUser current(Jwt jwt) {
+        // 内置账号的令牌带 uid：直接按主键找人，不用再走 OIDC 那套查找。
+        String uid = jwt.getClaimAsString("uid");
+        if (uid != null) {
+            return localCurrent(uid);
+        }
         String issuer = jwt.getIssuer().toString();
         String subject = jwt.getSubject();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
@@ -42,6 +47,20 @@ public class CurrentUserService {
         }
         return new CurrentUser(user.getId(), subject, user.getDisplayName(), user.getEmail(),
             user.getStatus());
+    }
+
+    /** 内置账号：按令牌里的用户主键找人。 */
+    private CurrentUser localCurrent(String uid) {
+        UserEntity user;
+        try {
+            user = users.findById(UUID.fromString(uid))
+                .orElseThrow(() -> new ApiException(401, ErrorCodes.INVALID_CREDENTIALS, "账号不存在"));
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(401, ErrorCodes.INVALID_CREDENTIALS, "账号不存在");
+        }
+        rejectIfDisabled(user);
+        return new CurrentUser(user.getId(), user.getUsername(), user.getDisplayName(),
+            user.getEmail(), user.getStatus());
     }
 
     private UserEntity provision(String issuer, String subject, Jwt jwt, OffsetDateTime now) {

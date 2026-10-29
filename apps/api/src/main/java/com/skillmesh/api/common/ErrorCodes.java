@@ -11,6 +11,10 @@ public final class ErrorCodes {
     public static final String ARTIFACT_MISSING = "ARTIFACT_MISSING";
     public static final String SLUG_TAKEN = "SLUG_TAKEN";
     public static final String INVITATION_INVALID = "INVITATION_INVALID";
+    /** 用户名或密码不对。登录失败统一用这个码，不细分是哪个错了。 */
+    public static final String INVALID_CREDENTIALS = "INVALID_CREDENTIALS";
+    /** 用户名已被占用。 */
+    public static final String USERNAME_TAKEN = "USERNAME_TAKEN";
     public static final String INTERNAL = "INTERNAL";
 
     private ErrorCodes() {}

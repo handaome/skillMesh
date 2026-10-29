@@ -14,11 +14,24 @@ public class UserEntity {
     @Id
     private UUID id;
 
-    @Column(name = "oidc_issuer", nullable = false)
+    // 内置账号没有 OIDC 身份，这两列留空；走外部 IdP 的账号照旧填。
+    @Column(name = "oidc_issuer")
     private String oidcIssuer;
 
-    @Column(name = "oidc_subject", nullable = false)
+    @Column(name = "oidc_subject")
     private String oidcSubject;
+
+    /** 内置账号的用户名。外部 IdP 登录的账号这一列是空的。 */
+    @Column(name = "username")
+    private String username;
+
+    /** 内置账号的密码哈希（BCrypt）。外部 IdP 账号这一列是空的。 */
+    @Column(name = "password_hash")
+    private String passwordHash;
+
+    /** 站内角色：admin 是服务端管理员，user 是普通账号。 */
+    @Column(name = "role", nullable = false)
+    private String role = "user";
 
     @Column(name = "display_name", nullable = false)
     private String displayName;
@@ -59,6 +72,30 @@ public class UserEntity {
 
     public void setOidcSubject(String oidcSubject) {
         this.oidcSubject = oidcSubject;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getPasswordHash() {
+        return passwordHash;
+    }
+
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
     }
 
     public String getDisplayName() {

@@ -40,6 +40,15 @@ skillmesh:
   oidc:
     issuer: ${SM_OIDC_ISSUER:${SM_KEYCLOAK_ISSUER:}}
     client-id: ${SM_OIDC_CLIENT_ID:skillmesh-cli}
+  # 内置账号：用户名 + 密码登录，不装 Keycloak 也能用。
+  auth:
+    # 令牌的签名密钥。没配就用随机的一次性密钥——重启后已登录的令牌全部失效，
+    # 生产环境必须配 SM_JWT_SECRET。
+    jwt-secret: ${SM_JWT_SECRET:}
+    # 能不能自助注册。关掉就只有管理员能建号。
+    allow-register: ${SM_ALLOW_REGISTER:true}
+    access-token-minutes: ${SM_ACCESS_TOKEN_MINUTES:60}
+    refresh-token-days: ${SM_REFRESH_TOKEN_DAYS:30}
   web:
     base-url: ${SM_WEB_BASE_URL:http://127.0.0.1:5174}
   # 下面的限额都能按环境调（设计文档 §14「设置制品大小、文件数、扫描时间和 API 请求频率限制」）。
