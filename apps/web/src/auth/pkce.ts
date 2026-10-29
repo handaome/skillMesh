@@ -45,10 +45,14 @@ export async function loadPublicConfig(): Promise<PublicConfig> {
           throw new Error(`取服务端公开配置失败：HTTP ${response.status}`)
         }
         const body = (await response.json()) as Partial<PublicConfig>
-        if (!body.issuer || !body.client_id) {
-          throw new Error('服务端公开配置缺少 issuer 或 client_id')
+        // issuer 为空是合法的：服务端只开了内置账号，没接外部 IdP。
+        // 这时网页端只走用户名密码，不做 OIDC 跳转。
+        config = {
+          issuer: body.issuer ?? '',
+          client_id: body.client_id ?? '',
+          local_auth: body.local_auth ?? true,
+          register_open: body.register_open ?? false,
         }
-        config = { issuer: body.issuer, client_id: body.client_id }
         return config
       })
       .finally(() => { pending = null })

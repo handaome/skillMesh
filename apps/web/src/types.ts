@@ -70,6 +70,10 @@ export type DeletedSkillPage = Page<DeletedSkill>
 export interface PublicConfig {
   issuer: string
   client_id: string
+  /** 服务端支持内置账号（用户名 + 密码）。 */
+  local_auth: boolean
+  /** 能不能自助注册。 */
+  register_open: boolean
 }
 
 export interface ArtifactSummary {

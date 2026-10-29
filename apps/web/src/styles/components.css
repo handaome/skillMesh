@@ -56,6 +56,14 @@
 .sm-btn--block { width: 100%; }
 
 /* ---------- 输入 ---------- */
+/* 表单标签：独占一行的小字。 */
+.sm-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
 .sm-input,
 .sm-select,
 .sm-textarea {

@@ -1,11 +1,25 @@
 import { reactive, ref } from 'vue'
 import { exchangeCode, loadPublicConfig, refreshToken } from './pkce'
+import {
+  loginWithPassword as apiLogin,
+  refreshLocalToken,
+  registerAccount as apiRegister,
+} from './local'
+import type { RegisterPayload } from './local'
 import type { PublicConfig } from '../types'
 import { bearerHeader } from '../utils/auth'
 
 const STORAGE_KEY = 'skillmesh_session'
 /** 提前 30 秒续期，别让请求卡在过期上。 */
 const REFRESH_MARGIN_MS = 30_000
+
+/**
+ * 会话是哪一类的。
+ *
+ * local 是内置账号（用户名 + 密码），续期走服务端自己的接口；
+ * oidc 是外部 IdP，续期走 IdP 的 token 端点。混了会拿错令牌去续。
+ */
+export type SessionKind = 'local' | 'oidc'
 
 export interface Me {
   id: string
@@ -24,6 +38,7 @@ export interface OrgMembership {
 }
 
 export interface Session {
+  kind: SessionKind
   accessToken: string
   refreshToken: string
   expiresAt: number
@@ -34,7 +49,7 @@ export interface Session {
 }
 
 function empty(): Session {
-  return { accessToken: '', refreshToken: '', expiresAt: 0, idToken: '', user: null, organizations: [] }
+  return { kind: 'oidc', accessToken: '', refreshToken: '', expiresAt: 0, idToken: '', user: null, organizations: [] }
 }
 
 function load(): Session {
@@ -45,7 +60,7 @@ function load(): Session {
     const organizations = parsed.organizations ?? []
     // 形状不对就当没登录：畸形的 accessToken 会变成 `Bearer [object Object]`。
     if (typeof parsed.accessToken !== 'string' || !Array.isArray(organizations)) return empty()
-    return { ...empty(), ...parsed, organizations }
+    return { ...empty(), ...parsed, kind: parsed.kind ?? 'oidc', organizations }
   } catch {
     return empty()
   }
@@ -63,6 +78,7 @@ export const meError = ref('')
 
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    kind: session.kind,
     accessToken: session.accessToken,
     refreshToken: session.refreshToken,
     expiresAt: session.expiresAt,
@@ -79,7 +95,8 @@ export function setTokens(tokens: {
   refresh_token?: string
   expires_in: number
   id_token?: string
-}) {
+}, kind: SessionKind = 'oidc') {
+  session.kind = kind
   session.accessToken = tokens.access_token
   // RFC 6749 §6：refresh 响应可以不带 refresh_token，这时保留旧的。
   session.refreshToken = tokens.refresh_token ?? session.refreshToken
@@ -121,13 +138,25 @@ export function logout() {
  */
 export async function logoutEndingSession() {
   const idToken = session.idToken
-  logout()
+  const kind = session.kind
   const redirect = `${window.location.origin}/login`
+  logout()
+  // 内置账号没有 SSO 会话要结束，但还是要回登录页：
+  // 停在原页面上，后续请求全是 401，用户只看到一屏报错。
+  if (kind === 'local') {
+    window.location.assign(redirect)
+    return
+  }
   let config: PublicConfig
   try {
     config = await loadPublicConfig()
   } catch {
     // 取不到 IdP 的配置就别乱跳：本地会话已经清了，回登录页。
+    window.location.assign(redirect)
+    return
+  }
+  if (!config.issuer) {
+    // 服务端没接外部 IdP：没有 SSO 会话要结束。
     window.location.assign(redirect)
     return
   }
@@ -192,7 +221,12 @@ export async function ensureFresh(force = false): Promise<boolean> {
     return false
   }
   try {
-    setTokens(await refreshToken(session.refreshToken))
+    if (session.kind === 'local') {
+      // 内置账号的续期走服务端自己的接口，IdP 那套不认识这个刷新令牌。
+      setTokens(await refreshLocalToken(session.refreshToken), 'local')
+    } else {
+      setTokens(await refreshToken(session.refreshToken))
+    }
     return true
   } catch {
     logout()
@@ -203,6 +237,18 @@ export async function ensureFresh(force = false): Promise<boolean> {
 /** 走完授权码换令牌。 */
 export async function completeLogin(code: string, verifier: string, redirectUri: string) {
   setTokens(await exchangeCode(code, verifier, redirectUri))
+  await loadMe()
+}
+
+/** 内置账号登录：用户名 + 密码。 */
+export async function loginWithPassword(username: string, password: string) {
+  setTokens(await apiLogin(username, password), 'local')
+  await loadMe()
+}
+
+/** 注册并直接登录。 */
+export async function registerAccount(payload: RegisterPayload) {
+  setTokens(await apiRegister(payload), 'local')
   await loadMe()
 }
 
