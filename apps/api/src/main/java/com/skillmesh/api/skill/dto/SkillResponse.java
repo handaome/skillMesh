@@ -20,5 +20,7 @@ public record SkillResponse(
         List<String> tags,
         Map<String, Object> metadata,
         @JsonProperty("latest_version") String latestVersion,
+        /** 来源摘要：Git 来源的 Skill 带仓库地址。列表页与市场页都靠它显示。 */
+        SkillSourceSummary source,
         @JsonProperty("created_at") OffsetDateTime createdAt,
         @JsonProperty("updated_at") OffsetDateTime updatedAt) {}

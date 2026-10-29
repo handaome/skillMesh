@@ -220,6 +220,20 @@ onMounted(() => {
       </div>
       <p class="sm-muted sm-mb-24">{{ detail.description }}</p>
 
+      <!-- Git 来源：这个 Skill 是从哪个仓库来的。 -->
+      <div v-if="detail.source?.repository_url" class="sm-panel sm-mb-16">
+        <div class="sm-panel-head">
+          <h2 class="sm-section">Git 来源</h2>
+          <span class="sm-meta">{{ detail.source.provider ?? 'git' }}</span>
+        </div>
+        <p class="sm-muted sm-sm sm-mono sm-break" data-test="detail-git">
+          {{ detail.source.repository_url }}
+        </p>
+        <p v-if="detail.source.subpath" class="sm-muted sm-sm sm-mono sm-break">
+          {{ detail.source.subpath }}
+        </p>
+      </div>
+
       <h2 class="sm-section sm-mb-12">版本</h2>
       <!--
         表格只在有数据时渲染：读失败不是「没有版本」，
@@ -388,6 +402,18 @@ onMounted(() => {
             </code>
           </div>
           <p class="sm-muted sm-meta sm-truncate">{{ skill.description }}</p>
+          <!--
+            Git 来源：公开 Skill 的来路对使用者有用（能不能信、怎么更新），
+            列表里就摆出来。
+          -->
+          <p
+            v-if="skill.source?.repository_url"
+            class="sm-muted sm-sm sm-mono sm-truncate"
+            :title="skill.source.repository_url"
+            data-test="market-git"
+          >
+            {{ skill.source.repository_url }}
+          </p>
         </div>
         <div class="sm-row sm-mine-meta">
           <span class="sm-pill">

@@ -10,8 +10,10 @@ import {
   fetchTags,
   getSkillSource,
   getVersions,
+  importSkillFromGit,
   listDeletedSkills,
   listRecycleFiles,
+  resolveGitSource,
   restoreRecycleFile,
   restoreSkill,
   revokeVersion,
@@ -185,6 +187,26 @@ const newName = ref('')
 const newDescription = ref('')
 const newVisibility = ref<'private' | 'public'>('private')
 const newTags = ref<string[]>([])
+
+/**
+ * 从 Git 导入。
+ *
+ * 给的是那些「从 GitHub 下载了、还没进 SkillMesh」的手工 Skill：
+ * 填仓库地址 → 看仓库里有哪些 Skill 目录 → 选一个 → 起个 slug → 导入。
+ */
+const importing = ref(false)
+const importError = ref('')
+const importNotice = ref('')
+const importRepo = ref('')
+const importRef = ref('')
+const importPath = ref('')
+const importSlug = ref('')
+const importName = ref('')
+const importDescription = ref('')
+const importVisibility = ref<'private' | 'public'>('private')
+const importCandidates = ref<{ path: string; name: string }[]>([])
+const importResolving = ref(false)
+const importBusy = ref(false)
 
 const dirty = computed(
   () =>
@@ -587,6 +609,83 @@ async function create() {
 }
 
 /**
+ * 看看仓库里有哪些 Skill 目录。
+ *
+ * 只读：服务端浅克隆一次、扫出候选、报出来就删掉临时目录。
+ * 候选只有一个时直接选中它——多数仓库就装一个 Skill。
+ */
+async function resolveImport() {
+  importError.value = ''
+  importNotice.value = ''
+  const repo = importRepo.value.trim()
+  if (!repo) {
+    importError.value = '要填仓库地址。'
+    return
+  }
+  importResolving.value = true
+  try {
+    const resolved = await resolveGitSource({
+      repository_url: repo,
+      path: importPath.value.trim() || undefined,
+      ref: importRef.value.trim() || undefined,
+    })
+    importCandidates.value = resolved.candidates
+    if (resolved.candidates.length === 0) {
+      importError.value = '仓库里没有含 SKILL.md 的目录。'
+    } else if (!importPath.value.trim()) {
+      importPath.value = resolved.candidates[0].path
+      importNotice.value = `仓库里有 ${resolved.candidates.length} 个 Skill 目录，已选第一个。`
+    }
+  } catch (e) {
+    importError.value = errorText(e)
+  } finally {
+    importResolving.value = false
+  }
+}
+
+/** 从 Git 导入一个 Skill 到云端。 */
+async function runImport() {
+  importError.value = ''
+  importNotice.value = ''
+  const slug = importSlug.value.trim()
+  if (!SLUG_PATTERN.test(slug)) {
+    importError.value = 'slug 只能是小写字母、数字或连字符，长度 2–64，且以字母或数字开头。'
+    return
+  }
+  if (!importPath.value.trim()) {
+    importError.value = '要选一个 Skill 目录。'
+    return
+  }
+  importBusy.value = true
+  try {
+    const result = await importSkillFromGit({
+      repository_url: importRepo.value.trim(),
+      path: importPath.value.trim(),
+      ref: importRef.value.trim() || undefined,
+      slug,
+      name: importName.value.trim() || slug,
+      description: importDescription.value.trim(),
+      visibility: importVisibility.value,
+    })
+    const status = VERSION_STATUS_TEXT[result.status] ?? result.status
+    importNotice.value = `已导入 ${result.slug}，版本 ${result.version}（${status}）。`
+    importRepo.value = ''
+    importRef.value = ''
+    importPath.value = ''
+    importSlug.value = ''
+    importName.value = ''
+    importDescription.value = ''
+    importCandidates.value = []
+    importing.value = false
+    await load()
+  } catch (e) {
+    importError.value = errorText(e)
+  } finally {
+    importBusy.value = false
+  }
+}
+
+/**
  * 输入防抖。
  *
  * 原来每敲一个字符就打一次搜索：请求量跟击键速度成正比，而绝大多数响应
@@ -616,6 +715,13 @@ onUnmounted(() => {
       <div class="sm-row">
         <button class="sm-btn sm-btn--quiet" data-test="open-deleted" @click="openDeleted">
           已删除
+        </button>
+        <button
+          class="sm-btn sm-btn--quiet"
+          data-test="open-import"
+          @click="importing = true"
+        >
+          从 Git 导入
         </button>
         <button class="sm-btn sm-btn--primary" data-test="new-skill" @click="creating = true">
           新建 Skill
@@ -742,6 +848,18 @@ onUnmounted(() => {
                   </div>
                   <p class="sm-muted sm-item-desc sm-truncate" :title="skill.description">
                     {{ skill.description || '（没有描述）' }}
+                  </p>
+                  <!--
+                    Git 来源：列表里就摆出来，不用点进详情才知道它从哪来。
+                    只显示有仓库地址的——本地导入的来源没什么可显示的。
+                  -->
+                  <p
+                    v-if="skill.source?.repository_url"
+                    class="sm-muted sm-sm sm-mono sm-truncate sm-git-line"
+                    :title="skill.source.repository_url"
+                    data-test="mine-git"
+                  >
+                    {{ skill.source.repository_url }}
                   </p>
                   <div class="sm-item-foot">
                     <!-- slug 与名字常常一样，重复两遍只是噪声。 -->
@@ -1089,6 +1207,132 @@ onUnmounted(() => {
       @close="browseVersion = ''"
       @edited="onEdited"
     />
+
+    <ModalDialog
+      :open="importing"
+      title="从 Git 导入"
+      data-test="import-dialog"
+      @close="importing = false"
+    >
+      <p class="sm-note sm-mb-12">
+        把从 GitHub 下载、还没进 SkillMesh 的 Skill 纳管进来：填仓库地址，
+        看仓库里有哪些 Skill 目录，选一个导入。导入后它有来源记录，
+        之后就能在这里查更新、拉新版。
+      </p>
+
+      <p v-if="importError" class="sm-note sm-note--error sm-mb-12" data-test="import-error">
+        {{ importError }}
+      </p>
+      <p v-if="importNotice" class="sm-note sm-note--success sm-mb-12" data-test="import-notice">
+        {{ importNotice }}
+      </p>
+
+      <div class="sm-field sm-mb-12">
+        <label for="import-repo">仓库地址</label>
+        <input
+          id="import-repo"
+          v-model="importRepo"
+          class="sm-input sm-input--mono"
+          placeholder="https://github.com/owner/agent-skills.git"
+          data-test="import-repo"
+        />
+      </div>
+      <div class="sm-field sm-mb-12">
+        <label for="import-ref">分支 / 标签</label>
+        <input
+          id="import-ref"
+          v-model="importRef"
+          class="sm-input"
+          placeholder="留空用默认分支"
+          data-test="import-ref"
+        />
+      </div>
+
+      <div class="sm-field sm-mb-12">
+        <label>仓库里的 Skill 目录</label>
+        <div class="sm-row sm-mb-12">
+          <button
+            class="sm-btn sm-btn--quiet sm-btn--sm"
+            data-test="import-resolve"
+            :disabled="importResolving"
+            @click="resolveImport"
+          >
+            {{ importResolving ? '正在看仓库…' : '看看仓库里有什么' }}
+          </button>
+        </div>
+        <div v-if="importCandidates.length" class="sm-radio-row" data-test="import-candidates">
+          <label v-for="candidate in importCandidates" :key="candidate.path" class="sm-check">
+            <input v-model="importPath" type="radio" :value="candidate.path" />
+            {{ candidate.name }}
+            <span class="sm-muted sm-sm sm-mono">{{ candidate.path }}</span>
+          </label>
+        </div>
+        <input
+          v-model="importPath"
+          class="sm-input sm-input--mono"
+          placeholder="仓库内的子目录，如 skills/java-debug"
+          data-test="import-path"
+        />
+        <span class="sm-hint">手填也行：填的是仓库里的相对路径。</span>
+      </div>
+
+      <div class="sm-field sm-mb-12">
+        <label for="import-slug">slug</label>
+        <input
+          id="import-slug"
+          v-model="importSlug"
+          class="sm-input sm-input--mono"
+          placeholder="如 java-debug"
+          data-test="import-slug"
+        />
+        <span class="sm-hint">云端里它的唯一名字。只能是小写字母、数字或连字符。</span>
+      </div>
+      <div class="sm-field sm-mb-12">
+        <label for="import-name">名称</label>
+        <input
+          id="import-name"
+          v-model="importName"
+          class="sm-input"
+          placeholder="留空就用 slug"
+          data-test="import-name"
+        />
+      </div>
+      <div class="sm-field sm-mb-12">
+        <label for="import-desc">描述</label>
+        <textarea
+          id="import-desc"
+          v-model="importDescription"
+          class="sm-textarea"
+          rows="3"
+          data-test="import-desc"
+        />
+      </div>
+      <div class="sm-field">
+        <label>可见性</label>
+        <div class="sm-radio-row" data-test="import-visibility">
+          <label class="sm-check">
+            <input v-model="importVisibility" type="radio" value="private" />
+            私有
+          </label>
+          <label class="sm-check">
+            <input v-model="importVisibility" type="radio" value="public" />
+            公开
+          </label>
+        </div>
+      </div>
+
+      <template #footer>
+        <button class="sm-btn" @click="importing = false">取消</button>
+        <button
+          class="sm-btn sm-btn--primary"
+          data-test="import-submit"
+          :disabled="importBusy"
+          @click="runImport"
+        >
+          {{ importBusy ? '导入中…' : '导入' }}
+        </button>
+      </template>
+    </ModalDialog>
 
     <ModalDialog
       :open="creating"

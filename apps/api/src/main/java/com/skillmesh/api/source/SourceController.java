@@ -1,6 +1,8 @@
 package com.skillmesh.api.source;
 
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.source.dto.ImportFromGitRequest;
+import com.skillmesh.api.source.dto.ImportFromGitResponse;
 import com.skillmesh.api.source.dto.ResolveSourceRequest;
 import com.skillmesh.api.source.dto.UpdateCheckResponse;
 import jakarta.validation.Valid;
@@ -20,12 +22,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class SourceController {
 
     private final SourceService sources;
+    private final GitSourceImportService imports;
     private final CurrentUserService currentUserService;
     private final GitHostPolicy policy;
 
-    public SourceController(SourceService sources, CurrentUserService currentUserService,
-                            GitHostPolicy policy) {
+    public SourceController(SourceService sources, GitSourceImportService imports,
+                            CurrentUserService currentUserService, GitHostPolicy policy) {
         this.sources = sources;
+        this.imports = imports;
         this.currentUserService = currentUserService;
         this.policy = policy;
     }
@@ -53,5 +57,18 @@ public class SourceController {
         SourceService.UpdateCheck check = sources.checkUpdates(req.repositoryUrl(), req.ref());
         return new UpdateCheckResponse(check.repositoryUrl(), check.ref(), check.commit(),
             policy.allowedHosts());
+    }
+
+    /**
+     * 从 Git 仓库导入一个 Skill 到云端。
+     *
+     * 给的是那些「从 GitHub 下载了、还没进 SkillMesh」的手工 Skill：
+     * 导入后它在云端有来源记录，之后就能在网页上查更新、拉新版。
+     */
+    @PostMapping("/import")
+    public ImportFromGitResponse importSkill(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody ImportFromGitRequest req) {
+        return imports.importSkill(currentUserService.current(jwt), req);
     }
 }

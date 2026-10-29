@@ -1,12 +1,8 @@
 package com.skillmesh.api.source;
 
-import com.skillmesh.api.artifact.ArtifactStorage;
-import com.skillmesh.api.artifact.SkillPackager;
-import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
-import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.SafePath;
 import com.skillmesh.api.skill.SkillEntity;
@@ -16,35 +12,16 @@ import com.skillmesh.api.skill.SourceRepository;
 import com.skillmesh.api.source.dto.SkillSourceResponse;
 import com.skillmesh.api.source.dto.SourceUpdateCheckResponse;
 import com.skillmesh.api.source.dto.SourceUpdateResultResponse;
-import com.skillmesh.api.upload.UploadService;
-import com.skillmesh.api.upload.UploadSessionEntity;
-import com.skillmesh.api.upload.UploadSessionRepository;
-import com.skillmesh.api.version.SkillVersionEntity;
-import com.skillmesh.api.version.SkillVersionRepository;
-import com.skillmesh.api.version.SkillVersionService;
-import com.skillmesh.api.version.VersionNumberGenerator;
-import com.skillmesh.api.version.VersionOrder;
-import com.skillmesh.api.version.dto.CreateVersionRequest;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
  * 从 Git 来源拉取新提交，产出**新版本**。
- *
- * 走的是和 CLI 发布完全一样的链路：建候选版本 → 服务端扫描 →
- * 个人与公开直接发布，团队与组织进待审队列。绕开扫描那道闸，
- * 网页端就成了发布链路的旁路——所以这里复用
- * {@link SkillVersionService#create} 与 {@link UploadService#complete}，
- * 不另写一套发布逻辑。
  *
  * 只改云端的内容。本机装的那份得靠 CLI 的 {@code skillmesh update} 拉回去：
  * 服务端看不到任何人的磁盘。
@@ -55,26 +32,16 @@ public class GitSourceUpdateService {
     private final SourceService sources;
     private final SourceRepository sourceRepository;
     private final SkillService skillService;
-    private final SkillVersionService versionService;
-    private final SkillVersionRepository versions;
-    private final UploadSessionRepository uploads;
-    private final ArtifactStorage storage;
-    private final UploadService uploadService;
+    private final GitArtifactPublisher publisher;
     private final AuditService audit;
 
     public GitSourceUpdateService(SourceService sources, SourceRepository sourceRepository,
-                                  SkillService skillService, SkillVersionService versionService,
-                                  SkillVersionRepository versions, UploadSessionRepository uploads,
-                                  ArtifactStorage storage, UploadService uploadService,
+                                  SkillService skillService, GitArtifactPublisher publisher,
                                   AuditService audit) {
         this.sources = sources;
         this.sourceRepository = sourceRepository;
         this.skillService = skillService;
-        this.versionService = versionService;
-        this.versions = versions;
-        this.uploads = uploads;
-        this.storage = storage;
-        this.uploadService = uploadService;
+        this.publisher = publisher;
         this.audit = audit;
     }
 
@@ -115,34 +82,21 @@ public class GitSourceUpdateService {
         try (SourceService.Checkout checkout =
                  sources.checkout(source.getRepositoryUrl(), refOf(source))) {
             Path skillDir = locate(checkout.root(), source.getSubpath());
-            byte[] zip = SkillPackager.pack(skillDir);
-            List<Map<String, Object>> manifest = ZipManifest.of(zip);
-            String sha256 = ContentDigest.sha256(zip);
-            String version = nextVersion(skillId);
-
-            var created = versionService.create(user, skillId, new CreateVersionRequest(
-                version, "stable", source.getId(), checkout.commit(),
+            GitArtifactPublisher.Published published = publisher.publish(user, skillId,
+                source.getId(), checkout.commit(), skillDir, null,
                 "从 Git 来源更新：" + source.getRepositoryUrl() + "@"
-                    + shortCommit(checkout.commit()),
-                zip.length, manifest.size(), sha256, toManifest(manifest), null));
-
-            // 内容在服务端生成，没有客户端要传的字节：直接写进临时位置，
-            // 再走 complete 转正——扫描、发布还是送审由 complete 判定。
-            UploadSessionEntity session = uploads.findById(created.upload().sessionId())
-                .orElseThrow(() -> ApiException.notFound("上传会话"));
-            storage.put(session.getTemporaryStorageKey(), zip, "application/zip");
-            var completed = uploadService.complete(user, session.getId());
+                    + shortCommit(checkout.commit()));
 
             source.setResolvedCommit(checkout.commit());
             source.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
             sourceRepository.save(source);
 
             audit.record(user, "skill.update_from_git", "skill", skillId, "success",
-                Map.of("version", version, "commit", checkout.commit(),
-                    "sha256", sha256, "status", completed.versionStatus()));
+                Map.of("version", published.version(), "commit", published.commit(),
+                    "sha256", published.sha256(), "status", published.status()));
 
-            return new SourceUpdateResultResponse(version, checkout.commit(), sha256,
-                manifest.size(), completed.versionStatus());
+            return new SourceUpdateResultResponse(published.version(), published.commit(),
+                published.sha256(), published.fileCount(), published.status());
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
@@ -173,7 +127,7 @@ public class GitSourceUpdateService {
     }
 
     /** 定位仓库里的 Skill 目录。 */
-    private Path locate(Path root, String subpath) {
+    Path locate(Path root, String subpath) {
         Path dir = root;
         if (subpath != null && !subpath.isBlank()) {
             if (SafePath.escapes(subpath)) {
@@ -190,33 +144,6 @@ public class GitSourceUpdateService {
                     ? "" : "：" + subpath));
         }
         return dir;
-    }
-
-    /**
-     * 新版本号。
-     *
-     * 撞号要避开：待审与草稿的版本号没进 latest_version，
-     * 只看 latest_version 会算出同一个号，撞唯一约束就是 500。
-     */
-    private String nextVersion(UUID skillId) {
-        List<SkillVersionEntity> rows = versions.findBySkillIdOrderByCreatedAtDesc(skillId);
-        String latest = null;
-        Set<String> used = new HashSet<>();
-        for (SkillVersionEntity row : rows) {
-            used.add(row.getVersion());
-            if (latest == null || VersionOrder.isGreater(row.getVersion(), latest)) {
-                latest = row.getVersion();
-            }
-        }
-        return VersionNumberGenerator.next(latest, used);
-    }
-
-    private List<CreateVersionRequest.ManifestEntry> toManifest(List<Map<String, Object>> manifest) {
-        List<CreateVersionRequest.ManifestEntry> entries = new ArrayList<>();
-        for (Map<String, Object> item : manifest) {
-            entries.add(CreateVersionRequest.ManifestEntry.from(item));
-        }
-        return entries;
     }
 
     private String shortCommit(String commit) {

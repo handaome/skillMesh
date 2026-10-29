@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -264,6 +264,34 @@ export function checkSkillSourceUpdates(skillId: string): Promise<SourceUpdateCh
  */
 export function updateSkillFromSource(skillId: string): Promise<SourceUpdateResult> {
   return request<SourceUpdateResult>(`/skills/${skillId}/source/update`, 'POST')
+}
+
+/** 解析仓库里的 Skill 候选目录。只读，不装任何东西。 */
+export function resolveGitSource(body: {
+  repository_url: string
+  path?: string
+  ref?: string
+}): Promise<ResolvedSource> {
+  return request<ResolvedSource>('/sources/resolve', 'POST', body)
+}
+
+/**
+ * 从 Git 仓库导入一个 Skill 到云端。
+ *
+ * 给的是那些「从 GitHub 下载了、还没进 SkillMesh」的手工 Skill：
+ * 导入后它在云端有来源记录，之后就能在网页上查更新、拉新版。
+ */
+export function importSkillFromGit(body: {
+  repository_url: string
+  path?: string
+  ref?: string
+  slug: string
+  name: string
+  description: string
+  visibility: 'private' | 'public'
+  tags?: string[]
+}): Promise<ImportedSkill> {
+  return request<ImportedSkill>('/sources/import', 'POST', body)
 }
 
 export function listTeams(organizationId: string): Promise<Team[]> {

@@ -16,6 +16,8 @@ export interface Skill {
   owner_team_id?: string | null
   /** 描述之外的自定义键值。 */
   metadata?: Record<string, unknown>
+  /** 来源摘要。Git 来源的 Skill 带仓库地址。 */
+  source?: SkillSourceSummary | null
 }
 
 /**
@@ -126,6 +128,17 @@ export interface SkillSource {
   resolved_commit: string | null
 }
 
+/** 列表行里的来源摘要：只看得到仓库地址就够显示一行了。 */
+export interface SkillSourceSummary {
+  source_type: string
+  provider: string | null
+  repository_url: string | null
+  subpath: string | null
+  ref_type: string | null
+  ref_value: string | null
+  resolved_commit: string | null
+}
+
 /** 检查 Git 来源有没有新提交的结果。 */
 export interface SourceUpdateCheck {
   repository_url: string
@@ -137,6 +150,28 @@ export interface SourceUpdateCheck {
 
 /** 从 Git 来源更新出来的版本。 */
 export interface SourceUpdateResult {
+  version: string
+  source_commit: string
+  sha256: string
+  file_count: number
+  /** published / pending_review / quarantined。 */
+  status: string
+}
+
+/** 解析仓库的结果：里面有哪些 Skill 候选目录。 */
+export interface ResolvedSource {
+  repository_url: string
+  head_commit: string
+  candidates: {
+    path: string
+    name: string
+  }[]
+}
+
+/** 从 Git 导入的结果。 */
+export interface ImportedSkill {
+  skill_id: string
+  slug: string
   version: string
   source_commit: string
   sha256: string

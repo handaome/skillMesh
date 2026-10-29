@@ -474,6 +474,23 @@ Git 来源的跑 `skillmesh update`，本地导入的（没有 Git 来源的）�
 `skillmesh install <名字> --version <新版本>`。网页端只支持公开仓库，
 私有仓库只能用 CLI 在本机更新。
 
+### 从 GitHub 直接下下来的 Skill，怎么纳管
+
+下载来的 Skill 没进过控制台，网页端也认不出来。这种在控制台「我的 Skill」页
+右上角点「从 Git 导入」，填仓库地址、挑一个目录，导进去就纳管了——之后照样能在
+网页上查更新、拉新版。
+
+命令行这边等价的是两步：
+
+```bash
+./skillmesh.exe add https://github.com/<owner>/<repo> --path <子目录>
+./skillmesh.exe publish <装好的 Skill 目录>
+```
+
+`add` 把 Skill 从仓库装到本机的 Agent 目录，来源写进锁文件（凭据留在本机，
+不传给服务端）；`publish` 才把它发到云端。私有仓库走这条路——服务端拉不到，
+来源只是给本机更新用的。
+
 ### 更新前先看差异，本地改过就不覆盖
 
 ```bash

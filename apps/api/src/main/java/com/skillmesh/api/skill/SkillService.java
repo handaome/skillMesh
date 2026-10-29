@@ -15,6 +15,7 @@ import com.skillmesh.api.skill.dto.DeletedSkillResponse;
 import com.skillmesh.api.skill.dto.SkillSourceInput;
 import com.skillmesh.api.skill.dto.UpdateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillResponse;
+import com.skillmesh.api.skill.dto.SkillSourceSummary;
 import com.skillmesh.api.skill.dto.TagCountResponse;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -148,17 +149,17 @@ public class SkillService {
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         SkillEntity saved = skills.save(entity);
-        recordSource(user, saved, req.source());
+        SourceEntity recorded = recordSource(user, saved, req.source());
         audit.record(user, "skill.created", "skill", saved.getId(), "success",
             Map.of("slug", saved.getSlug(), "visibility", saved.getVisibility()));
-        return toResponse(saved);
+        return toResponse(saved, toSummary(recorded));
     }
 
     /**
      * 记一条来源（设计文档 §7.1）。
      * 客户端没给就记 local_import——来源不明也要留痕，不能等于没有来源。
      */
-    private void recordSource(CurrentUser user, SkillEntity skill, SkillSourceInput source) {
+    private SourceEntity recordSource(CurrentUser user, SkillEntity skill, SkillSourceInput source) {
         SourceEntity row = new SourceEntity();
         row.setId(UUID.randomUUID());
         row.setSkillId(skill.getId());
@@ -172,7 +173,7 @@ public class SkillService {
             row.setProvider("local");
             row.setLicenseStatus("unknown");
             sources.save(row);
-            return;
+            return row;
         }
         row.setSourceType(source.sourceType() == null ? "local_import" : source.sourceType());
         row.setProvider(source.provider() == null ? "local" : source.provider());
@@ -184,6 +185,7 @@ public class SkillService {
         row.setLicenseExpression(source.licenseExpression());
         row.setLicenseStatus(source.licenseStatus() == null ? "unknown" : source.licenseStatus());
         sources.save(row);
+        return row;
     }
 
     @Transactional
@@ -219,12 +221,21 @@ public class SkillService {
         SkillEntity saved = skills.save(entity);
         audit.record(user, "skill.updated", "skill", saved.getId(), "success",
             Map.of("fields", String.join(",", changed), "slug", saved.getSlug()));
-        return toResponse(saved);
+        return toResponse(saved, sourceSummary(saved.getId()));
     }
 
     @Transactional(readOnly = true)
     public SkillResponse get(CurrentUser user, UUID id) {
-        return toResponse(requireVisibleSkill(user, id));
+        SkillEntity entity = requireVisibleSkill(user, id);
+        return toResponse(entity, sourceSummary(id));
+    }
+
+    /**
+     * 一个 Skill 的来源摘要。同一 Skill 有多条来源记录时取最新的一条。
+     */
+    private SkillSourceSummary sourceSummary(UUID skillId) {
+        List<SourceEntity> rows = sources.findBySkillIdOrderByCreatedAtDesc(skillId);
+        return rows.isEmpty() ? null : toSummary(rows.get(0));
     }
 
     /**
@@ -268,7 +279,7 @@ public class SkillService {
         SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
         requireArchiveRight(user, entity);
         if (SkillStatus.ACTIVE.equals(entity.getStatus())) {
-            return toResponse(entity);
+            return toResponse(entity, sourceSummary(entity.getId()));
         }
         if (!SkillStatus.ARCHIVED.equals(entity.getStatus())) {
             throw ApiException.notFound("Skill");
@@ -285,7 +296,7 @@ public class SkillService {
         skills.save(entity);
         audit.record(user, "skill.restored", "skill", entity.getId(), "success",
             Map.of("slug", entity.getSlug()));
-        return toResponse(entity);
+        return toResponse(entity, sourceSummary(entity.getId()));
     }
 
     /**
@@ -370,8 +381,35 @@ public class SkillService {
         // 别把不该看到的查出来再在内存里筛——那等于没权限控制。
         List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibility, tag,
             untagged, mine, decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
-        return CursorPage.of(rows, size, SkillService::nextCursorOf)
-            .map(page -> page.stream().map(SkillService::toResponse).toList());
+        CursorPage<SkillEntity> page = CursorPage.of(rows, size, SkillService::nextCursorOf);
+        // 来源一次查完：列表页要显示每个 Skill 的仓库地址，
+        // 一个一个查就是几十次往返。
+        Map<UUID, SkillSourceSummary> summaries = sourceSummaries(
+            page.items().stream().map(SkillEntity::getId).toList());
+        return page.map(items -> items.stream()
+            .map(entity -> toResponse(entity, summaries.get(entity.getId()))).toList());
+    }
+
+    /**
+     * 一批 Skill 的来源摘要。同一 Skill 有多条来源记录时取最新的一条。
+     */
+    private Map<UUID, SkillSourceSummary> sourceSummaries(List<UUID> skillIds) {
+        if (skillIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, SkillSourceSummary> result = new LinkedHashMap<>();
+        for (SourceEntity source : sources.findBySkillIdInOrderByCreatedAtDesc(skillIds)) {
+            // 查询按创建时间倒序，第一个见到的就是最新的。
+            result.putIfAbsent(source.getSkillId(), toSummary(source));
+        }
+        return result;
+    }
+
+    /** 来源记录转成对外的摘要形状。 */
+    private static SkillSourceSummary toSummary(SourceEntity source) {
+        return new SkillSourceSummary(source.getSourceType(), source.getProvider(),
+            source.getRepositoryUrl(), source.getSubpath(), source.getRefType(),
+            source.getRefValue(), source.getResolvedCommit());
     }
 
     /**
@@ -553,11 +591,16 @@ public class SkillService {
     }
 
     public static SkillResponse toResponse(SkillEntity entity) {
+        return toResponse(entity, null);
+    }
+
+    /** 带来源摘要的响应。source 为 null 表示这个 Skill 没有来源记录。 */
+    public static SkillResponse toResponse(SkillEntity entity, SkillSourceSummary source) {
         return new SkillResponse(entity.getId(), entity.getSlug(), entity.getName(),
             entity.getDescription(), entity.getVisibility(), entity.getStatus(),
             entity.getOwnerUserId(), entity.getOrganizationId(), entity.getOwnerTeamId(),
             List.of(entity.getTags() == null ? new String[0] : entity.getTags()),
-            entity.getMetadataJson(), entity.getLatestVersion(),
+            entity.getMetadataJson(), entity.getLatestVersion(), source,
             entity.getCreatedAt(), entity.getUpdatedAt());
     }
 

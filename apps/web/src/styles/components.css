@@ -592,6 +592,8 @@
 .sm-mine-row .sm-item-head { align-items: center; gap: 6px; }
 .sm-mine-row .sm-item-title { min-width: 0; }
 .sm-item-desc { font-size: var(--fs-meta); line-height: 1.45; }
+/* Git 来源那一行：仓库地址，比描述更次要，压暗一点。 */
+.sm-git-line { font-size: var(--fs-small); color: var(--faint); line-height: 1.4; }
 .sm-item-foot {
   display: flex;
   align-items: baseline;

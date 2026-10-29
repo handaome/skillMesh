@@ -71,8 +71,8 @@ public class SourceService {
         Path workspace = null;
         try {
             workspace = Files.createTempDirectory("skillmesh-source-");
-            Path repo = workspace.resolve("repo");
-            String commit = clone(url, ref, repo);
+            // 仓库直接建在工作区里：root 就是仓库根，扫描与定位子目录都对着它。
+            String commit = clone(url, ref, workspace);
             return new Checkout(workspace, commit);
         } catch (ApiException e) {
             deleteQuietly(workspace);
@@ -125,6 +125,34 @@ public class SourceService {
         run(fetch);
         run(List.of("git", "-C", target.toString(), "checkout", "--quiet", "FETCH_HEAD"));
         return run(List.of("git", "-C", target.toString(), "rev-parse", "HEAD"));
+    }
+
+    /**
+     * 这个 ref 是分支、标签还是 commit。
+     *
+     * git fetch 写下的 FETCH_HEAD 第二列就是它（branch 'main' / tag 'v1.2.0'），
+     * 读一下比自己猜准。猜错只影响来源元数据里 ref_type 这一栏。
+     */
+    public String refType(Path repo, String ref) {
+        if (ref == null || ref.isBlank()) {
+            return "default";
+        }
+        try {
+            Path fetchHead = repo.resolve(".git").resolve("FETCH_HEAD");
+            if (Files.exists(fetchHead)) {
+                String head = Files.readAllLines(fetchHead, StandardCharsets.UTF_8)
+                    .stream().findFirst().orElse("");
+                if (head.contains("tag '")) {
+                    return "tag";
+                }
+                if (head.contains("branch '")) {
+                    return "branch";
+                }
+            }
+        } catch (IOException ignored) {
+            // 读不到就按下面的样子猜
+        }
+        return ref.length() == 40 ? "commit" : "branch";
     }
 
     /** 在检出里找含 SKILL.md 的目录，按相对路径排序，和 CLI 的扫描口径一致。 */
