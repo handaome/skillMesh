@@ -67,14 +67,22 @@ beforeEach(() => {
 })
 
 describe('我的 Skill：删除与还原', () => {
-  it('每一项都有删除按钮', async () => {
+  it('选中后详情里有删除按钮', async () => {
     const wrapper = mount(MySkillsPage)
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="delete-skill"]')).toHaveLength(0)
+    await wrapper.find('[data-test="mine-item"]').trigger('click')
     await flushPromises()
     expect(wrapper.findAll('[data-test="delete-skill"]')).toHaveLength(1)
   })
 
   it('删除会二次确认，成功后刷新两个列表', async () => {
     const wrapper = mount(MySkillsPage)
+    await flushPromises()
+    // 先打开「已删除」，删除后才需要把那个列表也刷新一遍。
+    await wrapper.find('[data-test="open-deleted"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="mine-item"]').trigger('click')
     await flushPromises()
     await wrapper.find('[data-test="delete-skill"]').trigger('click')
     await flushPromises()
@@ -86,7 +94,7 @@ describe('我的 Skill：删除与还原', () => {
     expect(api.deleteSkill).toHaveBeenCalledWith(skill.id)
     // 删完要把两个列表都重拉一遍。
     expect(api.searchMySkills).toHaveBeenCalledTimes(2)
-    expect(api.listDeletedSkills).toHaveBeenCalled()
+    expect(api.listDeletedSkills).toHaveBeenCalledTimes(2)
     expect(wrapper.find('[data-test="list-notice"]').text()).toContain('演示 Skill')
   })
 
@@ -94,15 +102,17 @@ describe('我的 Skill：删除与还原', () => {
     vi.stubGlobal('confirm', vi.fn(() => false))
     const wrapper = mount(MySkillsPage)
     await flushPromises()
+    await wrapper.find('[data-test="mine-item"]').trigger('click')
+    await flushPromises()
     await wrapper.find('[data-test="delete-skill"]').trigger('click')
     await flushPromises()
     expect(api.deleteSkill).not.toHaveBeenCalled()
   })
 
-  it('展开「已删除」列出归档的 Skill，还原后刷新两个列表', async () => {
+  it('打开「已删除」列出归档的 Skill，还原后刷新两个列表', async () => {
     const wrapper = mount(MySkillsPage)
     await flushPromises()
-    await wrapper.find('[data-test="toggle-deleted"]').trigger('click')
+    await wrapper.find('[data-test="open-deleted"]').trigger('click')
     await flushPromises()
 
     expect(api.listDeletedSkills).toHaveBeenCalled()
@@ -121,7 +131,7 @@ describe('我的 Skill：删除与还原', () => {
     api.listDeletedSkills.mockResolvedValue({ items: [], next_cursor: null, has_more: false })
     const wrapper = mount(MySkillsPage)
     await flushPromises()
-    await wrapper.find('[data-test="toggle-deleted"]').trigger('click')
+    await wrapper.find('[data-test="open-deleted"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('还没有删除过 Skill')
   })

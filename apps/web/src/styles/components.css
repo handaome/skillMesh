@@ -523,17 +523,21 @@
 .sm-close:hover { background: var(--raised); color: var(--text); }
 
 /* ---------- 我的 Skill：左列表右详情 ---------- */
-/* 没选中时列表占满整屏，选中了才分栏。 */
+/* 始终分栏。左栏定宽，右栏吃满剩余——列表不会因为选中而突然变窄。 */
 .sm-mine {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
-.sm-mine-split {
-  grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
-}
+/* 左栏跟着视口走：列表再长，详情也不会被顶出屏幕。
+   高度扣掉页面标题与上下留白，否则初始位置就超出视口。 */
 .sm-mine-list {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 180px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
@@ -541,8 +545,58 @@
   min-width: 0;
 }
 .sm-mine-detail { min-width: 0; }
-/* 右侧的可见性与版本号并排，不竖着叠。 */
-.sm-mine-meta { align-items: center; gap: 10px; flex: none; }
+.sm-mine-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  border: 1px dashed var(--control);
+  border-radius: var(--radius-card);
+  text-align: center;
+}
+
+/* 工具栏：搜索撑满左栏，计数靠右；标签一行横滚，不换行堆成三排。 */
+.sm-mine-tools { display: grid; gap: 10px; margin-bottom: 12px; }
+.sm-mine-search { flex: 1; min-width: 0; }
+.sm-mine-tags {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* 右缘渐隐：横滚的标签不会被硬切掉半个。 */
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+}
+.sm-mine-tags::-webkit-scrollbar { display: none; }
+.sm-mine-tags .sm-tagfilter-item { flex: none; }
+
+/* 列表自己滚：工具条与批量条留在顶上。
+   负 margin 把滚动条推到卡片边上，不压在行内容里。 */
+.sm-mine-scroll {
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0 calc(var(--card-pad) * -1);
+  padding: 0 var(--card-pad);
+  scrollbar-gutter: stable;
+}
+
+/* 一行三段：名字与可见性 / 描述 / slug 与版本。 */
+.sm-mine-row { align-items: flex-start; gap: 8px; padding: 10px 0; }
+.sm-mine-row .sm-item-check { margin-top: 3px; }
+.sm-mine-row .sm-item-body { display: grid; gap: 2px; }
+.sm-mine-row .sm-item-head { align-items: center; gap: 6px; }
+.sm-mine-row .sm-item-title { min-width: 0; }
+.sm-item-desc { font-size: var(--fs-meta); line-height: 1.45; }
+.sm-item-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-small);
+  color: var(--faint);
+}
+/* 选中的行：左侧一道青绿，比整行铺灰更轻。 */
+.sm-mine-row.sm-item-on { box-shadow: inset 2px 0 0 var(--data); }
+.sm-pill--sm { height: 20px; padding: 0 7px; font-size: 11px; flex: none; }
+.sm-danger-text { color: var(--negative); }
+.sm-danger-text:hover { color: var(--negative); background: var(--pill-negative-bg); }
 
 /* ---------- 文件浏览抽屉 ---------- */
 /* 抽屉占满大半屏，点开就在眼前；但高度跟着内容走，

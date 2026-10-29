@@ -122,16 +122,15 @@ const {
   loading: deletedLoading,
   error: deletedError,
   hasMore: deletedHasMore,
-  countText: deletedCountText,
   load: loadDeleted,
   loadMore: loadMoreDeleted,
 } = usePagedList<DeletedSkill>((_params, cursor) => listDeletedSkills(cursor), { unit: '个' })
 
 const actionError = ref('')
 const notice = ref('')
-/** 已删除区块展开与否。第一次展开才去拉数据——没人看就别打这个请求。 */
-const deletedOpen = ref(false)
-/** 拉过没有。拉过就不在每次展开时重拉。 */
+/** 已删除弹窗开着没有。第一次打开才去拉数据——没人看就别打这个请求。 */
+const deletedDialogOpen = ref(false)
+/** 拉过没有。拉过就不在每次打开时重拉。 */
 const deletedLoaded = ref(false)
 /** 列表级动作（删除、还原）的提示。放在页面顶部：列表里没有详情面板可依附。 */
 const listNotice = ref('')
@@ -139,6 +138,8 @@ const listActionError = ref('')
 
 /** 回收站里的文件。空数组表示没查过或没有。 */
 const recycle = ref<RecycleFile[]>([])
+/** 回收站展开没有。展开才拉数据——多数 Skill 的回收站是空的，别每次都打一个请求。 */
+const recycleOpen = ref(false)
 const recycleLoading = ref(false)
 const recycleError = ref('')
 
@@ -233,10 +234,21 @@ async function select(skill: Skill) {
   actionError.value = ''
   // 换 Skill 就收起文件浏览：展开的是上一个 Skill 的文件。
   browseVersion.value = ''
+  // 回收站同理：旧 Skill 的文件还挂在屏幕上会让人以为看的是新的。
+  recycleOpen.value = false
+  recycle.value = []
+  recycleError.value = ''
   // 旧 Skill 的版本还挂在屏幕上会让人以为看的是新的，先清掉。
   resetVersions()
   await loadVersions(skill.id)
-  await loadRecycle(skill.id)
+}
+
+/** 展开回收站才去拉文件：折叠着一个空列表，没必要每次换 Skill 都打一次请求。 */
+async function toggleRecycle() {
+  recycleOpen.value = !recycleOpen.value
+  if (recycleOpen.value && selected.value) {
+    await loadRecycle(selected.value.id)
+  }
 }
 
 /**
@@ -402,10 +414,10 @@ async function revoke(version: SkillVersion) {
   }
 }
 
-/** 展开/收起已删除区块。第一次展开才去拉数据：没人看就别打这个请求。 */
-async function toggleDeleted() {
-  deletedOpen.value = !deletedOpen.value
-  if (deletedOpen.value && !deletedLoaded.value) {
+/** 打开已删除弹窗。第一次打开才去拉数据：没人看就别打这个请求。 */
+async function openDeleted() {
+  deletedDialogOpen.value = true
+  if (!deletedLoaded.value) {
     await loadDeleted()
     deletedLoaded.value = true
   }
@@ -432,7 +444,8 @@ async function remove(skill: Skill) {
   }
   listNotice.value = `已删除「${skill.name}」，可在「已删除」里还原。`
   await load()
-  await loadDeleted()
+  // 没打开过已删除弹窗就不必多打一个请求。
+  if (deletedLoaded.value) await loadDeleted()
 }
 
 /**
@@ -511,9 +524,14 @@ onUnmounted(() => {
         <h1 class="sm-title">我的 Skill</h1>
         <p class="sm-sub">你名下的 Skill：个人私有空间里的备份，以及你建的团队 Skill。</p>
       </div>
-      <button class="sm-btn sm-btn--primary" data-test="new-skill" @click="creating = true">
-        新建 Skill
-      </button>
+      <div class="sm-row">
+        <button class="sm-btn sm-btn--quiet" data-test="open-deleted" @click="openDeleted">
+          已删除
+        </button>
+        <button class="sm-btn sm-btn--primary" data-test="new-skill" @click="creating = true">
+          新建 Skill
+        </button>
+      </div>
     </div>
 
     <p v-if="listError" class="sm-note sm-note--error sm-mb-16" data-test="error">
@@ -543,22 +561,36 @@ onUnmounted(() => {
     </p>
 
     <!--
-      没选中时列表占满整屏：这一屏问的是「我名下有什么」，
-      列表就是答案，右边留一栏空白反而像缺了东西。
-      选中之后才分出详情栏。
+      始终左右分栏：左边是列表，右边是详情。
+      未选中时右边给一句引导——点一行才开始分栏的话，列表会从整屏宽
+      突然缩到一窄条，标题和描述全被截断，像换了个页面。
     -->
-    <div class="sm-mine" :class="{ 'sm-mine-split': selected }">
+    <div class="sm-mine">
       <div class="sm-mine-list">
-        <div class="sm-toolbar">
-          <input
-            v-model="query"
-            class="sm-input sm-search"
-            type="search"
-            placeholder="按名称、slug 或标签过滤"
-            data-test="mine-search"
+        <div class="sm-mine-tools">
+          <div class="sm-row">
+            <input
+              v-model="query"
+              class="sm-input sm-mine-search"
+              type="search"
+              placeholder="按名称、slug 或标签过滤"
+              aria-label="筛选我的 Skill"
+              data-test="mine-search"
+            />
+            <span class="sm-muted sm-sm sm-num sm-nowrap" data-test="count">{{ countText }}</span>
+          </div>
+
+          <!--
+            标签筛选。标签清单单独取：列表是游标分页的，从一页数据里汇总标签
+            汇总不全，用户想按只出现在第二页的标签筛选时就没有那个选项可点。
+          -->
+          <TagFilter
+            v-model="selectedTags"
+            v-model:untagged="untagged"
+            class="sm-mine-tags"
+            :tags="tagOptions"
+            @change="load"
           />
-          <span class="sm-spacer" />
-          <span class="sm-muted sm-sm sm-num" data-test="count">{{ countText }}</span>
         </div>
 
         <!--
@@ -584,96 +616,96 @@ onUnmounted(() => {
           </button>
         </MultiSelectToolbar>
 
-        <!--
-          标签筛选。标签清单单独取：列表是游标分页的，从一页数据里汇总标签
-          汇总不全，用户想按只出现在第二页的标签筛选时就没有那个选项可点。
-        -->
-        <div class="sm-mb-12">
-          <TagFilter
-            v-model="selectedTags"
-            v-model:untagged="untagged"
-            :tags="tagOptions"
-            @change="load"
+        <div class="sm-mine-scroll">
+          <div v-if="loading" class="sm-empty">加载中…</div>
+
+          <EmptyState
+            v-else-if="!listError && !skills.length"
+            text="你还没有 Skill。用 CLI 发布一个，或点右上角新建元数据。"
           />
-        </div>
 
-        <div v-if="loading" class="sm-empty">加载中…</div>
-
-        <EmptyState
-          v-else-if="!listError && !skills.length"
-          text="你还没有 Skill。用 CLI 发布一个，或点右上角新建元数据。"
-        />
-
-        <div v-else-if="skills.length" class="sm-list">
-          <!--
-            行本身不再整行是按钮：行里要放「删除」，按钮套按钮浏览器会把它拆开。
-            左边那块仍然是按钮，点它打开详情。
-          -->
-          <div
-            v-for="skill in skills"
-            :key="skill.id"
-            class="sm-item"
-            :class="{ 'sm-item-on': selected?.id === skill.id }"
-          >
-            <input
-              class="sm-item-check"
-              type="checkbox"
-              :checked="isChecked(skill)"
-              :aria-label="`选择 ${skill.name}`"
-              data-test="mine-check"
-              @change="toggleChecked(skill)"
-            />
-            <button class="sm-item-btn sm-grow" data-test="mine-item" @click="select(skill)">
-              <div class="sm-item-body">
-                <div class="sm-item-head">
-                  <strong class="sm-item-title sm-truncate">{{ skill.name }}</strong>
-                  <!-- slug 与名字常常一样，重复两遍只是噪声。 -->
-                  <code v-if="skill.slug !== skill.name" class="sm-mono sm-muted sm-meta sm-truncate">
-                    {{ skill.slug }}
-                  </code>
+          <div v-else-if="skills.length" class="sm-list">
+            <!--
+              行本身不再整行是按钮：行里要放「删除」，按钮套按钮浏览器会把它拆开。
+              左边那块仍然是按钮，点它打开详情。
+            -->
+            <div
+              v-for="skill in skills"
+              :key="skill.id"
+              class="sm-item sm-mine-row"
+              :class="{ 'sm-item-on': selected?.id === skill.id }"
+            >
+              <input
+                class="sm-item-check"
+                type="checkbox"
+                :checked="isChecked(skill)"
+                :aria-label="`选择 ${skill.name}`"
+                data-test="mine-check"
+                @change="toggleChecked(skill)"
+              />
+              <button class="sm-item-btn sm-grow" data-test="mine-item" @click="select(skill)">
+                <div class="sm-item-body">
+                  <div class="sm-item-head">
+                    <strong class="sm-item-title sm-truncate">{{ skill.name }}</strong>
+                    <span :class="visibilityPill(skill.visibility)" class="sm-pill--sm">
+                      {{ VISIBILITY_TEXT[skill.visibility] ?? skill.visibility }}
+                    </span>
+                  </div>
+                  <p class="sm-muted sm-item-desc sm-truncate" :title="skill.description">
+                    {{ skill.description || '（没有描述）' }}
+                  </p>
+                  <div class="sm-item-foot">
+                    <!-- slug 与名字常常一样，重复两遍只是噪声。 -->
+                    <code
+                      v-if="skill.slug !== skill.name"
+                      class="sm-mono sm-faint sm-truncate"
+                    >{{ skill.slug }}</code>
+                    <span class="sm-spacer" />
+                    <span class="sm-num">
+                      {{ skill.latest_version ? `v${skill.latest_version}` : '未发布' }}
+                    </span>
+                  </div>
                 </div>
-                <p class="sm-muted sm-meta sm-truncate">{{ skill.description || '（没有描述）' }}</p>
-              </div>
-            </button>
-            <div class="sm-row sm-mine-meta">
-              <span :class="visibilityPill(skill.visibility)">
-                {{ VISIBILITY_TEXT[skill.visibility] ?? skill.visibility }}
-              </span>
-              <span class="sm-muted sm-meta sm-num">
-                <span class="sm-faint">最新</span> {{ skill.latest_version ?? '—' }}
-              </span>
-              <button
-                class="sm-btn sm-btn--danger sm-btn--sm"
-                data-test="delete-skill"
-                @click="remove(skill)"
-              >
-                删除
               </button>
             </div>
           </div>
-        </div>
 
-        <!-- 还有下一页：说清还有，不假装这就是全部。 -->
-        <div v-if="hasMore" class="sm-row sm-mt-12">
-          <button
-            class="sm-btn sm-btn--quiet sm-btn--sm"
-            data-test="load-more"
-            :disabled="loadingMore"
-            @click="loadMore"
-          >
-            {{ loadingMore ? '加载中…' : '加载更多' }}
-          </button>
+          <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+          <div v-if="hasMore" class="sm-row sm-mt-12">
+            <button
+              class="sm-btn sm-btn--quiet sm-btn--sm"
+              data-test="load-more"
+              :disabled="loadingMore"
+              @click="loadMore"
+            >
+              {{ loadingMore ? '加载中…' : '加载更多' }}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div v-if="selected" class="sm-mine-detail">
-        <template v-if="selected">
+      <div class="sm-mine-detail">
+        <!-- 没选中：右边说清这里是什么，不摆一块空面板。 -->
+        <div v-if="!selected" class="sm-mine-placeholder">
+          <p class="sm-muted">从左侧选一个 Skill，查看元数据、版本与回收站。</p>
+        </div>
+
+        <template v-else>
           <div class="sm-panel">
             <div class="sm-panel-head">
-              <h2 class="sm-section">元数据</h2>
-              <span class="sm-meta">
-                {{ selected.slug }} · 更新于 {{ selected.updated_at.slice(0, 10) }}
-              </span>
+              <div>
+                <h2 class="sm-section">元数据</h2>
+                <span class="sm-meta">
+                  {{ selected.slug }} · 更新于 {{ selected.updated_at.slice(0, 10) }}
+                </span>
+              </div>
+              <button
+                class="sm-btn sm-btn--quiet sm-btn--sm sm-danger-text"
+                data-test="delete-skill"
+                @click="remove(selected)"
+              >
+                删除
+              </button>
             </div>
 
             <p v-if="actionError" class="sm-note sm-note--error sm-mb-12" data-test="action-error">
@@ -789,45 +821,59 @@ onUnmounted(() => {
           <!--
             回收站：发新版时被删掉的文件。删掉不是抹掉——
             回收期内能找回来（设计文档 §6.4）。
+            默认收起：多数 Skill 的回收站是空的，展开才拉数据。
           -->
           <div class="sm-panel">
             <div class="sm-panel-head">
-              <h2 class="sm-section">回收站</h2>
-              <span class="sm-meta">{{ recycle.length }} 个文件</span>
+              <div>
+                <h2 class="sm-section">回收站</h2>
+                <span class="sm-meta">
+                  {{ recycleOpen ? `${recycle.length} 个文件` : '发新版时删掉的文件，过期前能恢复' }}
+                </span>
+              </div>
+              <button
+                class="sm-btn sm-btn--quiet sm-btn--sm"
+                data-test="toggle-recycle"
+                @click="toggleRecycle"
+              >
+                {{ recycleOpen ? '收起' : '展开' }}
+              </button>
             </div>
 
-            <p v-if="recycleError" class="sm-note sm-note--error sm-mb-12" data-test="recycle-error">
-              {{ recycleError }}
-            </p>
+            <template v-if="recycleOpen">
+              <p v-if="recycleError" class="sm-note sm-note--error sm-mb-12" data-test="recycle-error">
+                {{ recycleError }}
+              </p>
 
-            <div v-if="recycleLoading" class="sm-empty">加载中…</div>
+              <div v-if="recycleLoading" class="sm-empty">加载中…</div>
 
-            <EmptyState
-              v-else-if="!recycleError && !recycle.length"
-              text="回收站是空的。发新版时删掉的文件会先放到这儿，过期才清掉。"
-            />
+              <EmptyState
+                v-else-if="!recycleError && !recycle.length"
+                text="回收站是空的。发新版时删掉的文件会先放到这儿，过期才清掉。"
+              />
 
-            <ul v-else class="sm-list">
-              <li v-for="file in recycle" :key="file.path" class="sm-item sm-item-static">
-                <div class="sm-grow">
-                  <div class="sm-item-head">
-                    <strong class="sm-mono sm-break">{{ file.path }}</strong>
+              <ul v-else class="sm-list">
+                <li v-for="file in recycle" :key="file.path" class="sm-item sm-item-static">
+                  <div class="sm-grow">
+                    <div class="sm-item-head">
+                      <strong class="sm-mono sm-break">{{ file.path }}</strong>
+                    </div>
+                    <p class="sm-muted sm-sm">
+                      来自 {{ file.source_version }}
+                      · {{ file.size_bytes }} 字节
+                      · {{ formatDateTime(file.created_at) }} 删除
+                    </p>
                   </div>
-                  <p class="sm-muted sm-sm">
-                    来自 {{ file.source_version }}
-                    · {{ file.size_bytes }} 字节
-                    · {{ formatDateTime(file.created_at) }} 删除
-                  </p>
-                </div>
-                <button
-                  class="sm-btn sm-btn--quiet sm-btn--sm"
-                  data-test="restore-file"
-                  @click="restoreFile(file)"
-                >
-                  恢复
-                </button>
-              </li>
-            </ul>
+                  <button
+                    class="sm-btn sm-btn--quiet sm-btn--sm"
+                    data-test="restore-file"
+                    @click="restoreFile(file)"
+                  >
+                    恢复
+                  </button>
+                </li>
+              </ul>
+            </template>
           </div>
         </template>
       </div>
@@ -835,66 +881,58 @@ onUnmounted(() => {
 
     <!--
       已删除：云端归档的 Skill。删掉的先在这儿躺着，可以还原回去。
-      默认收起：多数人没删过东西，摊开一屏空列表只是噪声。
+      做成弹窗：多数人没删过东西，页面底部常驻一块空卡片只是噪声。
     -->
-    <div class="sm-panel sm-mt-24">
-      <div class="sm-panel-head">
-        <h2 class="sm-section">已删除</h2>
-        <div class="sm-row">
-          <span v-if="deletedLoaded" class="sm-meta">{{ deletedCountText }}</span>
+    <ModalDialog
+      :open="deletedDialogOpen"
+      title="已删除的 Skill"
+      @close="deletedDialogOpen = false"
+    >
+      <p v-if="deletedError" class="sm-note sm-note--error sm-mb-12" data-test="deleted-error">
+        {{ deletedError }}
+      </p>
+
+      <div v-if="deletedLoading" class="sm-empty">加载中…</div>
+
+      <EmptyState
+        v-else-if="!deletedError && !deleted.length"
+        text="还没有删除过 Skill。删掉的会先放到这儿，随时能还原回去。"
+      />
+
+      <ul v-else class="sm-list">
+        <li v-for="item in deleted" :key="item.id" class="sm-item sm-item-static">
+          <div class="sm-grow">
+            <div class="sm-item-head">
+              <strong class="sm-item-title sm-truncate">{{ item.name }}</strong>
+              <code class="sm-mono sm-muted sm-meta sm-truncate">{{ item.slug }}</code>
+            </div>
+            <p class="sm-muted sm-sm">删除于 {{ formatDateTime(item.deleted_at) }}</p>
+          </div>
           <button
             class="sm-btn sm-btn--quiet sm-btn--sm"
-            data-test="toggle-deleted"
-            @click="toggleDeleted"
+            data-test="restore-skill"
+            @click="restore(item)"
           >
-            {{ deletedOpen ? '收起' : '展开' }}
+            还原
           </button>
-        </div>
+        </li>
+      </ul>
+
+      <!-- 还有下一页：说清还有，不假装这就是全部。 -->
+      <div v-if="deletedHasMore" class="sm-row sm-mt-12">
+        <button
+          class="sm-btn sm-btn--quiet sm-btn--sm"
+          data-test="deleted-more"
+          @click="loadMoreDeleted"
+        >
+          加载更多
+        </button>
       </div>
 
-      <template v-if="deletedOpen">
-        <p v-if="deletedError" class="sm-note sm-note--error sm-mb-12" data-test="deleted-error">
-          {{ deletedError }}
-        </p>
-
-        <div v-if="deletedLoading" class="sm-empty">加载中…</div>
-
-        <EmptyState
-          v-else-if="!deletedError && !deleted.length"
-          text="还没有删除过 Skill。删掉的会先放到这儿，随时能还原回去。"
-        />
-
-        <ul v-else class="sm-list">
-          <li v-for="item in deleted" :key="item.id" class="sm-item sm-item-static">
-            <div class="sm-grow">
-              <div class="sm-item-head">
-                <strong class="sm-item-title sm-truncate">{{ item.name }}</strong>
-                <code class="sm-mono sm-muted sm-meta sm-truncate">{{ item.slug }}</code>
-              </div>
-              <p class="sm-muted sm-sm">删除于 {{ formatDateTime(item.deleted_at) }}</p>
-            </div>
-            <button
-              class="sm-btn sm-btn--quiet sm-btn--sm"
-              data-test="restore-skill"
-              @click="restore(item)"
-            >
-              还原
-            </button>
-          </li>
-        </ul>
-
-        <!-- 还有下一页：说清还有，不假装这就是全部。 -->
-        <div v-if="deletedHasMore" class="sm-row sm-mt-12">
-          <button
-            class="sm-btn sm-btn--quiet sm-btn--sm"
-            data-test="deleted-more"
-            @click="loadMoreDeleted"
-          >
-            加载更多
-          </button>
-        </div>
+      <template #footer>
+        <button class="sm-btn" @click="deletedDialogOpen = false">关闭</button>
       </template>
-    </div>
+    </ModalDialog>
 
     <!--
       文件浏览做成抽屉：点「浏览文件」就滑出来，不用在一屏内容里找它。

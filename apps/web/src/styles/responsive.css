@@ -27,8 +27,10 @@
   .menu-toggle { display: inline-flex; }
   .sheet { padding: 20px 16px 40px; min-height: calc(100vh - 48px); }
   .sm-title-row { flex-wrap: wrap; align-items: flex-start; }
-  /* 左右两栏在窄屏叠起来 */
-  .sm-mine, .sm-mine-split { grid-template-columns: minmax(0, 1fr); }
+  /* 左右两栏在窄屏叠起来：列表不再吸顶，按页面正常滚动 */
+  .sm-mine { grid-template-columns: minmax(0, 1fr); }
+  .sm-mine-list { position: static; max-height: none; }
+  .sm-mine-scroll { overflow: visible; }
   .sm-browser { grid-template-columns: minmax(0, 1fr); }
   .sm-browser-side { max-height: 240px; }
   /* 抽屉在窄屏铺满，树在上内容在下 */
