@@ -34,27 +34,6 @@ func PasswordLogin(ctx context.Context, server, username, password string) (Pass
 	return tokens, nil
 }
 
-// RegisterAccount 注册一个内置账号，服务端允许自助注册时才能用。
-//
-// 注册成功就直接登录了：服务端返回的就是一对令牌。
-func RegisterAccount(ctx context.Context, server, username, password,
-	displayName, email string) (PasswordTokens, error) {
-
-	client := New(server, "", 30*time.Second)
-	body := map[string]string{"username": username, "password": password}
-	if displayName != "" {
-		body["display_name"] = displayName
-	}
-	if email != "" {
-		body["email"] = email
-	}
-	var tokens PasswordTokens
-	if err := client.doWith(ctx, http.MethodPost, "/auth/register", nil, body, &tokens); err != nil {
-		return PasswordTokens{}, fmt.Errorf("注册失败: %w", err)
-	}
-	return tokens, nil
-}
-
 // RefreshLocal 用刷新令牌换一对新令牌（内置账号这条路）。
 //
 // 外部 IdP 的续期走 IdP 自己的 token 端点，内置账号没有 IdP：

@@ -79,7 +79,7 @@ func newRootCmd() *cobra.Command {
 	root.Version = cliVersion
 
 	root.AddCommand(
-		newLoginCmd(), newLogoutCmd(), newRegisterCmd(),
+		newLoginCmd(), newLogoutCmd(),
 		newSearchCmd(), newInfoCmd(),
 		newSourceCmd(), NewAddCmd(), newInstallCmd(), newPublishCmd(),
 		newReviewCmd(),
