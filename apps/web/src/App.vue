@@ -61,7 +61,7 @@ onMounted(async () => {
 })
 
 function signOut() {
-  // 主动登出要连 Keycloak 的 SSO 会话一起结束：只清本地的话，
+  // 主动登出要连外部 IdP 的 SSO 会话一起结束：只清本地的话，
   // 浏览器里的 SSO cookie 还在，再点「登录」会免密进成刚才那个人。
   logoutEndingSession()
 }

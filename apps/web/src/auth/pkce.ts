@@ -1,5 +1,5 @@
 // OIDC 授权码 + PKCE。Web Crypto 原生够用，不引 oidc-client-ts。
-// Keycloak client 是 public 的，没有 client_secret，只有 code_verifier 能证明是我们发的请求。
+// 常见的 IdP client 是 public 的，没有 client_secret，只有 code_verifier 能证明是我们发的请求。
 
 import { API_BASE } from '../constants/api'
 import type { PublicConfig } from '../types'
@@ -12,7 +12,7 @@ export interface TokenResponse {
   /**
    * id_token：登出时用。
    *
-   * Keycloak 的 logout 端点带上 id_token_hint 才知道「登出的是谁」，
+   * IdP 的 logout 端点带上 id_token_hint 才知道「登出的是谁」，
    * 不带就只显示一个「要登出吗」的确认页——SSO 会话其实没结束，
    * 别人点「确认」就等于替他登出了。
    */
@@ -22,7 +22,7 @@ export interface TokenResponse {
 /**
  * 运行时拿到的 OIDC 配置。
  *
- * 原来写死在本文件里（issuer 指着 127.0.0.1 的 Keycloak），换企业 IdP 就得
+ * 原来写死在本文件里（issuer 指着本机那个 IdP），换企业 IdP 就得
  * 改代码重新打包——部署文档写的「只认 OIDC issuer，代码不用改」对网页端并不成立。
  * 现在从服务端取：取不到就是取不到，不回落写死的默认值。
  */
@@ -121,7 +121,7 @@ export function exchangeCode(code: string, verifier: string, redirectUri: string
   })
 }
 
-/** 静默续期。Keycloak 的 public client 默认允许 refresh。 */
+/** 静默续期。public client 默认允许 refresh。 */
 export function refreshToken(refresh: string): Promise<TokenResponse> {
   return postToken({
     grant_type: 'refresh_token',

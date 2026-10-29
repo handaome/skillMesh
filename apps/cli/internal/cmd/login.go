@@ -102,7 +102,7 @@ func newLoginStatusCmd() *cobra.Command {
 // runOidcLogin 走浏览器授权码 + PKCE。
 //
 // issuer 的来路有两条：传了服务端地址就从它的公开配置里取；
-// 没传就认环境变量 SM_KEYCLOAK_ISSUER。
+// 没传就认环境变量 SM_OIDC_ISSUER。
 func runOidcLogin(ctx context.Context, server string, explicit, manual bool) error {
 	var issuerURL string
 	clientID := Cfg.ClientID
@@ -124,11 +124,11 @@ func runOidcLogin(ctx context.Context, server string, explicit, manual bool) err
 		Cfg.Server = server
 	}
 	if issuerURL == "" {
-		issuerURL = os.Getenv("SM_KEYCLOAK_ISSUER")
+		issuerURL = os.Getenv("SM_OIDC_ISSUER")
 	}
 	if issuerURL == "" {
 		return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
-			"或设环境变量 SM_KEYCLOAK_ISSUER")
+			"或设环境变量 SM_OIDC_ISSUER")
 	}
 	tokens, err := runPkceFlow(ctx, issuerURL, clientID, manual)
 	if err != nil {
@@ -208,7 +208,8 @@ type callbackResult struct {
 }
 
 // runPkceFlow 打开浏览器让用户登录，回调端口在环回地址上一次性监听。
-// CLI 不接收用户密码（详细设计 §2.1 身份认证）。
+// 这条路走外部 IdP：密码只交给 IdP，CLI 不经手（详细设计 §2.1 身份认证）。
+// 内置账号是另一条路：密码直接发给服务端，见 loginWithPassword。
 //
 // manual 用于没有图形界面的机器：不监听端口，也不开浏览器，
 // 由用户把浏览器跳转后的地址粘回来。

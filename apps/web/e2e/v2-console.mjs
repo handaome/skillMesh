@@ -1,14 +1,13 @@
 // v2 团队控制台的浏览器端到端验收。
 //
-// 为什么要有这个：v2 的浏览器路径曾长期「未实测」——而真跑起来才发现
-// realm 里的 webOrigins 配了 Keycloak 不认的「带端口通配」，
-// 导致浏览器登录从一开始就不通。没有真实浏览器的回归，这种问题会一直藏着。
+// 为什么要有这个：v2 的浏览器路径曾长期「未实测」——真跑起来才发现
+// 浏览器登录从一开始就不通。没有真实浏览器的回归，这种问题会一直藏着。
 //
-// 跑法（需要 API、前端 dev server、Keycloak 都在本机跑着）：
+// 跑法（需要 API、前端 dev server 在本机跑着）：
 //   cd apps/web && pnpm e2e
 //
 // 环境变量（都有默认值）：
-//   SKILLMESH_E2E_WEB / _API / _ISSUER / _CLIENT / _USER_A / _PASS_A / _USER_B / _PASS_B
+//   SKILLMESH_E2E_WEB / _API / _USER_A / _PASS_A / _USER_B / _PASS_B
 //   SKILLMESH_E2E_ORG / _TEAM / _SLUG
 import { createHash } from 'node:crypto'
 import { launchBrowser, newContext, newPage, sleep } from './lib/cdp.mjs'
@@ -17,8 +16,6 @@ import { zipFiles } from './lib/zip.mjs'
 const CFG = {
   web: process.env.SKILLMESH_E2E_WEB ?? 'http://127.0.0.1:5174',
   api: process.env.SKILLMESH_E2E_API ?? 'http://127.0.0.1:8080/api/v1',
-  issuer: (process.env.SKILLMESH_E2E_ISSUER ?? 'http://127.0.0.1:8180/kc/realms/skillmesh').replace(/\/$/, ''),
-  client: process.env.SKILLMESH_E2E_CLIENT ?? 'skillmesh-test',
   userA: process.env.SKILLMESH_E2E_USER_A ?? 'dev-user',
   passA: process.env.SKILLMESH_E2E_PASS_A ?? 'dev',
   userB: process.env.SKILLMESH_E2E_USER_B ?? 'dev-user2',
@@ -37,17 +34,27 @@ function mark(msg) {
   console.log(`  · ${msg}`)
 }
 
-// ---------- 服务端与 Keycloak ----------
+// ---------- 服务端 ----------
 
+/** 取令牌：内置账号登录。账号还没建就先注册一个，省得手工准备。 */
 async function passwordToken(username, password) {
-  const res = await fetch(`${CFG.issuer}/protocol/openid-connect/token`, {
+  const res = await fetch(`${CFG.api}/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: CFG.client, username, password, grant_type: 'password',
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
   })
-  if (!res.ok) throw new Error(`取 ${username} 的令牌失败：${res.status} ${await res.text()}`)
+  if (!res.ok) {
+    const reg = await fetch(`${CFG.api}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    })
+    if (!reg.ok) {
+      throw new Error(`登录 ${username} 失败：${res.status}；注册也失败：${reg.status} ${await reg.text()}`)
+    }
+    const created = await reg.json()
+    return created.access_token
+  }
   const body = await res.json()
   return body.access_token
 }
@@ -145,18 +152,18 @@ async function setInput(page, selector, value) {
   })()`)
 }
 
-/** 登录：点「登录」→ Keycloak → 填账号密码 → 回到前端。 */
+/** 登录：填用户名密码 → 回到前端。 */
 async function login(page, user, pass, doneExpr = `!!document.querySelector('[data-test="who"]')`, startUrl = `${CFG.web}/login`) {
   await page.goto(startUrl)
-  await page.waitFor(`!!document.querySelector('[data-test="login"]')`, { label: '登录按钮' })
+  await page.waitFor(`!!document.querySelector('[data-test="username"]')`, { label: '用户名框', timeout: 30000 })
   await page.waitApp()
-  await page.realClick('[data-test="login"]')
-  await page.waitFor(`location.href.startsWith('${CFG.issuer.split('/realms')[0]}')`, { label: '跳到 Keycloak', timeout: 30000 })
-  await page.waitFor(`!!document.querySelector('#username')`, { label: 'Keycloak 用户名框', timeout: 30000 })
-  await setInput(page, '#username', user)
-  await setInput(page, '#password', pass)
-  await page.realClick('#kc-login')
-  await page.waitFor(`location.href.startsWith('${CFG.web}')`, { label: '回到前端', timeout: 30000 })
+  await setInput(page, '[data-test="username"]', user)
+  await setInput(page, '[data-test="password"]', pass)
+  await page.realClick('[data-test="submit"]')
+  await page.waitFor(
+    `location.href.startsWith('${CFG.web}') && !location.href.includes('/login')`,
+    { label: '回到前端', timeout: 30000 },
+  )
   await page.waitFor(doneExpr, { label: '登录后落地', timeout: 20000 })
   // 等用户名真的出现：元素挂上时 /me 还没回来，里面是空的。
   await page.waitFor(
@@ -201,7 +208,7 @@ async function roleOf(page, who) {
 
 await requireService('注册中心', `${CFG.api.replace(/\/api\/v1$/, '')}/actuator/health`)
 await requireService('前端', `${CFG.web}/`)
-await requireService('Keycloak', `${CFG.issuer}/.well-known/openid-configuration`)
+await requireService('登录配置', `${CFG.api}/config/public`)
 
 const tokenA = await passwordToken(CFG.userA, CFG.passA)
 const tokenB = await passwordToken(CFG.userB, CFG.passB)
@@ -364,9 +371,8 @@ try {
   const errText = await a.text('[data-test="error"]')
   step('14. 负例：唯一 owner 改自己的角色，页面报错', errText.length > 0, errText)
 
-  // ---- 登出：SSO 会话也要一起结束 ----
-  // 只清 localStorage 不算登出：浏览器里 Keycloak 的 SSO cookie 还在，
-  // 下一个人点「登录」会被免密放行，权限就落到他头上了。
+  // ---- 登出：本地会话要清干净 ----
+  // 只清一半不算登出：令牌还在的话，刷新一下就又进去了。
   await a.goto(`${CFG.web}/`)
   await a.waitFor(`!!document.querySelector('[data-test="logout"]')`, { label: '登出按钮' })
   await a.realClick('[data-test="logout"]')
@@ -377,21 +383,15 @@ try {
     console.log('  诊断 body =', JSON.stringify((await a.eval('document.body.innerText')).slice(0, 200)))
     throw e
   }
-  step('15. 登出后回到登录页（Keycloak 的 SSO 会话一起结束）', true)
+  step('15. 登出后回到登录页', true)
 
-  // 判据不是「跳走了」，而是「再登录时 Keycloak 仍要密码」：
-  // SSO cookie 还在的话会被直接放行，那等于没登出。
+  // 判据不是「跳走了」，而是「回到登录页且要重新输密码」：
+  // 会话没清干净的话，刷新一下就又进应用了。
   await a.waitApp()
-  await a.realClick('[data-test="login"]')
-  await a.waitFor(
-    `location.href.startsWith('${CFG.issuer.split('/realms')[0]}') || location.href.includes('code=')`,
-    { label: '跳到 Keycloak 或被免密放行', timeout: 30000 },
-  )
-  await sleep(1500) // Keycloak 渲染登录页要一会儿
-  const askedPassword = await a.eval(`!!document.querySelector('#username')`)
-  const ssoKept = (await a.url()).includes('code=')
-  step('16. 登出后再登录仍要求输入密码（SSO 已结束）', askedPassword && !ssoKept,
-    ssoKept ? '被免密放行了——SSO 还在' : '')
+  const askedPassword = await a.eval(`!!document.querySelector('[data-test="password"]')`)
+  const stillInside = !(await a.url()).includes('/login')
+  step('16. 登出后仍要重新输密码（会话已清）', askedPassword && !stillInside,
+    stillInside ? '还在应用里——会话没清掉' : '')
 } finally {
   proc.kill()
 }

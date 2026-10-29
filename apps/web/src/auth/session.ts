@@ -42,7 +42,7 @@ export interface Session {
   accessToken: string
   refreshToken: string
   expiresAt: number
-  /** id_token：登出时给 Keycloak 当 id_token_hint，让它直接结束 SSO 会话。 */
+  /** id_token：登出时给外部 IdP 当 id_token_hint，让它直接结束 SSO 会话。 */
   idToken: string
   user: Me | null
   organizations: OrgMembership[]
@@ -83,7 +83,7 @@ function persist() {
     refreshToken: session.refreshToken,
     expiresAt: session.expiresAt,
     // id_token 也要存：登出时拿它当 id_token_hint，
-    // 否则 Keycloak 只显示「要登出吗」的确认页，SSO 会话其实没结束。
+    // 否则 IdP 只显示「要登出吗」的确认页，SSO 会话其实没结束。
     idToken: session.idToken,
     user: session.user,
     organizations: session.organizations,
@@ -125,10 +125,10 @@ export function logout() {
 }
 
 /**
- * 主动登出：清本地会话，并结束 Keycloak 的 SSO 会话。
+ * 主动登出：清本地会话，并结束外部 IdP 的 SSO 会话。
  *
- * 只清 localStorage 不够——浏览器里 Keycloak 的 SSO cookie 还在，
- * 再点「登录」会被 Keycloak 直接放行（不输密码），登出等于没登出：
+ * 只清 localStorage 不够——浏览器里 IdP 的 SSO cookie 还在，
+ * 再点「登录」会被 IdP 直接放行（不输密码），登出等于没登出：
  * 共享机器上别人接手键盘，就成了你，权限也跟着过去。
  *
  * 会话失效（401、续期失败）走的是 logout()，不跳这里：
@@ -163,7 +163,7 @@ export async function logoutEndingSession() {
   const url = `${config.issuer}/protocol/openid-connect/logout`
     + `?client_id=${encodeURIComponent(config.client_id)}`
     + `&post_logout_redirect_uri=${encodeURIComponent(redirect)}`
-    // 带 id_token_hint：Keycloak 才知道要结束谁的 SSO 会话。
+    // 带 id_token_hint：IdP 才知道要结束谁的 SSO 会话。
     // 不带就只显示一个「要登出吗」的确认页——SSO 会话其实没结束，
     // 共享机器上等于给下一个人留了免密登录。
     + (idToken ? `&id_token_hint=${encodeURIComponent(idToken)}` : '')

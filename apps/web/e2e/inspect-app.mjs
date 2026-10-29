@@ -1,7 +1,7 @@
 // 用 design-taste-frontend 的官方检查器量自己的页面。
 //
 // 为什么要自己写这个驱动：官方的 inspect.mjs 只接受 URL，
-// 而控制台要 Keycloak 登录才看得到内容——它打开就是登录页。
+// 而控制台要登录才看得到内容——它打开就是登录页。
 // 这里借它的探针（probe/frame/layout/app）与判定（judge/judgeApp），
 // 用本仓库自己的 CDP 客户端登录后逐页量。
 //
@@ -27,7 +27,6 @@ const { judge, judgeLayout, judgeApp, APP_SKIP } = await import(
 
 const CFG = {
   web: process.env.SKILLMESH_E2E_WEB ?? 'http://127.0.0.1:5174',
-  issuer: (process.env.SKILLMESH_E2E_ISSUER ?? 'http://127.0.0.1:8180/kc/realms/skillmesh').replace(/\/$/, ''),
   user: process.env.SKILLMESH_E2E_USER_A ?? 'dev-user',
   pass: process.env.SKILLMESH_E2E_PASS_A ?? 'dev',
 }
@@ -55,15 +54,15 @@ async function setInput(page, selector, value) {
 
 async function login(page) {
   await page.goto(`${CFG.web}/login`)
-  await page.waitFor(`!!document.querySelector('[data-test="login"]')`, { label: '登录按钮' })
+  await page.waitFor(`!!document.querySelector('[data-test="username"]')`, { label: '用户名框' })
   await page.waitApp()
-  await page.realClick('[data-test="login"]')
-  await page.waitFor(`location.href.startsWith('${CFG.issuer.split('/realms')[0]}')`, { label: '跳到 Keycloak' })
-  await page.waitFor(`!!document.querySelector('#username')`, { label: '用户名框' })
-  await setInput(page, '#username', CFG.user)
-  await setInput(page, '#password', CFG.pass)
-  await page.realClick('#kc-login')
-  await page.waitFor(`location.href.startsWith('${CFG.web}')`, { label: '回到前端' })
+  await setInput(page, '[data-test="username"]', CFG.user)
+  await setInput(page, '[data-test="password"]', CFG.pass)
+  await page.realClick('[data-test="submit"]')
+  await page.waitFor(
+    `location.href.startsWith('${CFG.web}') && !location.href.includes('/login')`,
+    { label: '回到前端', timeout: 30000 },
+  )
   await page.waitFor(`!!document.querySelector('[data-test="who"]')`, { label: '顶栏用户' })
 }
 
