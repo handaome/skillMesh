@@ -19,6 +19,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/config"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
+	"golang.org/x/term"
 )
 
 // loopbackPort 是 OAuth 回调端口。避开常用端口，且与本机已有服务不冲突。
@@ -26,63 +27,164 @@ const loopbackPort = 53682
 
 func newLoginCmd() *cobra.Command {
 	var manual bool
+	var username string
+	var password string
 	cmd := &cobra.Command{
 		Use:   "login [服务端地址]",
-		Short: "通过浏览器授权码 + PKCE 登录",
-		Long: "登录 SkillMesh。位置参数是服务端地址（设计文档 §7.4 的用法），\n" +
-			"登录所需的 OIDC issuer 从服务端的公开配置里取；\n" +
-			"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer。\n" +
+		Short: "登录 SkillMesh：内置账号用用户名密码，或走浏览器授权码 + PKCE",
+		Long: "登录 SkillMesh。位置参数是服务端地址（设计文档 §7.4 的用法）。\n" +
+			"带 --username 走内置账号（用户名 + 密码，不需要浏览器）；\n" +
+			"不带则走浏览器授权码 + PKCE，OIDC issuer 从服务端的公开配置里取。\n" +
 			"没有图形界面时加 --manual：打印授权地址，手动粘贴回调 URL。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var issuerURL string
-			clientID := Cfg.ClientID
-			if len(args) == 1 {
-				// 位置参数是服务端地址：从它的公开配置里取 issuer。
-				// 设计文档 §7.4 写的是 `login https://skills.example.com`——
-				// 那是服务端，不是 issuer，混用会连错地方。
-				server := strings.TrimRight(args[0], "/")
-				cfg, err := apiclient.FetchPublicConfig(cmd.Context(), server)
-				if err != nil {
-					return fmt.Errorf("取服务端公开配置失败（%s）：%w；"+
-						"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer", server, err)
-				}
-				issuerURL = cfg.Issuer
-				if cfg.ClientID != "" {
-					clientID = cfg.ClientID
-				}
-				// 记住这台服务端：登录成功后再写进配置，
-				// 否则后续 sync 还会连默认的 localhost。
-				Cfg.Server = server
+			server := Cfg.Server
+			explicit := len(args) == 1
+			if explicit {
+				server = strings.TrimRight(args[0], "/")
 			}
-			if issuerURL == "" {
-				issuerURL = os.Getenv("SM_KEYCLOAK_ISSUER")
+			// 内置账号：用户名 + 密码。这条路不需要浏览器。
+			if username != "" {
+				return loginWithPassword(cmd.Context(), server, username, password)
 			}
-			if issuerURL == "" {
-				return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
-					"或设环境变量 SM_KEYCLOAK_ISSUER")
-			}
-			tokens, err := runPkceFlow(cmd.Context(), issuerURL, clientID, manual)
-			if err != nil {
-				return err
-			}
-			path := tokenPath()
-			if err := tokens.Save(path); err != nil {
-				return err
-			}
-			// 登录成功才写服务端地址：失败时不该把配置改掉。
-			if err := config.SaveServer(Cfg.Server); err != nil {
-				fmt.Fprintf(os.Stderr, "提示：服务端地址没写进配置（%v），后续命令请用 --server 指定\n", err)
-			}
-			fmt.Printf("已登录，令牌有效期至 %s\n",
-				tokens.ExpiresAt.Local().Format(time.RFC3339))
-			fmt.Printf("若系统凭据管理器不可用，令牌回退保存在 %s\n", path)
-			return nil
+			return runOidcLogin(cmd.Context(), server, explicit, manual)
 		},
 	}
 	cmd.Flags().BoolVar(&manual, "manual", false,
 		"无浏览器环境：打印授权地址，手动粘贴回调 URL")
+	cmd.Flags().StringVar(&username, "username", "",
+		"内置账号的用户名（给了就走用户名密码登录，不用浏览器）")
+	cmd.Flags().StringVar(&password, "password", "",
+		"内置账号的密码（不给就在终端里输入，不回显）")
+	cmd.AddCommand(newLoginStatusCmd())
 	return cmd
+}
+
+// newLoginStatusCmd 看看当前登录的是谁。
+//
+// 登录了没、令牌还有效没、服务端认不认——一句话说清。
+func newLoginStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "看看当前登录的是谁",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			tokens, err := auth.LoadTokens(tokenPath())
+			if err != nil {
+				return fmt.Errorf("还没登录，请先执行 skillmesh login")
+			}
+			if !tokens.Valid() {
+				tokens, err = refreshTokens(cmd.Context(), tokens)
+				if err != nil {
+					return err
+				}
+			}
+			timeout := time.Duration(Cfg.Network.TimeoutSeconds) * time.Second
+			client := apiclient.New(Cfg.Server, tokens.AccessToken, timeout)
+			me, err := client.Me(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("取当前账号失败: %w", err)
+			}
+			name := me.User.DisplayName
+			if name == "" {
+				name = me.User.Subject
+			}
+			fmt.Printf("已登录：%s\n", name)
+			if me.User.Email != "" {
+				fmt.Printf("邮箱：%s\n", me.User.Email)
+			}
+			fmt.Printf("组织：%d 个\n", len(me.Organizations))
+			return nil
+		},
+	}
+}
+
+// runOidcLogin 走浏览器授权码 + PKCE。
+//
+// issuer 的来路有两条：传了服务端地址就从它的公开配置里取；
+// 没传就认环境变量 SM_KEYCLOAK_ISSUER。
+func runOidcLogin(ctx context.Context, server string, explicit, manual bool) error {
+	var issuerURL string
+	clientID := Cfg.ClientID
+	if explicit {
+		// 位置参数是服务端地址：从它的公开配置里取 issuer。
+		// 设计文档 §7.4 写的是 `login https://skills.example.com`——
+		// 那是服务端，不是 issuer，混用会连错地方。
+		cfg, err := apiclient.FetchPublicConfig(ctx, server)
+		if err != nil {
+			return fmt.Errorf("取服务端公开配置失败（%s）：%w；"+
+				"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer", server, err)
+		}
+		issuerURL = cfg.Issuer
+		if cfg.ClientID != "" {
+			clientID = cfg.ClientID
+		}
+		// 记住这台服务端：登录成功后再写进配置，
+		// 否则后续 sync 还会连默认的 localhost。
+		Cfg.Server = server
+	}
+	if issuerURL == "" {
+		issuerURL = os.Getenv("SM_KEYCLOAK_ISSUER")
+	}
+	if issuerURL == "" {
+		return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
+			"或设环境变量 SM_KEYCLOAK_ISSUER")
+	}
+	tokens, err := runPkceFlow(ctx, issuerURL, clientID, manual)
+	if err != nil {
+		return err
+	}
+	path := tokenPath()
+	if err := tokens.Save(path); err != nil {
+		return err
+	}
+	// 登录成功才写服务端地址：失败时不该把配置改掉。
+	if err := config.SaveServer(Cfg.Server); err != nil {
+		fmt.Fprintf(os.Stderr, "提示：服务端地址没写进配置（%v），后续命令请用 --server 指定\n", err)
+	}
+	fmt.Printf("已登录，令牌有效期至 %s\n",
+		tokens.ExpiresAt.Local().Format(time.RFC3339))
+	fmt.Printf("若系统凭据管理器不可用，令牌回退保存在 %s\n", path)
+	return nil
+}
+
+// loginWithPassword 用内置账号登录：用户名 + 密码换令牌。
+//
+// 密码不给 --password 就在终端里输入（不回显）：命令行参数会留在
+// shell 历史与进程列表里，密码不该出现在那里。
+func loginWithPassword(ctx context.Context, server, username, password string) error {
+	if password == "" {
+		password = os.Getenv("SM_PASSWORD")
+	}
+	if password == "" {
+		fmt.Printf("请输入 %s 的密码（不回显）：", username)
+		typed, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return fmt.Errorf("读取密码失败: %w", err)
+		}
+		password = string(typed)
+	}
+	tokens, err := apiclient.PasswordLogin(ctx, server, username, password)
+	if err != nil {
+		return err
+	}
+	saved := auth.Tokens{
+		AccessToken:  tokens.AccessToken,
+		RefreshToken: tokens.RefreshToken,
+		ExpiresAt:    time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second),
+	}
+	path := tokenPath()
+	if err := saved.Save(path); err != nil {
+		return err
+	}
+	if err := config.SaveServer(server); err != nil {
+		fmt.Fprintf(os.Stderr, "提示：服务端地址没写进配置（%v），后续命令请用 --server 指定\n", err)
+	}
+	fmt.Printf("已登录（%s），令牌有效期至 %s\n",
+		username, saved.ExpiresAt.Local().Format(time.RFC3339))
+	fmt.Printf("若系统凭据管理器不可用，令牌回退保存在 %s\n", path)
+	return nil
 }
 
 func newLogoutCmd() *cobra.Command {

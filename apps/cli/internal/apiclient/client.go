@@ -33,10 +33,22 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 		timeout = 30 * time.Second
 	}
 	return &Client{
-		base:  strings.TrimRight(baseURL, "/"),
+		base:  normalizeBase(baseURL),
 		token: token,
 		http:  &http.Client{Timeout: timeout},
 	}
+}
+
+// normalizeBase 补上 /api/v1 前缀。
+//
+// 配置里的服务端地址通常带这个后缀，但用户手敲 --server http://host:8080 时不带。
+// 少了它，请求会打到服务端根路径上：登录接口不在白名单里，直接 401。
+func normalizeBase(baseURL string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if !strings.HasSuffix(base, "/api/v1") {
+		base += "/api/v1"
+	}
+	return base
 }
 
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, out any) error {

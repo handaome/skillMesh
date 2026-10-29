@@ -93,6 +93,8 @@ type MeResponse struct {
 		DisplayName string `json:"display_name"`
 		Email       string `json:"email"`
 		Status      string `json:"status"`
+		// Subject 是外部 IdP 签的 sub；内置账号下就是用户名。
+		Subject string `json:"subject"`
 	} `json:"user"`
 	Organizations []OrgMembership `json:"organizations"`
 }

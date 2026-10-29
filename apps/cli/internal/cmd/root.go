@@ -79,7 +79,7 @@ func newRootCmd() *cobra.Command {
 	root.Version = cliVersion
 
 	root.AddCommand(
-		newLoginCmd(), newLogoutCmd(),
+		newLoginCmd(), newLogoutCmd(), newRegisterCmd(),
 		newSearchCmd(), newInfoCmd(),
 		newSourceCmd(), NewAddCmd(), newInstallCmd(), newPublishCmd(),
 		newReviewCmd(),
@@ -203,7 +203,7 @@ func refreshTokens(ctx context.Context, tokens auth.Tokens) (auth.Tokens, error)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	fresh, err := RenewedTokens(ctx, tokens, Cfg.ClientID)
+	fresh, err := RenewedTokens(ctx, Cfg.Server, tokens, Cfg.ClientID)
 	if err != nil {
 		return tokens, err
 	}
@@ -217,7 +217,7 @@ func refreshTokens(ctx context.Context, tokens auth.Tokens) (auth.Tokens, error)
 //
 // 单独拆出来是为了能测——它不碰凭据管理器，也不依赖全局配置。
 // issuer 从 access token 的 iss 声明里取：登录时没把它存下来，但令牌自己知道是哪个 realm 签的。
-func RenewedTokens(ctx context.Context, tokens auth.Tokens, clientID string) (auth.Tokens, error) {
+func RenewedTokens(ctx context.Context, server string, tokens auth.Tokens, clientID string) (auth.Tokens, error) {
 	if tokens.RefreshToken == "" {
 		return tokens, fmt.Errorf("令牌已过期，请先执行 skillmesh login")
 	}
@@ -227,6 +227,20 @@ func RenewedTokens(ctx context.Context, tokens auth.Tokens, clientID string) (au
 	issuer, err := auth.IssuerFromToken(tokens.AccessToken)
 	if err != nil {
 		return tokens, fmt.Errorf("令牌已过期且取不到 issuer，请重新执行 skillmesh login: %w", err)
+	}
+	// 内置账号的令牌是服务端自签的：续期得问服务端要，
+	// 发到 IdP 的 token 端点它不认这种令牌。
+	if issuer == apiclient.LocalIssuer {
+		fresh, err := apiclient.RefreshLocal(ctx, server, tokens.RefreshToken)
+		if err != nil {
+			return tokens, fmt.Errorf("令牌已过期且续期失败，请重新执行 skillmesh login: %w", err)
+		}
+		tokens.AccessToken = fresh.AccessToken
+		tokens.ExpiresAt = time.Now().Add(time.Duration(fresh.ExpiresIn) * time.Second)
+		if fresh.RefreshToken != "" {
+			tokens.RefreshToken = fresh.RefreshToken
+		}
+		return tokens, nil
 	}
 	fresh, err := auth.Refresh(ctx, clientID, issuer, tokens)
 	if err != nil {
