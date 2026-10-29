@@ -24,16 +24,46 @@
 
 ## 登录
 
+两种方式：**内置账号**（用户名 + 密码，不用浏览器），或**企业 IdP**（浏览器授权码 + PKCE）。服务端自带账号体系，**不装 Keycloak 也能用**。
+
+### 内置账号：用户名 + 密码
+
+```bash
+skillmesh register http://127.0.0.1:8080/api/v1 --username wuss   # 注册并直接登录
+skillmesh login http://127.0.0.1:8080/api/v1 --username wuss      # 登录
+skillmesh login status                                          # 看当前登录的是谁
+skillmesh logout                                                # 清除本地登录态
+```
+
+密码不给 `--password` 就在终端里输入（**不回显**）；也可以用环境变量 `SM_PASSWORD`。
+命令行参数会留在 shell 历史与进程列表里，密码别直接写在命令行上。
+
+网页控制台的登录页也是用户名 + 密码，页面上可切换「注册一个」。
+
+服务端这边的开关：
+
+| 配置 | 环境变量 | 默认 | 作用 |
+| --- | --- | --- | --- |
+| `skillmesh.auth.jwt-secret` | `SM_JWT_SECRET` | 随机 | 令牌的签名密钥。**生产必须配**：不配就是每次启动随机生成，重启后所有已登录的令牌都失效 |
+| `skillmesh.auth.allow-register` | `SM_ALLOW_REGISTER` | `true` | 能不能自助注册。关掉就注册不了 |
+
+**第一个注册出来的内置账号是管理员**（`role=admin`），其余是普通账号（`role=user`）。走企业 IdP 登录的老账号不算在内——他们不占这个位置。
+
+### 企业 IdP：浏览器授权码 + PKCE
+
+服务端配了外部 IdP（`skillmesh.oidc.issuer`）时，网页登录页会多出「用团队账号登录」按钮，CLI 不带 `--username` 就走这条路：
+
 ```bash
 skillmesh login http://127.0.0.1:8080/api/v1   # 浏览器授权码 + PKCE
-skillmesh logout                                # 清除本地登录态
 ```
 
 登录所需的 OIDC issuer 从服务端的公开配置里取，也可以用环境变量 `SM_KEYCLOAK_ISSUER` 直接指定。
 
 ### 无浏览器登录（Linux 服务器 / SSH）
 
-`login` 默认打开本机浏览器。服务器没有图形界面时加 `--manual`：
+内置账号本来就不需要浏览器，直接 `skillmesh login --username <用户名>` 即可。
+
+走企业 IdP 时，服务器没有图形界面才需要加 `--manual`：
 
 ```bash
 skillmesh login --manual http://your-server/api/v1
@@ -50,6 +80,8 @@ ssh -L 53682:127.0.0.1:53682 <服务器>
 ### 令牌过期自动续期
 
 access token 过期时，CLI 用登录时存下的 refresh token 换一个新的（续期后的令牌会写回凭据管理器），所以常驻同步不会因为令牌过期而停摆。只有 refresh token 也失效了（被撤销、或登出过）才需要重新 `skillmesh login`——这时 watch 的日志里会写「令牌已过期且续期失败，请重新执行 skillmesh login」。
+
+内置账号的续期问的是服务端自己的 `/auth/refresh`（`skillmesh-local` 签的令牌，IdP 那套不认识它）；企业 IdP 的令牌照旧走 IdP 的 token 端点。
 
 ## 同步：两端对齐，冲突不自动覆盖
 
