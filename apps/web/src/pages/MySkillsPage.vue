@@ -11,6 +11,7 @@ import {
   getSkillSource,
   getVersions,
   importSkillFromGit,
+  importSkillsFromGit,
   listDeletedSkills,
   listRecycleFiles,
   resolveGitSource,
@@ -205,6 +206,8 @@ const importName = ref('')
 const importDescription = ref('')
 const importVisibility = ref<'private' | 'public'>('private')
 const importCandidates = ref<{ path: string; name: string }[]>([])
+/** 批量导入时勾中的目录。 */
+const importSelected = ref<string[]>([])
 const importResolving = ref(false)
 const importBusy = ref(false)
 
@@ -215,6 +218,26 @@ const dirty = computed(
       editDescription.value !== selected.value.description ||
       editTags.value.join(',') !== selected.value.tags.join(',')),
 )
+
+/**
+ * SKILL.md frontmatter 带来的规范元信息（agentskills.io 的扩展字段）。
+ *
+ * 只读：这些值在文件里，改它得改文件再发布一次，云端这边改不了。
+ */
+const specMeta = computed(() => {
+  const meta = selected.value?.metadata
+  if (!meta) return []
+  const items: { label: string; value: string }[] = []
+  for (const key of ['license', 'author'] as const) {
+    const value = meta[key]
+    if (typeof value === 'string' && value) items.push({ label: key, value })
+  }
+  const platforms = meta.platforms
+  if (Array.isArray(platforms) && platforms.length) {
+    items.push({ label: 'platforms', value: platforms.join('、') })
+  }
+  return items
+})
 
 /** 可见性 → 药丸的颜色。private/public 是个人空间的常态，其余颜色区分。 */
 function visibilityPill(visibility: string): string {
@@ -636,10 +659,67 @@ async function resolveImport() {
       importPath.value = resolved.candidates[0].path
       importNotice.value = `仓库里有 ${resolved.candidates.length} 个 Skill 目录，已选第一个。`
     }
+    // 上次勾的还在就留着，别把用户的选择清掉。
+    importSelected.value = importSelected.value.filter((path) =>
+      resolved.candidates.some((candidate) => candidate.path === path),
+    )
   } catch (e) {
     importError.value = errorText(e)
   } finally {
     importResolving.value = false
+  }
+}
+
+/**
+ * 批量导入：把勾选的目录一次导进来。
+ *
+ * 名字与描述取各自 SKILL.md 的 frontmatter，slug 取目录名——
+ * 批量时没人愿意一个一个填。
+ */
+async function runImportBatch() {
+  importError.value = ''
+  importNotice.value = ''
+  const repo = importRepo.value.trim()
+  if (!repo) {
+    importError.value = '要填仓库地址。'
+    return
+  }
+  if (!importSelected.value.length) {
+    importError.value = '要勾至少一个 Skill 目录。'
+    return
+  }
+  importBusy.value = true
+  try {
+    const result = await importSkillsFromGit({
+      repository_url: repo,
+      paths: importSelected.value,
+      ref: importRef.value.trim() || undefined,
+      visibility: importVisibility.value,
+    })
+    const failed = result.failed.length
+    importNotice.value = failed
+      ? `导入 ${result.imported.length} 个，${failed} 个失败：${result.failed
+          .map((item) => `${item.path}（${item.reason}）`)
+          .join('；')}`
+      : `导入 ${result.imported.length} 个。`
+    if (!result.imported.length) {
+      importing.value = false
+    } else {
+      importRepo.value = ''
+      importRef.value = ''
+      importPath.value = ''
+      importSlug.value = ''
+      importName.value = ''
+      importDescription.value = ''
+      importCandidates.value = []
+      importSelected.value = []
+      importing.value = false
+      await load()
+    }
+  } catch (e) {
+    importError.value = errorText(e)
+  } finally {
+    importBusy.value = false
   }
 }
 
@@ -939,6 +1019,19 @@ onUnmounted(() => {
             <div class="sm-field sm-mb-16">
               <label>标签</label>
               <TagInput v-model="editTags" data-test="edit-tags" />
+            </div>
+
+            <!--
+              规范元信息：来自 SKILL.md 的 frontmatter（agentskills.io 的扩展字段）。
+              只读——它在文件里，改它得改文件再发一版。
+            -->
+            <div v-if="specMeta.length" class="sm-field sm-mb-16">
+              <label>规范元信息</label>
+              <p class="sm-muted sm-sm sm-mono" data-test="spec-meta">
+                <span v-for="item in specMeta" :key="item.label" class="sm-mb-4">
+                  {{ item.label }}: {{ item.value }}
+                </span>
+              </p>
             </div>
 
             <div class="sm-row">
@@ -1262,10 +1355,21 @@ onUnmounted(() => {
         </div>
         <div v-if="importCandidates.length" class="sm-radio-row" data-test="import-candidates">
           <label v-for="candidate in importCandidates" :key="candidate.path" class="sm-check">
-            <input v-model="importPath" type="radio" :value="candidate.path" />
+            <input v-model="importSelected" type="checkbox" :value="candidate.path" />
             {{ candidate.name }}
             <span class="sm-muted sm-sm sm-mono">{{ candidate.path }}</span>
           </label>
+        </div>
+        <div v-if="importCandidates.length" class="sm-row sm-mb-12">
+          <button
+            class="sm-btn sm-btn--primary sm-btn--sm"
+            data-test="import-batch"
+            :disabled="importBusy || !importSelected.length"
+            @click="runImportBatch"
+          >
+            {{ importBusy ? '正在导入…' : `导入所选（${importSelected.length}）` }}
+          </button>
+          <span class="sm-hint">名字与描述取各自 SKILL.md 里的声明。</span>
         </div>
         <input
           v-model="importPath"

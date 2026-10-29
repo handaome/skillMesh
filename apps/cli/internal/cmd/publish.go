@@ -256,7 +256,7 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 			}, nil
 		}
 		skill, err = createSkill(ctx, client, slug, displayName, description, options,
-			sourceOf(target.Dir, skillscan.DetectLicense(target.Dir)))
+			sourceOf(target.Dir, skillscan.DetectLicense(target.Dir)), metadata)
 		if err != nil {
 			return publishResult{}, err
 		}
@@ -347,8 +347,11 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 // createSkill 新建 Skill 元数据：可见性与归属按解析出来的范围填。
 // source 是来源元数据（设计文档 §7.1）：从 Git 装的 Skill 要记上仓库与 commit，
 // 服务端只拿得到这些——本机才知道自己从哪儿装的。
+//
+// meta 是 SKILL.md 的 frontmatter：扩展元信息（platforms/license/tags 等）
+// 随这一次发布一起上云，别的 Agent 装的时候能读到。
 func createSkill(ctx context.Context, client *apiclient.Client, slug, displayName, description string,
-	options PublishOptions, source *apiclient.SkillSource) (apiclient.Skill, error) {
+	options PublishOptions, source *apiclient.SkillSource, meta skillscan.Metadata) (apiclient.Skill, error) {
 
 	skill, err := client.CreateSkill(ctx, apiclient.CreateSkillRequest{
 		Slug:           slug,
@@ -358,11 +361,32 @@ func createSkill(ctx context.Context, client *apiclient.Client, slug, displayNam
 		OrganizationID: optionalString(options.Scope.OrganizationID),
 		OwnerTeamID:    optionalString(options.Scope.TeamID),
 		Source:         source,
+		Tags:           publishTags(meta.Tags),
+		Metadata:       meta.Extra(),
 	})
 	if err != nil {
 		return apiclient.Skill{}, explainSlugTaken(err, slug, options.Scope)
 	}
 	return skill, nil
+}
+
+// publishTags 是随 skill 上云的标签。
+//
+// 服务端最多收 30 个、每个 64 字符。frontmatter 里写多了要在这里去掉：
+// 不去就整个发布被 400 挡下，报错还不会说是哪个标签的问题。
+func publishTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || len([]rune(tag)) > 64 {
+			continue
+		}
+		out = append(out, tag)
+		if len(out) == 30 {
+			break
+		}
+	}
+	return out
 }
 
 // explainSlugTaken 把服务端的 SLUG_TAKEN 翻译成人能看懂的话：

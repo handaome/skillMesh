@@ -23,6 +23,9 @@ var DefaultLimits = Limits{
 
 // ValidateDir 校验一个 Skill 目录：必须有 SKILL.md，不得有逃出根目录的符号链接，
 // 单文件/总量/文件数不得超限。不跟随指向目录外的符号链接（详细设计 §6.1）。
+//
+// 顺带过一遍 agentskills.io 规范：不合规的 skill 在 Hermes 这类 Agent 里不会被扫到，
+// 装上去等于没装，在这里拦住比装完才发现强。
 func ValidateDir(dir string, limits Limits) error {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
@@ -30,6 +33,9 @@ func ValidateDir(dir string, limits Limits) error {
 	}
 	if _, err := os.Stat(filepath.Join(dir, SkillFile)); err != nil {
 		return fmt.Errorf("缺少 SKILL.md，不是合法的 Skill 目录: %s", dir)
+	}
+	if err := ValidateSpec(dir); err != nil {
+		return fmt.Errorf("不符合 agentskills.io 规范：%w", err)
 	}
 
 	root, err := filepath.EvalSymlinks(dir)

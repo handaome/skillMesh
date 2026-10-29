@@ -4,22 +4,28 @@ import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.scan.SkillSpecValidator;
 import com.skillmesh.api.skill.SkillService;
+import com.skillmesh.api.skill.SlugRules;
 import com.skillmesh.api.skill.SourceEntity;
 import com.skillmesh.api.skill.SourceRepository;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
 import com.skillmesh.api.skill.dto.SkillSourceInput;
+import com.skillmesh.api.source.dto.ImportFromGitBatchRequest;
+import com.skillmesh.api.source.dto.ImportFromGitBatchResponse;
 import com.skillmesh.api.source.dto.ImportFromGitRequest;
 import com.skillmesh.api.source.dto.ImportFromGitResponse;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 从 Git 仓库导入一个 Skill 到云端。
@@ -41,16 +47,21 @@ public class GitSourceImportService {
     private final SkillService skillService;
     private final SourceRepository sourceRepository;
     private final AuditService audit;
+    /** 每条一个独立事务：一条失败不该把已经导进来的也撤回去。 */
+    private final TransactionTemplate transactions;
 
     public GitSourceImportService(SourceService sources, GitSourceUpdateService updates,
                                   GitArtifactPublisher publisher, SkillService skillService,
-                                  SourceRepository sourceRepository, AuditService audit) {
+                                  SourceRepository sourceRepository, AuditService audit,
+                                  PlatformTransactionManager transactionManager) {
         this.sources = sources;
         this.updates = updates;
         this.publisher = publisher;
         this.skillService = skillService;
         this.sourceRepository = sourceRepository;
         this.audit = audit;
+        this.transactions = new TransactionTemplate(transactionManager);
+        this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -94,6 +105,94 @@ public class GitSourceImportService {
             throw new ApiException(502, ErrorCodes.INTERNAL,
                 "从 Git 导入失败：" + e.getMessage());
         }
+    }
+
+    /**
+     * 一次导入多个。
+     *
+     * 给的是 Hermes 这类生态的仓库：一个仓库几十个 skill，一个一个导太慢。
+     * 名字与描述取 SKILL.md 的 frontmatter——那是 skill 自己声明的，比猜的准；
+     * slug 只能从目录名推，推不出来或撞名的那条单独算失败，不影响别的。
+     *
+     * 逐条独立：每条在自己的事务里，一条失败不牵连已经导进来的。
+     */
+    public ImportFromGitBatchResponse importBatch(CurrentUser user,
+                                                   ImportFromGitBatchRequest req) {
+        List<ImportFromGitBatchResponse.Imported> imported = new ArrayList<>();
+        List<ImportFromGitBatchResponse.Failed> failed = new ArrayList<>();
+        try (SourceService.Checkout checkout =
+                 sources.checkout(req.repositoryUrl(), req.ref())) {
+            for (String path : req.paths()) {
+                try {
+                    imported.add(transactions.execute(status ->
+                        importOne(user, req, checkout, path)));
+                } catch (ApiException e) {
+                    failed.add(new ImportFromGitBatchResponse.Failed(path, e.getMessage()));
+                } catch (RuntimeException e) {
+                    failed.add(new ImportFromGitBatchResponse.Failed(path,
+                        "导入失败：" + e.getMessage()));
+                }
+            }
+        }
+        return new ImportFromGitBatchResponse(imported, failed);
+    }
+
+    /** 导一个。名字与描述取 frontmatter，slug 从目录名推。 */
+    private ImportFromGitBatchResponse.Imported importOne(CurrentUser user,
+                                                           ImportFromGitBatchRequest req,
+                                                           SourceService.Checkout checkout,
+                                                           String path) {
+        Path skillDir = updates.locate(checkout.root(), path);
+        Map<?, ?> meta = readFrontmatter(skillDir);
+        String name = text(meta.get("name"));
+        String description = text(meta.get("description"));
+        String dirName = skillDir.getFileName().toString();
+        if (name.isEmpty()) {
+            name = dirName;
+        }
+        if (description.isEmpty()) {
+            description = name;
+        }
+        String slug = SlugRules.fromName(dirName);
+
+        var created = skillService.create(user, new CreateSkillRequest(
+            slug, name, description, req.visibility(),
+            null, null, req.tags(), Map.of(),
+            new SkillSourceInput("git", providerOf(req.repositoryUrl()),
+                req.repositoryUrl(), path,
+                sources.refType(checkout.root(), req.ref()), req.ref(),
+                checkout.commit(), null, "detected")));
+
+        SourceEntity source = sourceRepository
+            .findBySkillIdOrderByCreatedAtDesc(created.id()).get(0);
+
+        GitArtifactPublisher.Published published = publisher.publish(user, created.id(),
+            source.getId(), checkout.commit(), skillDir, "1.0.0",
+            "从 Git 导入：" + req.repositoryUrl() + "@" + shortCommit(checkout.commit()));
+
+        audit.record(user, "skill.import_from_git", "skill", created.id(), "success",
+            Map.of("slug", created.slug(), "version", published.version(),
+                "commit", published.commit(), "status", published.status()));
+
+        return new ImportFromGitBatchResponse.Imported(path, created.id().toString(),
+            created.slug(), published.version(), published.commit(), published.status());
+    }
+
+    /** 读 SKILL.md 的 frontmatter。读不到就当没有——名字与描述会退回目录名。 */
+    private Map<?, ?> readFrontmatter(Path skillDir) {
+        Path file = skillDir.resolve(SkillSpecValidator.FILE_NAME);
+        try {
+            if (!Files.exists(file)) {
+                return Map.of();
+            }
+            return SkillSpecValidator.frontmatter(Files.readAllBytes(file));
+        } catch (IOException e) {
+            return Map.of();
+        }
+    }
+
+    private String text(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     /** 从仓库地址猜出来源类型。猜不出就是 generic_git。 */

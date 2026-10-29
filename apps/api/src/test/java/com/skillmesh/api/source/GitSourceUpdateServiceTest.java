@@ -84,7 +84,10 @@ class GitSourceUpdateServiceTest {
         committed = new TransactionTemplate(transactionManager);
         committed.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         checkoutDir = Files.createTempDirectory("skillmesh-git-probe-");
-        Files.writeString(checkoutDir.resolve("SKILL.md"), "# probe\n", StandardCharsets.UTF_8);
+        // frontmatter 要合规：不符合 agentskills.io 规范的制品会被扫描拦成隔离态。
+        Files.writeString(checkoutDir.resolve("SKILL.md"),
+            "---\nname: probe\ndescription: 探针技能\n---\n\n# probe\n",
+            StandardCharsets.UTF_8);
         when(sources.checkout(anyString(), anyString()))
             .thenReturn(new SourceService.Checkout(checkoutDir, COMMIT));
         committed.executeWithoutResult(status -> {

@@ -29,6 +29,9 @@ public class ArtifactScanner {
     /** 路径穿越这条规则的名字。 */
     private static final String RULE_PATH_TRAVERSAL = "路径穿越";
 
+    /** 规范不符这条规则的名字。 */
+    private static final String RULE_SPEC = "不符合 agentskills.io 规范";
+
     /**
      * 单文件与总量上限，与 CLI 的 skillscan.DefaultLimits 对齐。
      *
@@ -102,11 +105,14 @@ public class ArtifactScanner {
     public ScanResult scan(InputStream artifact) {
         long started = System.currentTimeMillis();
         List<ScanResult.Finding> findings = new ArrayList<>();
-        String error = readEntries(artifact, findings);
+        ScanOutcome outcome = readEntries(artifact, findings);
         long duration = System.currentTimeMillis() - started;
 
-        if (error != null) {
-            return new ScanResult("error", findings, error, duration);
+        if (outcome.error() != null) {
+            return new ScanResult("error", findings, outcome.error(), duration);
+        }
+        if (outcome.specViolation() != null) {
+            findings.add(new ScanResult.Finding("SKILL.md", 0, RULE_SPEC, outcome.specViolation()));
         }
         if (duration > timeoutMs) {
             return new ScanResult("error", findings,
@@ -128,10 +134,12 @@ public class ArtifactScanner {
             summary.toString().trim(), duration);
     }
 
-    /** 解包并逐文件匹配规则。返回非 null 表示扫描本身出错（算 failed/error）。 */
-    private String readEntries(InputStream artifact, List<ScanResult.Finding> findings) {
+    /** 解包并逐文件匹配规则。 */
+    private ScanOutcome readEntries(InputStream artifact, List<ScanResult.Finding> findings) {
         int files = 0;
         long total = 0;
+        boolean sawSkillFile = false;
+        String specViolation = null;
         try (ZipInputStream zip = new ZipInputStream(artifact)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
@@ -148,19 +156,38 @@ public class ArtifactScanner {
                 }
                 files++;
                 if (files > maxFiles) {
-                    return "文件数超过上限 " + maxFiles;
+                    return new ScanOutcome("文件数超过上限 " + maxFiles, null);
                 }
                 byte[] data = readEntry(zip, maxFileBytes, path);
                 total += data.length;
                 if (total > maxTotalBytes) {
-                    return "制品总大小超过上限 " + maxTotalBytes;
+                    return new ScanOutcome("制品总大小超过上限 " + maxTotalBytes, null);
+                }
+                // SKILL.md 要符合 agentskills.io 规范，Hermes 这类 Agent 才认。
+                // 一个制品里有多个 SKILL.md 时只看第一个——那已经说明这个制品不是单 skill。
+                if (!sawSkillFile
+                    && SkillSpecValidator.FILE_NAME.equals(fileNameOf(path))) {
+                    sawSkillFile = true;
+                    specViolation = SkillSpecValidator.violation(data);
                 }
                 scanContent(path, data, findings);
             }
-            return null;
+            if (!sawSkillFile) {
+                specViolation = "制品里没有 " + SkillSpecValidator.FILE_NAME;
+            }
+            return new ScanOutcome(null, specViolation);
         } catch (IOException e) {
-            return "制品解包失败: " + e.getMessage();
+            return new ScanOutcome("制品解包失败: " + e.getMessage(), null);
         }
+    }
+
+    /** 扫描一遍的结果：错误与规范不符各占一个字段。 */
+    private record ScanOutcome(String error, String specViolation) {
+    }
+
+    /** 条目名里的最后一段。 */
+    private static String fileNameOf(String path) {
+        return path.substring(path.lastIndexOf('/') + 1);
     }
 
     /** 脚本与配置文件才扫可疑内容规则。 */
@@ -202,6 +229,11 @@ public class ArtifactScanner {
         // 路径穿越是包自己的毛病：条目名越界，装到 Agent 目录外面就写出去了。
         // 这种不能只记个 warning——它不是「疑似」，是确定会出事。
         if (RULE_PATH_TRAVERSAL.equals(finding.rule())) {
+            return true;
+        }
+        // 规范不符的 skill 在按规范扫的 Agent（Hermes 等）里不会被识别，
+        // 发上去等于发了个装不了的东西。
+        if (RULE_SPEC.equals(finding.rule())) {
             return true;
         }
         return RULES.stream().anyMatch(rule -> rule.name().equals(finding.rule())

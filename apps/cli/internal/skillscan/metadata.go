@@ -10,10 +10,18 @@ import (
 )
 
 // Metadata 是 SKILL.md frontmatter 里的元信息。
+//
+// 字段跟 agentskills.io 规范对齐：name、description 必填，其余是可选扩展
+// （platforms / tags / license / author / metadata.hermes.*）。
 type Metadata struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Version     string `yaml:"version"`
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description"`
+	Version     string         `yaml:"version"`
+	Author      string         `yaml:"author"`
+	License     string         `yaml:"license"`
+	Platforms   []string       `yaml:"platforms"`
+	Tags        []string       `yaml:"tags"`
+	Metadata    map[string]any `yaml:"metadata"`
 }
 
 // ReadMetadata 读 SKILL.md 的 YAML frontmatter。
@@ -23,7 +31,7 @@ func ReadMetadata(dir string) Metadata {
 	if err != nil {
 		return Metadata{}
 	}
-	frontmatter, ok := extractFrontmatter(string(data))
+	frontmatter, _, ok := splitFrontmatter(string(data))
 	if !ok {
 		return Metadata{}
 	}
@@ -34,21 +42,33 @@ func ReadMetadata(dir string) Metadata {
 	meta.Name = strings.TrimSpace(meta.Name)
 	meta.Description = strings.TrimSpace(meta.Description)
 	meta.Version = strings.TrimSpace(meta.Version)
+	meta.Author = strings.TrimSpace(meta.Author)
+	meta.License = strings.TrimSpace(meta.License)
 	return meta
 }
 
-// extractFrontmatter 取出文件开头 --- ... --- 之间的 YAML。
-func extractFrontmatter(content string) (string, bool) {
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	if !strings.HasPrefix(normalized, "---\n") {
-		return "", false
+// Extra 是要随 skill 上云的扩展元信息。
+//
+// 只放规范里的扩展字段：name/description 已经是 skill 自己的列，
+// 再塞一遍会两处对不上。
+func (m Metadata) Extra() map[string]any {
+	extra := map[string]any{}
+	if m.Author != "" {
+		extra["author"] = m.Author
 	}
-	rest := normalized[len("---\n"):]
-	end := strings.Index(rest, "\n---")
-	if end < 0 {
-		return "", false
+	if m.License != "" {
+		extra["license"] = m.License
 	}
-	return rest[:end], true
+	if len(m.Platforms) > 0 {
+		extra["platforms"] = m.Platforms
+	}
+	if len(m.Tags) > 0 {
+		extra["tags"] = m.Tags
+	}
+	if len(m.Metadata) > 0 {
+		extra["metadata"] = m.Metadata
+	}
+	return extra
 }
 
 // SlugFromDirName 把目录名转成 API 接受的 slug。

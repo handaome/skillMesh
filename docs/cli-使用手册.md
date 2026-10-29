@@ -327,6 +327,36 @@ verify:
 
 **被撤回的版本**装不上（`install` 会直接拒绝并说明状态），已经装着的用户会在 `list` 时看到提示——SkillMesh 不会自动卸载、更不会删你本地的文件。
 
+## SKILL.md 的规范要求
+
+SkillMesh 按 [agentskills.io](https://agentskills.io) 规范校验 SKILL.md。装之前与发上云
+之前都会过这道闸，不合规会被拒——错误里说清缺什么。
+
+```markdown
+---
+name: java-debug
+description: 排查 Java 服务的启动与线程问题
+---
+
+# Java 调试
+
+正文……
+```
+
+| 要求 | 限制 |
+| --- | --- |
+| frontmatter | 文件开头是 `---`，闭合的 YAML 映射 |
+| `name` | 必填，≤ 64 字符 |
+| `description` | 必填，≤ 1024 字符 |
+| 正文 | frontmatter 之后非空 |
+| 文件大小 | 整文件 ≤ 100,000 字符 |
+
+为什么这么严：Hermes 这类按规范扫的 Agent 只认合规的 skill，不合规的装上去也不会被
+扫到——装完看不见，比装之前报错更麻烦。
+
+frontmatter 里还可以写 `platforms`、`tags`、`license`、`author`、`metadata.hermes.*`，
+发布时会随 skill 一起上云，别的地方装的时候能读到。
+
 ## 从注册中心装一个 Skill
 
 ```bash
@@ -370,7 +400,7 @@ export SKILLMESH_TOKEN=<access-token>
 - **仓库地址必须是远程地址**。`file://`、本地路径（`./x`、`/abs/x`、`C:\repo`）和 `owner/repo` 这样的简写都会被拒绝，并明确告诉你该怎么写；`git@owner:repo.git`、`ssh://`、`https://` 三种形式不能混写。
 - `--path` **只有候选恰好一个时才能省略**，有多个会报错并列出候选让你挑。
 - `--all` 装仓库里的全部 Skill，与 `--path` 互斥。
-- `--agent` 决定装到哪：`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/` 里本机真实存在的那个（默认关着，要在 config.yaml 里打开）。**也可以填 config.yaml 里自定义的 Agent**（`agents` 段下的键），登记到注册中心时照原样记下，不受服务端枚举限制。
+- `--agent` 决定装到哪：`claude-code` → `~/.claude/skills/`，`codex` → `~/.codex/skills/`，`cursor` → 探测 `~/.cursor/skills/` 与 `~/.agents/skills/` 里本机真实存在的那个（默认关着，要在 config.yaml 里打开），`hermes` → `~/.hermes/skills/`。**也可以填 config.yaml 里自定义的 Agent**（`agents` 段下的键），登记到注册中心时照原样记下，不受服务端枚举限制。
 - `--scope user` 装到用户级（所有项目都能用）；`--scope project` 装到当前项目里、提交进版本控制给团队共享。
 - `--credential-ref` 给私有仓库用本机凭据管理器里的凭据引用，**不接受明文令牌**。
 - `--dry-run` 只列出会装什么，不落盘。

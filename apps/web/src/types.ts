@@ -180,6 +180,26 @@ export interface ImportedSkill {
   status: string
 }
 
+/**
+ * 批量导入的结果。逐条独立：成的与败的分两组报。
+ *
+ * 给 Hermes 这类生态的仓库——一个仓库几十个 skill，一次导完。
+ */
+export interface ImportedBatch {
+  imported: {
+    path: string
+    skill_id: string
+    slug: string
+    version: string
+    source_commit: string
+    status: string
+  }[]
+  failed: {
+    path: string
+    reason: string
+  }[]
+}
+
 /** 某版本里的文件清单。服务端从真 zip 算出来的那份。 */
 export interface VersionFiles {
   version: string

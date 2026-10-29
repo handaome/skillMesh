@@ -131,6 +131,16 @@ func defaults() Config {
 				UserSkillsDir: filepath.Join(codexHome(), "skills"),
 				ProjectSkills: filepath.Join(".agents", "skills"),
 			},
+			// Hermes 的技能目录：~/.hermes/skills。
+			//
+			// 官方布局是 <category>/<name>/SKILL.md，这里装成扁平的一层：
+			// Hermes 递归扫技能目录，一层子目录同样能发现（skill_view 先按
+			// 目录名直接找，找不到再递归按目录名匹配）。扁平对别的 Agent 也没坏处。
+			"hermes": {
+				Enabled:       true,
+				UserSkillsDir: filepath.Join(homeDir(), ".hermes", "skills"),
+				ProjectSkills: filepath.Join(".hermes", "skills"),
+			},
 			// Cursor 有两个候选用户级路径（设计文档 §8）：
 			// ~/.cursor/skills 与 ~/.agents/skills。启动时探测哪个真的存在，
 			// 探测到就用它，并在 agents detect 里说明用的是哪一个。

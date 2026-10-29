@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill, ImportedBatch } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -292,6 +292,22 @@ export function importSkillFromGit(body: {
   tags?: string[]
 }): Promise<ImportedSkill> {
   return request<ImportedSkill>('/sources/import', 'POST', body)
+}
+
+/**
+ * 一次导入多个。
+ *
+ * 名字与描述取各自 SKILL.md 的 frontmatter，slug 取目录名——
+ * 批量时没人愿意一个一个填。
+ */
+export function importSkillsFromGit(body: {
+  repository_url: string
+  paths: string[]
+  ref?: string
+  visibility: 'private' | 'public'
+  tags?: string[]
+}): Promise<ImportedBatch> {
+  return request<ImportedBatch>('/sources/import-batch', 'POST', body)
 }
 
 export function listTeams(organizationId: string): Promise<Team[]> {

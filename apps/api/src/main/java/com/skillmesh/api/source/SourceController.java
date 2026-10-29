@@ -1,6 +1,8 @@
 package com.skillmesh.api.source;
 
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.source.dto.ImportFromGitBatchRequest;
+import com.skillmesh.api.source.dto.ImportFromGitBatchResponse;
 import com.skillmesh.api.source.dto.ImportFromGitRequest;
 import com.skillmesh.api.source.dto.ImportFromGitResponse;
 import com.skillmesh.api.source.dto.ResolveSourceRequest;
@@ -70,5 +72,18 @@ public class SourceController {
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody ImportFromGitRequest req) {
         return imports.importSkill(currentUserService.current(jwt), req);
+    }
+
+    /**
+     * 一次导入多个。
+     *
+     * 给 Hermes 这类生态的仓库：一个仓库几十个 skill，一个一个导太慢。
+     * 逐条独立，成的与败的分两组报出来。
+     */
+    @PostMapping("/import-batch")
+    public ImportFromGitBatchResponse importBatch(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody ImportFromGitBatchRequest req) {
+        return imports.importBatch(currentUserService.current(jwt), req);
     }
 }
