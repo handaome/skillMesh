@@ -114,6 +114,37 @@ export interface ScanSummary {
 
 export type VersionPage = Page<SkillVersion>
 
+/** 一个 Skill 的 Git 来源。 */
+export interface SkillSource {
+  source_type: string
+  provider: string | null
+  repository_url: string | null
+  subpath: string | null
+  ref_type: string | null
+  ref_value: string | null
+  /** 已经落到云端的提交。 */
+  resolved_commit: string | null
+}
+
+/** 检查 Git 来源有没有新提交的结果。 */
+export interface SourceUpdateCheck {
+  repository_url: string
+  ref_value: string
+  current_commit: string
+  remote_commit: string
+  has_update: boolean
+}
+
+/** 从 Git 来源更新出来的版本。 */
+export interface SourceUpdateResult {
+  version: string
+  source_commit: string
+  sha256: string
+  file_count: number
+  /** published / pending_review / quarantined。 */
+  status: string
+}
+
 /** 某版本里的文件清单。服务端从真 zip 算出来的那份。 */
 export interface VersionFiles {
   version: string

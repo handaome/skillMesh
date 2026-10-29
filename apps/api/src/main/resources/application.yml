@@ -69,6 +69,9 @@ skillmesh:
     allowed-hosts: "${SM_GIT_ALLOWED_HOSTS:github.com,gitlab.com,gitee.com}"
     timeout-seconds: ${SM_GIT_TIMEOUT_SECONDS:30}
     max-concurrent: ${SM_GIT_MAX_CONCURRENT:4}
+    # git 走哪个代理。留空就用系统环境里的 HTTPS_PROXY / HTTP_PROXY——
+    # 服务端所在机器访问不了 GitHub 时，两者配一个就行。
+    proxy: ${SM_GIT_PROXY:}
 
 management:
   endpoints:

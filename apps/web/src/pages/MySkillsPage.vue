@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
+  ApiError,
   batchArchive,
   batchUpdateTags,
+  checkSkillSourceUpdates,
   createSkill,
   deleteSkill,
   fetchTags,
+  getSkillSource,
   getVersions,
   listDeletedSkills,
   listRecycleFiles,
@@ -14,11 +17,21 @@ import {
   revokeVersion,
   searchMySkills,
   updateSkill,
+  updateSkillFromSource,
 } from '../api'
 import { useMultiSelect } from '../composables/useMultiSelect'
 import { usePagedList } from '../composables/usePagedList'
 import { VERSION_STATUS_TEXT, VISIBILITY_TEXT } from '../constants/status'
-import type { BatchSkillResult, DeletedSkill, RecycleFile, Skill, SkillVersion, TagCount } from '../types'
+import type {
+  BatchSkillResult,
+  DeletedSkill,
+  RecycleFile,
+  Skill,
+  SkillSource,
+  SkillVersion,
+  SourceUpdateCheck,
+  TagCount,
+} from '../types'
 import { errorText } from '../utils/errorText'
 import { formatDateTime } from '../utils/format'
 import BatchTagDialog from '../components/BatchTagDialog.vue'
@@ -152,6 +165,18 @@ const editDescription = ref('')
 const editTags = ref<string[]>([])
 const saving = ref(false)
 
+/**
+ * Git 来源与在线更新。
+ *
+ * 只有从 Git 装过、并且发布到云端的 Skill 才有来源；
+ * 没有来源的 Skill 服务端返回 404，这一块整个不显示。
+ */
+const source = ref<SkillSource | null>(null)
+const sourceCheck = ref<SourceUpdateCheck | null>(null)
+const sourceError = ref('')
+const sourceNotice = ref('')
+const sourceBusy = ref(false)
+
 /** 新建表单 */
 const creating = ref(false)
 const createError = ref('')
@@ -241,6 +266,70 @@ async function select(skill: Skill) {
   // 旧 Skill 的版本还挂在屏幕上会让人以为看的是新的，先清掉。
   resetVersions()
   await loadVersions(skill.id)
+  await loadSource(skill.id)
+}
+
+/**
+ * 读 Git 来源。
+ *
+ * 没有 Git 来源的 Skill 服务端返回 404——那是「不是从 Git 来的」，
+ * 不是出错，入口整个不显示。
+ */
+async function loadSource(skillId: string) {
+  source.value = null
+  sourceCheck.value = null
+  sourceError.value = ''
+  try {
+    source.value = await getSkillSource(skillId)
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return
+    sourceError.value = errorText(e)
+  }
+}
+
+/** 查远端有没有新提交。只查 ref，不下载内容。 */
+async function checkSourceUpdates() {
+  if (!selected.value) return
+  sourceBusy.value = true
+  sourceError.value = ''
+  sourceNotice.value = ''
+  try {
+    sourceCheck.value = await checkSkillSourceUpdates(selected.value.id)
+  } catch (e) {
+    sourceError.value = errorText(e)
+  } finally {
+    sourceBusy.value = false
+  }
+}
+
+/**
+ * 拉远端新提交，生成新版本。
+ *
+ * 生成的是**云端**的新版本：本机装的那份不会自动变，
+ * 拉回本机还得跑 CLI 的 skillmesh update。
+ */
+async function applySourceUpdate() {
+  if (!selected.value) return
+  sourceBusy.value = true
+  sourceError.value = ''
+  sourceNotice.value = ''
+  try {
+    const result = await updateSkillFromSource(selected.value.id)
+    sourceNotice.value = `已拉取 ${shortCommit(result.source_commit)}，生成版本 ${result.version}（${VERSION_STATUS_TEXT[result.status] ?? result.status}）`
+    sourceCheck.value = null
+    await loadVersions(selected.value.id)
+    await loadSource(selected.value.id)
+  } catch (e) {
+    sourceError.value = errorText(e)
+  } finally {
+    sourceBusy.value = false
+  }
+}
+
+/** commit 缩到 8 位显示。 */
+function shortCommit(commit: string | null | undefined): string {
+  if (!commit) return '—'
+  return commit.length <= 8 ? commit : commit.slice(0, 8)
 }
 
 /** 展开回收站才去拉文件：折叠着一个空列表，没必要每次换 Skill 都打一次请求。 */
@@ -745,6 +834,60 @@ onUnmounted(() => {
               </button>
               <span class="sm-muted sm-sm">slug 与可见性不可改：会影响别人已装的内容。</span>
             </div>
+          </div>
+
+          <!--
+            Git 来源：从 Git 装过并发布到云端的 Skill，可以在这里直接查更新、
+            拉新提交。拉的是**云端**的新版本——本机装的那份不会自动变，
+            拉回本机还得跑 CLI 的 skillmesh update。
+          -->
+          <div v-if="source" class="sm-panel">
+            <div class="sm-panel-head">
+              <h2 class="sm-section">Git 来源</h2>
+              <span class="sm-meta">{{ source.provider ?? 'git' }}</span>
+            </div>
+
+            <p class="sm-muted sm-sm sm-mono sm-break" data-test="source-repo">
+              {{ source.repository_url }}
+            </p>
+            <p class="sm-muted sm-sm">
+              {{ source.ref_value || '默认分支' }} · commit
+              <span class="sm-mono">{{ shortCommit(source.resolved_commit) }}</span>
+            </p>
+
+            <p v-if="sourceError" class="sm-note sm-note--error sm-mb-12" data-test="source-error">
+              {{ sourceError }}
+            </p>
+            <p v-if="sourceNotice" class="sm-note sm-note--success sm-mb-12" data-test="source-notice">
+              {{ sourceNotice }}
+            </p>
+
+            <div class="sm-row">
+              <button
+                class="sm-btn sm-btn--quiet sm-btn--sm"
+                data-test="check-source"
+                :disabled="sourceBusy"
+                @click="checkSourceUpdates"
+              >
+                {{ sourceBusy ? '处理中…' : '检查更新' }}
+              </button>
+              <button
+                v-if="sourceCheck?.has_update"
+                class="sm-btn sm-btn--primary sm-btn--sm"
+                data-test="apply-source"
+                :disabled="sourceBusy"
+                @click="applySourceUpdate"
+              >
+                更新到 {{ shortCommit(sourceCheck.remote_commit) }}
+              </button>
+            </div>
+            <p
+              v-if="sourceCheck && !sourceCheck.has_update"
+              class="sm-muted sm-sm sm-mt-12"
+              data-test="source-latest"
+            >
+              已是最新（远端 {{ shortCommit(sourceCheck.remote_commit) }}）。
+            </p>
           </div>
 
           <div class="sm-panel">

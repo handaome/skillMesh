@@ -463,6 +463,17 @@ export SKILLMESH_TOKEN=<access-token>
 
 ## 更新与回滚
 
+### 云端那一份也能在网页上更新
+
+`skillmesh update` 改的是**本机**装的那份。Git 来源的 Skill 在**云端**的内容，
+可以在控制台「我的 Skill」页的「Git 来源」区直接查更新、拉新版——服务端拉仓库、
+重新打包、产出新版本，走和 `skillmesh publish` 一样的流程（扫描 → 发布或送审）。
+
+分清了才不会以为「网页上更新过了，本机就也是新的」：网页更新完，本机那份还得自己拉回去——
+Git 来源的跑 `skillmesh update`，本地导入的（没有 Git 来源的）跑
+`skillmesh install <名字> --version <新版本>`。网页端只支持公开仓库，
+私有仓库只能用 CLI 在本机更新。
+
 ### 更新前先看差异，本地改过就不覆盖
 
 ```bash

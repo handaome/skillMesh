@@ -23,8 +23,10 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -298,19 +300,16 @@ public class VersionEditService {
         if (requested != null && !requested.isBlank()) {
             return requested.trim();
         }
-        String latest = latestVersion(skillId);
-        return latest == null ? "1.0.0" : bumpPatch(latest);
-    }
-
-    /** 这个 Skill 已有的最大版本号（按版本号比，不按创建时间）。 */
-    private String latestVersion(UUID skillId) {
+        List<SkillVersionEntity> rows = versions.findBySkillIdOrderByCreatedAtDesc(skillId);
         String latest = null;
-        for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
-            if (latest == null || VersionOrder.isGreater(version.getVersion(), latest)) {
-                latest = version.getVersion();
+        Set<String> used = new HashSet<>();
+        for (SkillVersionEntity row : rows) {
+            used.add(row.getVersion());
+            if (latest == null || VersionOrder.isGreater(row.getVersion(), latest)) {
+                latest = row.getVersion();
             }
         }
-        return latest;
+        return VersionNumberGenerator.next(latest, used);
     }
 
     /**
@@ -331,30 +330,10 @@ public class VersionEditService {
         return latest;
     }
 
-    /** 给版本号的 patch 位加一。解析不了就报错——别猜。 */
-    private String bumpPatch(String version) {
-        String[] parts = version.split("\\.");
-        if (parts.length != 3) {
-            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "版本号 " + version + " 不是 x.y.z 形式，请自己指定新版本号");
-        }
-        try {
-            int patch = Integer.parseInt(parts[2]);
-            return parts[0] + "." + parts[1] + "." + (patch + 1);
-        } catch (NumberFormatException e) {
-            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "版本号 " + version + " 的 patch 位不是数字，请自己指定新版本号");
-        }
-    }
-
     private List<CreateVersionRequest.ManifestEntry> toManifest(List<Map<String, Object>> manifest) {
         List<CreateVersionRequest.ManifestEntry> entries = new ArrayList<>();
         for (Map<String, Object> item : manifest) {
-            entries.add(new CreateVersionRequest.ManifestEntry(
-                String.valueOf(item.get("path")),
-                String.valueOf(item.get("sha256")),
-                ((Number) item.getOrDefault("size_bytes", 0)).longValue(),
-                Boolean.TRUE.equals(item.get("executable"))));
+            entries.add(CreateVersionRequest.ManifestEntry.from(item));
         }
         return entries;
     }

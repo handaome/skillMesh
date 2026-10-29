@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -239,6 +239,31 @@ export function editVersionFile(
     'PUT',
     body,
   )
+}
+
+/**
+ * 某个 Skill 的 Git 来源。
+ *
+ * 没有 Git 来源的 Skill 服务端返回 404——那是「这个 Skill 不是从 Git 来的」，
+ * 不是「出错了」，调用方按 404 隐藏入口即可。
+ */
+export function getSkillSource(skillId: string): Promise<SkillSource> {
+  return request<SkillSource>(`/skills/${skillId}/source`)
+}
+
+/** 查 Git 来源有没有新提交。只查 ref，不下载内容。 */
+export function checkSkillSourceUpdates(skillId: string): Promise<SourceUpdateCheck> {
+  return request<SourceUpdateCheck>(`/skills/${skillId}/source/check-updates`, 'POST')
+}
+
+/**
+ * 从 Git 来源拉新提交，产出新版本。
+ *
+ * 走的是和 CLI 发布一样的链路：服务端扫描 → 个人与公开直接发布，
+ * 团队与组织进待审队列。
+ */
+export function updateSkillFromSource(skillId: string): Promise<SourceUpdateResult> {
+  return request<SourceUpdateResult>(`/skills/${skillId}/source/update`, 'POST')
 }
 
 export function listTeams(organizationId: string): Promise<Team[]> {

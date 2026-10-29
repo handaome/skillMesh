@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /** 对应 OpenAPI 的 CreateVersionRequest。 */
@@ -31,5 +32,20 @@ public record CreateVersionRequest(
             @NotBlank @Size(max = 1024) String path,
             @NotBlank @Pattern(regexp = "^[a-f0-9]{64}$") String sha256,
             @PositiveOrZero long size_bytes,
-            boolean executable) {}
+            boolean executable) {
+
+        /**
+         * 从服务端算出来的清单项转过来。
+         *
+         * 清单由服务端算（ZipManifest.of），不是发布方自填的那份——
+         * 两边口径要一致，免得审核页列的文件和真包对不上。
+         */
+        public static ManifestEntry from(Map<String, Object> item) {
+            return new ManifestEntry(
+                    String.valueOf(item.get("path")),
+                    String.valueOf(item.get("sha256")),
+                    ((Number) item.getOrDefault("size_bytes", 0)).longValue(),
+                    Boolean.TRUE.equals(item.get("executable")));
+        }
+    }
 }

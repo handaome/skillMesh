@@ -54,6 +54,9 @@ services:
       SM_RATE_LIMIT_READ: ${SM_RATE_LIMIT_READ:-600}
       SM_RATE_LIMIT_WRITE: ${SM_RATE_LIMIT_WRITE:-300}
       SM_RATE_LIMIT_WINDOW: ${SM_RATE_LIMIT_WINDOW:-60}
+      # 服务端拉 Git 用的代理。容器所在网络访问不了 GitHub 时配一个，
+      # 例如 http://host.docker.internal:7890。留空就走容器自身的环境变量。
+      SM_GIT_PROXY: ${SM_GIT_PROXY:-}
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

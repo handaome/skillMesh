@@ -30,34 +30,58 @@ public class SourceService {
     private final long timeoutSeconds;
     private final int maxCandidates;
     private final Semaphore slots;
+    private final String proxy;
 
     public SourceService(GitHostPolicy policy,
                          @Value("${skillmesh.git.timeout-seconds:30}") long timeoutSeconds,
                          @Value("${skillmesh.git.max-candidates:100}") int maxCandidates,
-                         @Value("${skillmesh.git.max-concurrent:4}") int maxConcurrent) {
+                         @Value("${skillmesh.git.max-concurrent:4}") int maxConcurrent,
+                         @Value("${skillmesh.git.proxy:}") String proxy) {
         this.policy = policy;
         this.timeoutSeconds = timeoutSeconds;
         this.maxCandidates = maxCandidates;
         // 并发上限（设计文档 §14）：拉仓库是重活，几个人同时点就能把机器和带宽打满。
         this.slots = new Semaphore(Math.max(1, maxConcurrent));
+        this.proxy = proxy == null ? "" : proxy.trim();
     }
 
     /** 解析仓库，返回其中的 Skill 候选清单。 */
     public ResolveResult resolve(String repositoryUrl, String subpath, String ref) {
         String url = policy.requireAllowed(repositoryUrl);
-        Path workspace = null;
+        try (Checkout checkout = checkout(url, ref)) {
+            return new ResolveResult(repositoryUrl, checkout.commit(),
+                candidates(checkout.root(), subpath));
+        } catch (IOException e) {
+            throw new ApiException(502, ErrorCodes.INTERNAL,
+                "读取检出内容失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 把仓库浅克隆到临时目录。
+     *
+     * 用 fetch 而不是 clone --branch：分支、标签、commit 三种 ref 都能取，
+     * 而 clone --branch 不接 commit。
+     *
+     * 临时目录归调用方管（try-with-resources 关掉即删）。
+     */
+    public Checkout checkout(String repositoryUrl, String ref) {
+        String url = policy.requireAllowed(repositoryUrl);
         acquireSlot();
+        Path workspace = null;
         try {
             workspace = Files.createTempDirectory("skillmesh-source-");
-            String head = clone(url, ref, workspace.resolve("repo"));
-            return new ResolveResult(repositoryUrl, head, candidates(workspace.resolve("repo"), subpath));
+            Path repo = workspace.resolve("repo");
+            String commit = clone(url, ref, repo);
+            return new Checkout(workspace, commit);
         } catch (ApiException e) {
+            deleteQuietly(workspace);
             throw e;
         } catch (Exception e) {
+            deleteQuietly(workspace);
             throw new ApiException(502, ErrorCodes.INTERNAL,
                 "拉取仓库失败：" + e.getMessage());
         } finally {
-            deleteQuietly(workspace);
             slots.release();
         }
     }
@@ -91,15 +115,15 @@ public class SourceService {
     }
 
     private String clone(String url, String ref, Path target) throws IOException, InterruptedException {
-        List<String> command = new ArrayList<>(List.of(
-            "git", "clone", "--depth", "1", "--quiet"));
-        if (ref != null && !ref.isBlank()) {
-            command.add("--branch");
-            command.add(ref);
-        }
-        command.add(url);
-        command.add(target.toString());
-        run(command);
+        run(List.of("git", "init", "--quiet", target.toString()));
+        // 关掉换行自动转换：Skill 里常带 shell 脚本，转成 CRLF 到了 Unix 上就跑不起来。
+        run(List.of("git", "-C", target.toString(), "config", "core.autocrlf", "false"));
+        run(List.of("git", "-C", target.toString(), "remote", "add", "origin", url));
+        List<String> fetch = new ArrayList<>(List.of(
+            "git", "-C", target.toString(), "fetch", "--depth", "1", "--quiet", "origin"));
+        fetch.add(ref == null || ref.isBlank() ? "HEAD" : ref);
+        run(fetch);
+        run(List.of("git", "-C", target.toString(), "checkout", "--quiet", "FETCH_HEAD"));
         return run(List.of("git", "-C", target.toString(), "rev-parse", "HEAD"));
     }
 
@@ -135,6 +159,12 @@ public class SourceService {
     private String run(List<String> command) throws IOException, InterruptedException {
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.redirectErrorStream(true);
+        // 显式配了代理就写进 git 的环境。系统环境里的 HTTPS_PROXY 本身就会继承，
+        // 不配这个项也能走代理——这个项是给「代理只配在服务里」的场景用的。
+        if (!proxy.isBlank()) {
+            builder.environment().put("HTTPS_PROXY", proxy);
+            builder.environment().put("HTTP_PROXY", proxy);
+        }
         Process process = builder.start();
         byte[] output = process.getInputStream().readAllBytes();
         if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
@@ -148,7 +178,7 @@ public class SourceService {
         return text;
     }
 
-    private void deleteQuietly(Path path) {
+    private static void deleteQuietly(Path path) {
         if (path == null || !Files.exists(path)) {
             return;
         }
@@ -172,4 +202,16 @@ public class SourceService {
     public record Candidate(String path, String name) {}
 
     public record UpdateCheck(String commit, String repositoryUrl, String ref) {}
+
+    /**
+     * 一次检出。root 是仓库根目录，commit 是实际解析到的提交。
+     *
+     * 临时目录用完就删：try-with-resources 关掉即删。
+     */
+    public record Checkout(Path root, String commit) implements AutoCloseable {
+        @Override
+        public void close() {
+            SourceService.deleteQuietly(root);
+        }
+    }
 }
