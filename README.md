@@ -19,12 +19,12 @@ Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本�
 ## 目录结构
 
 ```text
-apps/api/     Spring Boot 3.5 · Java 21 · JPA · Flyway · PostgreSQL · MinIO SDK · Keycloak OIDC
-apps/cli/     Go · cobra · OIDC 授权码+PKCE · 调系统 git
+apps/api/     Spring Boot 3.5 · Java 21 · JPA · Flyway · PostgreSQL · MinIO SDK · 内置账号（可选外接 OIDC）
+apps/cli/     Go · cobra · 用户名密码登录 / OIDC 授权码+PKCE · 调系统 git
 apps/web/     Vue 3 · Vite · TypeScript
-infra/        本机服务的准备/启动/停止脚本与 realm 定义
+infra/        本机服务的准备/启动/停止脚本
 docs/        设计文档、详细设计与使用手册
-docker-compose.yml/ PostgreSQL + MinIO + Keycloak + API + 前端的容器编排
+docker-compose.yml/ PostgreSQL + MinIO + API + 前端的容器编排
 ```
 
 ## 前置依赖
@@ -35,7 +35,6 @@ docker-compose.yml/ PostgreSQL + MinIO + Keycloak + API + 前端的容器编排
 | Go | 1.24+ | 用系统 go 即可 |
 | Node / pnpm | 24 / 10 | 前端 |
 | git | 2.x | CLI 通过系统 git 解析来源 |
-| unzip | 任意 | 启动脚本解压 Keycloak |
 | Docker | 24+ | 只在走 compose 路线时需要 |
 
 Go 拉模块走 `GOPROXY=https://goproxy.cn,direct`——直连 `proxy.golang.org` / `sum.golang.org` 在国内会超时。本机已用 `go env -w GOPROXY=https://goproxy.cn,direct` 写进全局配置；换机器时重设该值即可（`infra/scripts/prepare.sh` 内部也兜了同样的默认值）。
@@ -46,27 +45,26 @@ Go 拉模块走 `GOPROXY=https://goproxy.cn,direct`——直连 `proxy.golang.or
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入 SM_DB_PASSWORD
+# 编辑 .env，填入 SM_DB_PASSWORD 与 SM_JWT_SECRET
+# SM_JWT_SECRET 是令牌的签名密钥：留空就是每次启动随机生成，重启后所有人被登出
 ```
 
 ### 2. 启动基础设施
 
 ```bash
-bash infra/scripts/start.sh         # MinIO 127.0.0.1:9100（控制台 9101）+ Keycloak 127.0.0.1:8180/kc
-bash infra/scripts/smoke.sh         # 健康检查，四项全 OK 才继续
+bash infra/scripts/start.sh         # MinIO 127.0.0.1:9100（控制台 9101）
+bash infra/scripts/smoke.sh         # 健康检查，全 OK 才继续
 ```
 
-停止：`bash infra/scripts/stop.sh`（`stop.sh minio` / `stop.sh keycloak` 可只停一个）。
+停止：`bash infra/scripts/stop.sh`（`stop.sh minio` 可只停一个）。
 
 备份：`bash infra/scripts/backup.sh <备份目录>`——应用起不来时也能跑（绕开 Flyway 校验），
 定期备份用 cron 调它，见[部署文档](docs/部署与排障.md)。
 
 > 整套用容器跑（自带 PostgreSQL）见 [Docker Compose 路线](docs/部署与排障.md#docker-compose-路线)。两条路线抢同一批端口，不能同时开。
 
-Keycloak 首次启动会导入 `infra/keycloak/realm-skillmesh.json`，其中含 `dev-user` / `dev` 与两个客户端：
-
-- `skillmesh-cli`——public client，标准流程 + PKCE S256，供 CLI 登录
-- `skillmesh-test`——开放 direct grant，仅供自动化测试取 token
+服务端自带账号体系：第一个注册出来的内置账号就是管理员。要接企业 SSO 时再配 `SM_OIDC_ISSUER`，
+两条路并存，互不影响。
 
 ### 3. 启动 API
 
@@ -96,7 +94,7 @@ cd apps/cli && go build -o skillmesh.exe ./cmd/skillmesh
 cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 ```
 
-前端没有登录页，把 CLI 登录拿到的 access token 粘到顶部输入框即可。
+前端有登录页：内置账号填用户名和密码即可，服务端没接外部 IdP 时只有这一条路。
 
 ## 端口
 
@@ -104,7 +102,6 @@ cd apps/web && pnpm install && pnpm dev   # http://127.0.0.1:5174
 | --- | --- | --- |
 | API | 127.0.0.1:8080 | |
 | MinIO | 127.0.0.1:9100 | 控制台 9101 |
-| Keycloak | 127.0.0.1:8180 | relative path `/kc` |
 | 前端 dev | 127.0.0.1:5174 |  |
 
 所有本地服务只绑回环地址，不监听 `0.0.0.0`。
