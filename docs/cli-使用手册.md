@@ -113,6 +113,35 @@ skillmesh cloud recycle list --skill demo  # 不在 Skill 目录里时用 --skil
 
 回收期 30 天。恢复走的是**正常发版流程**——扫描、审核那道闸一样要过，恢复回来的内容不会被绕开审核直接上线。
 
+## 多个 Agent 共用一份技能
+
+Claude Code、Codex 各有一份技能目录，同一个技能就存了两遍：磁盘占双倍空间，
+改一份要记得改另一份，同步时也多出一倍的条目（`sync` 的进度条会数到两遍）。
+
+让它们共用一份：实体只留在一个 Agent 的目录里，另一个 Agent 的目录里
+每个技能换成一个链接，指向那一份。
+
+```bash
+./skillmesh.exe share codex --from claude-code --dry-run   # 先看会怎么动
+./skillmesh.exe share codex --from claude-code             # 真改（会问一次）
+```
+
+具体做了什么：
+
+| 情况 | 处理 |
+| --- | --- |
+| 目标目录独有的技能 | 搬到源目录（那边才是实体） |
+| 两边内容一样 | 删掉目标目录里那份，换成链接 |
+| 源目录有、目标目录没有 | 在目标目录建链接 |
+| 同名但内容不同 | **停下来报错**，什么都不动，由你决定留哪份 |
+| Agent 自己的目录（Codex 的 `.system`） | 原样留着，不碰 |
+
+共享完跑一次 `sync` 让基线跟上新的路径，同步条目会从两份变回一份。
+以后装了新技能，再跑一次 `share` 补链接（命令是幂等的，重复跑安全）。
+
+链接用的是符号链接（Windows 上退而求其次会用目录联接），
+删掉链接就能还原成普通目录。
+
 ## 删掉云端的 Skill
 
 ```bash
@@ -412,6 +441,7 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 | `trash list` / `restore` / `purge` | 本机回收站：找回卸载掉的 Skill、清过期 |
 | `cloud recycle list` / `restore <path>` | 云端回收站：找回云端某个 Skill 里被删掉的文件 |
 | `cloud revoke <slug> <version>` | 撤回云端的某个版本（不可逆；要恢复只能发新版本） |
+| `share <agent> --from <agent>` | 让一个 Agent 共用另一个 Agent 的技能目录（磁盘上只存一份） |
 
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。作用域（`user` 还是 `project`）记在锁文件里，`update`/`uninstall`/`list` 都以记录为准，不会把项目级安装误当成用户级。
 

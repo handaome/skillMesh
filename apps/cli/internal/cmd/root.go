@@ -17,6 +17,9 @@ import (
 
 var Cfg config.Config
 
+// assumeYes 对可安全自动确认的提示采用默认值。
+var assumeYes bool
+
 // timeoutCancel 取消 --timeout 设的那个整体超时。
 //
 // 不能在 PersistentPreRunE 里 defer：那个函数一返回，RunE 还没跑，
@@ -31,7 +34,7 @@ var argsChecked bool
 
 func newRootCmd() *cobra.Command {
 	var server, project, profile, timeout string
-	var noColor, assumeYes bool
+	var noColor bool
 	argsChecked = false
 	root := &cobra.Command{
 		Use:           "skillmesh",
@@ -84,7 +87,7 @@ func newRootCmd() *cobra.Command {
 		newScanCmd(), newSyncCmd(), newCloudCmd(), newGroupCmd(),
 		newDoctorCmd(), NewUpdateCmd(), newTrashCmd(),
 		newLogsCmd(), newSelfInstallCmd(),
-		newWatchCmd(),
+		newWatchCmd(), newShareCmd(),
 	)
 	hideAdvancedCommands(root)
 	return root
@@ -124,7 +127,7 @@ func hideAdvancedCommands(root *cobra.Command) {
 		"add": true, "cloud": true, "doctor": true,
 		"group": true, "installations": true, "logs": true,
 		"review": true, "scan": true, "self-install": true,
-		"source": true, "trash": true, "update": true, "watch": true,
+		"share": true, "source": true, "trash": true, "update": true, "watch": true,
 	}
 	for _, sub := range root.Commands() {
 		if advanced[sub.Name()] {

@@ -19,7 +19,7 @@ type Metadata struct {
 // ReadMetadata 读 SKILL.md 的 YAML frontmatter。
 // 没有 frontmatter 或解析失败都返回空 Metadata —— 元信息缺失不该挡住发布。
 func ReadMetadata(dir string) Metadata {
-	data, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	data, err := os.ReadFile(filepath.Join(dir, SkillFile))
 	if err != nil {
 		return Metadata{}
 	}

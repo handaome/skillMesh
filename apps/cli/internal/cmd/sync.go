@@ -404,7 +404,40 @@ func dedupeTargets(targets []SyncTarget) []SyncTarget {
 		seen[key] = true
 		unique = append(unique, target)
 	}
+	return dedupeByRealPath(unique)
+}
+
+// dedupeByRealPath 再按「名字 + 实体路径」去重一次。
+//
+// 多个 Agent 共用一份技能内容时（配置里 user_skills_dir 填同一个路径，
+// 或者目录本身是链接指到同一处），同一个 Skill 会在每个 Agent 名下各出现一次，
+// 指向的却是同一份文件。按 Agent 去重拦不住——Agent 名不同；
+// 按实体路径去重才拦得住：同步条数、基线条数都回到实际份数。
+func dedupeByRealPath(targets []SyncTarget) []SyncTarget {
+	seen := make(map[string]bool, len(targets))
+	unique := make([]SyncTarget, 0, len(targets))
+	for _, target := range targets {
+		key := target.Name + "/" + realSkillPath(target.Path)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, target)
+	}
 	return unique
+}
+
+// realSkillPath 把技能目录还原成实体路径。
+//
+// 目录层面的链接（Agent 目录指到共享目录）和技能层面的链接
+// （每个技能目录指到共享目录里的那一份）都要算到：
+// 同一份文件换个路径出现，按路径比就认不出来了，同步条数会翻倍。
+func realSkillPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	dir, base := filepath.Split(path)
+	return skillscan.ResolveLink(filepath.Join(skillscan.ResolveLink(dir), base))
 }
 
 // targetsIn 列出一个目录里的 Skill，并带上各自的基线。

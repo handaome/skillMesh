@@ -122,13 +122,7 @@ func archiveOne(ctx context.Context, client *apiclient.Client, state *syncstate.
 func removalCandidates(state syncstate.State, scanned []SyncTarget, roots []scanRoot,
 	options SyncOptions) []syncstate.Entry {
 
-	present := map[string]bool{}
-	for _, target := range scanned {
-		present[target.Agent+"/"+target.Name] = true
-		if target.SkillID != "" {
-			present["id:"+target.SkillID] = true
-		}
-	}
+	present := newPresentSet(scanned)
 	var candidates []syncstate.Entry
 	for _, entry := range state.Skills {
 		if entry.SkillID == "" {
@@ -137,32 +131,103 @@ func removalCandidates(state syncstate.State, scanned []SyncTarget, roots []scan
 		if options.Only != "" && entry.Name != options.Only {
 			continue
 		}
-		if present[entry.Agent+"/"+entry.Name] || present["id:"+entry.SkillID] {
+		if present.hasPath(entry.Path) {
+			continue // 这份文件还在
+		}
+		if present.hasID(entry.SkillID) {
+			continue // 同一个云端 Skill 本机别处还装着一份
+		}
+		if sameNameOtherCopy(entry, scanned) {
 			continue
 		}
-		path := entry.Path
-		if path == "" {
-			// 老基线没记路径：重新扫一遍这个 Agent 的目录。
-			dir, err := agent.Dir(Cfg, entry.Agent, "user", "")
-			if err != nil {
-				continue // 这个 Agent 现在不扫了：不算删除
-			}
-			if _, err := os.Stat(dir); err != nil {
-				continue // 扫描根整个没了：多半是路径变了，不是用户删的
-			}
-			path = localSkillPath(entry)
-			if path != "" {
-				continue // 还在
-			}
-		} else if !inScope(path, roots) {
+		if !entryRemoved(entry, roots) {
 			continue
-		}
-		if _, err := os.Stat(path); err == nil {
-			continue // 目录还在
 		}
 		candidates = append(candidates, entry)
 	}
 	return candidates
+}
+
+// presentSet 是「本机现在还有什么」的快照。
+//
+// 按实体路径记，不按名字：多个 Agent 共用一个技能目录时（user_skills_dir
+// 填同一个路径，或目录是指到同一处的链接），同名的两条基线指向同一份文件，
+// 按名字判会把「共享目录里删掉这一份」当成「别处还有」而漏传删除。
+type presentSet struct {
+	paths map[string]bool
+	ids   map[string]bool
+}
+
+// newPresentSet 按扫到的目标建快照。
+func newPresentSet(scanned []SyncTarget) presentSet {
+	present := presentSet{paths: map[string]bool{}, ids: map[string]bool{}}
+	for _, target := range scanned {
+		present.paths[realSkillPath(target.Path)] = true
+		if target.SkillID != "" {
+			present.ids[target.SkillID] = true
+		}
+	}
+	return present
+}
+
+// hasPath 这份文件还在吗。
+func (p presentSet) hasPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	return p.paths[realSkillPath(path)]
+}
+
+// hasID 这个云端 Skill 本机别处还装着一份吗。
+func (p presentSet) hasID(id string) bool {
+	return id != "" && p.ids[id]
+}
+
+// entryRemoved 判断基线记的那个目录是不是真的没了。
+//
+// 老基线没记路径时重新扫一遍这个 Agent 的目录；路径不在扫描范围内
+// （改了 Agent 目录、删了自定义目录）也不算删除——扫不到不等于用户删了它。
+func entryRemoved(entry syncstate.Entry, roots []scanRoot) bool {
+	path := entry.Path
+	if path == "" {
+		dir, err := agent.Dir(Cfg, entry.Agent, "user", "")
+		if err != nil {
+			return false // 这个 Agent 现在不扫了：不算删除
+		}
+		if _, err := os.Stat(dir); err != nil {
+			return false // 扫描根整个没了：多半是路径变了，不是用户删的
+		}
+		path = localSkillPath(entry)
+		if path != "" {
+			return false // 还在
+		}
+	} else if !inScope(path, roots) {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err != nil
+}
+
+// sameNameOtherCopy 判断本机别处是不是还有「同名但不是同一份」的副本。
+//
+// 云端可能有两个同名但 id 不同的 Skill（删过又重建），本机只装了其中一个。
+// 少的那份不代表用户不要了——按 id 比对会把它当成「别处没有」而误删云端那份。
+//
+// 比的是实体路径：共用一个技能目录时，同名的两份就是同一份文件，不算「别处还有」。
+func sameNameOtherCopy(entry syncstate.Entry, scanned []SyncTarget) bool {
+	for _, target := range scanned {
+		if target.Name != entry.Name {
+			continue
+		}
+		if entry.Path == "" {
+			// 老基线没记路径：同名就当别处还有，保守处理。
+			return true
+		}
+		if realSkillPath(target.Path) != realSkillPath(entry.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 // inScope 这条基线还在本次扫描范围内吗？

@@ -8,6 +8,9 @@ import (
 // maxWalkDepth 是遍历的深度上限。链接成环时靠它兜底收场。
 const maxWalkDepth = 32
 
+// maxLinkDepth 是解析嵌套链接的层数上限。链接成环时靠它兜底收场。
+const maxLinkDepth = 8
+
 // LinkTarget 取路径指向的真实目标；不是链接就返回 false。
 //
 // 不依赖 filepath.EvalSymlinks：Windows 上目录链接（junction / 重解析点）
@@ -21,10 +24,38 @@ func LinkTarget(path string) (string, bool) {
 	if err != nil || target == "" {
 		return "", false
 	}
+	// Windows 上 junction 的目标带 \\?\ 前缀，统一成普通路径：
+	// 后面的比较（是不是同一个目录）不能被前缀带偏。
+	if plain, err := filepath.Localize(target); err == nil {
+		target = plain
+	}
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(filepath.Dir(path), target)
 	}
 	return target, true
+}
+
+// ResolveLink 一层层解析链接，返回最终的真实路径；不是链接就返回原路径。
+//
+// 多层链接是常事：Agent 目录指向共享目录，共享目录又指向某个技能库。
+// 只解一层的话，后面拿它跟别的路径比还是比不出来。
+func ResolveLink(path string) string {
+	for i := 0; i < maxLinkDepth; i++ {
+		target, ok := LinkTarget(path)
+		if !ok {
+			return path
+		}
+		path = target
+	}
+	return path
+}
+
+// LinkDir 建一个指向 target 的目录链接（link 是链接本身）。
+//
+// 多个 Agent 共用一份技能内容时用得上：实体只存一份，
+// 各 Agent 的目录里放链接，谁都能读到同一份文件。
+func LinkDir(target, link string) error {
+	return linkDir(target, link)
 }
 
 // WriteTarget 返回内容该写到哪：链接就写它指向的真实目录。

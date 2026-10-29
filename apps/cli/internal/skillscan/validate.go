@@ -28,7 +28,7 @@ func ValidateDir(dir string, limits Limits) error {
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("Skill 目录不存在: %s", dir)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, SkillFile)); err != nil {
 		return fmt.Errorf("缺少 SKILL.md，不是合法的 Skill 目录: %s", dir)
 	}
 

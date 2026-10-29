@@ -102,3 +102,68 @@ func TestRemovalCandidatesHonoursOnly(t *testing.T) {
 		t.Fatalf("候选 %v，want 一条 slides", candidates)
 	}
 }
+
+// 云端有两个同名但 id 不同的 Skill，本机只装了其中一个：
+// 少的那份不算删（否则会误删云端那份）。
+func TestRemovalCandidatesSkipsSameNameOtherID(t *testing.T) {
+	root, removed := dropRoots(t)
+	state := syncstate.State{Skills: []syncstate.Entry{
+		{Name: "yuanbao", Agent: "codex", SkillID: "id-codex", Path: removed},
+	}}
+	// 本机装的是 claude-code 那份，云端 id 不同。
+	scanned := []SyncTarget{
+		{Name: "yuanbao", Agent: "claude-code", SkillID: "id-claude",
+			Path: filepath.Join(root, "yuanbao")},
+	}
+	candidates := removalCandidates(state, scanned, []scanRoot{{dir: root, agent: "codex"}},
+		SyncOptions{})
+	if len(candidates) != 0 {
+		t.Fatalf("候选 %v，want 空", candidates)
+	}
+}
+
+// 多个 Agent 共用一个目录：删掉这一份要传删除到云端。
+//
+// 同名的两条基线指向的是同一份文件，按名字判「别处还有」会漏传删除。
+func TestRemovalCandidatesSharedDirRemoved(t *testing.T) {
+	base := t.TempDir()
+	shared := filepath.Join(base, "shared")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := syncstate.State{Skills: []syncstate.Entry{
+		{Name: "yuanbao", Agent: "claude-code", SkillID: "id-1",
+			Path: filepath.Join(shared, "yuanbao")},
+		{Name: "yuanbao", Agent: "codex", SkillID: "id-1",
+			Path: filepath.Join(shared, "yuanbao")},
+	}}
+	candidates := removalCandidates(state, nil,
+		[]scanRoot{{dir: shared, agent: "claude-code"}}, SyncOptions{})
+	if len(candidates) != 2 {
+		t.Fatalf("候选 %d 条，want 2", len(candidates))
+	}
+}
+
+// 共用目录时文件还在：不算删除。
+func TestRemovalCandidatesSharedDirKeepsExisting(t *testing.T) {
+	base := t.TempDir()
+	shared := filepath.Join(base, "shared")
+	if err := os.MkdirAll(filepath.Join(shared, "yuanbao"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := syncstate.State{Skills: []syncstate.Entry{
+		{Name: "yuanbao", Agent: "claude-code", SkillID: "id-1",
+			Path: filepath.Join(shared, "yuanbao")},
+		{Name: "yuanbao", Agent: "codex", SkillID: "id-1",
+			Path: filepath.Join(shared, "yuanbao")},
+	}}
+	scanned := []SyncTarget{
+		{Name: "yuanbao", Agent: "claude-code",
+			Path: filepath.Join(shared, "yuanbao")},
+	}
+	candidates := removalCandidates(state, scanned,
+		[]scanRoot{{dir: shared, agent: "claude-code"}}, SyncOptions{})
+	if len(candidates) != 0 {
+		t.Fatalf("候选 %v，want 空", candidates)
+	}
+}
