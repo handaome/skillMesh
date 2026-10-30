@@ -32,6 +32,9 @@ type UpdateInfo struct {
 	// 不然「自动更新」策略和来源类型更新一次就没了。
 	UpdatePolicy string
 	Provider     string
+	// TargetPaths 是锁文件里记的安装路径（Agent 名 -> 路径）。
+	// 更新要覆盖的就是这个位置：按配置重算可能算到别处去。
+	TargetPaths map[string]string
 }
 
 // LsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
@@ -132,6 +135,7 @@ func checkUpdates(ctx context.Context, lock lockfile.Lock, skipManual bool) ([]U
 				RemoteCommit:  remote,
 				UpdatePolicy:  skill.UpdatePolicy,
 				Provider:      skill.Provider,
+				TargetPaths:   skill.TargetPaths,
 			})
 		}
 	}
@@ -263,9 +267,15 @@ func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock,
 }
 
 // installedDir 定位某个 Skill 现在装在本机的哪个目录。
+//
+// 优先用锁文件里记的路径：Agent 目录改了以后，按配置重算的位置与当初装的
+// 对不上（设计文档 §9.1）。
 func installedDir(projectRoot string, update UpdateInfo) (string, error) {
 	if len(update.Agents) == 0 {
 		return "", fmt.Errorf("%s 没有登记 Agent 目录", update.Name)
+	}
+	if path := update.TargetPaths[update.Agents[0]]; path != "" {
+		return path, nil
 	}
 	base, err := agent.Dir(Cfg, update.Agents[0], scopeOf(update.Scope, projectRoot), projectRoot)
 	if err != nil {
@@ -341,39 +351,51 @@ func ApplyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 		return err
 	}
 
+	// 目标路径按锁文件里记的来：分类分层（Hermes 的 <category>/<name>/）
+	// 与改过位置的 Agent 目录都靠它认对地方。
+	paths := map[string]string{}
 	for _, agentName := range update.Agents {
-		base, err := agent.Dir(Cfg, agentName, scopeOf(update.Scope, projectRoot), projectRoot)
-		if err != nil {
-			return err
+		target := update.TargetPaths[agentName]
+		if target == "" {
+			base, err := agent.Dir(Cfg, agentName, scopeOf(update.Scope, projectRoot), projectRoot)
+			if err != nil {
+				return err
+			}
+			target = filepath.Join(base, name)
 		}
-		target := filepath.Join(base, name)
 		if err := installOverwrite(skillDir, name, target); err != nil {
 			return err
 		}
 		if err := installer.MarkInstalled(target, update.Repository); err != nil {
 			return err
 		}
+		paths[agentName] = target
 	}
 	// 摘要取自刚装下去的那份内容：隐藏文件两边都不计，规则一致。
 	installedHash, err := skillscan.DirDigest(skillDir)
 	if err != nil {
 		installedHash = "" // 算不出来就留空，下次更新不做本地改动判断
 	}
-	lock.Upsert(lockfile.LockedSkill{
-		Name:           update.Name,
-		Repository:     update.Repository,
-		Path:           update.Path,
-		RefType:        RefTypeOf(update.Ref),
-		Ref:            update.Ref,
-		ResolvedCommit: commit,
-		Scope:          scopeOf(update.Scope, projectRoot),
-		InstalledHash:  installedHash,
-		Agents:         update.Agents,
-		// 策略与来源类型是原条目里的，原样带回：更新一次就把
-		// 「自动更新」和来源洗掉，等于让用户重新配一遍。
-		UpdatePolicy: update.UpdatePolicy,
-		Provider:     update.Provider,
-	})
+	// 锁文件里那条原样留着，只改更新的部分：
+	// source_id、许可证这些字段换条新的就丢了，等于让用户重新配一遍。
+	entry, ok := lock.Find(update.Name)
+	if !ok {
+		entry = lockfile.LockedSkill{Name: update.Name}
+	}
+	entry.Repository = update.Repository
+	entry.Path = update.Path
+	entry.RefType = RefTypeOf(update.Ref)
+	entry.Ref = update.Ref
+	entry.ResolvedCommit = commit
+	entry.Scope = scopeOf(update.Scope, projectRoot)
+	entry.InstalledHash = installedHash
+	entry.Agents = update.Agents
+	// 策略与来源类型是原条目里的，原样带回：更新一次就把
+	// 「自动更新」和来源洗掉，等于让用户重新配一遍。
+	entry.UpdatePolicy = update.UpdatePolicy
+	entry.Provider = update.Provider
+	entry.TargetPaths = paths
+	lock.Upsert(entry)
 	fmt.Printf("已更新 %s 到 %s\n", name, short(commit))
 	return nil
 }

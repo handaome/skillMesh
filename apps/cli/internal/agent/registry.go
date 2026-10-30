@@ -35,6 +35,55 @@ func RecursiveScan(agentCfg config.Agent) bool {
 	return *agentCfg.RecursiveScan
 }
 
+// CategoryDirs 判断这个 Agent 的安装目录要不要按分类分层。
+//
+// 分层是 Hermes 的官方布局（<category>/<name>/SKILL.md），
+// 别的 Agent 没开就还是一层。
+func CategoryDirs(agentCfg config.Agent) bool {
+	return agentCfg.CategoryDirs != nil && *agentCfg.CategoryDirs
+}
+
+// InstallPath 算出某个 Skill 装到这个 Agent 的哪个目录。
+//
+// category 是 SKILL.md 里 metadata.hermes.category 声明的分类：
+// Agent 开了 category_dirs 才按 <base>/<category>/<name> 分层，
+// 没开（也没声明分类）就是 <base>/<name>。
+func InstallPath(Cfg config.Config, agentName, scope, projectRoot,
+	skillName, category string) (string, error) {
+
+	base, err := Dir(Cfg, agentName, scope, projectRoot)
+	if err != nil {
+		return "", err
+	}
+	if CategoryDirs(Cfg.Agents[agentName]) {
+		if segment := categorySegment(category); segment != "" {
+			return filepath.Join(base, segment, skillName), nil
+		}
+	}
+	return filepath.Join(base, skillName), nil
+}
+
+// categorySegment 把分类名收拾成一个安全的路径段。
+//
+// 分类是文件里的一句话，不是路径：里面可能有斜杠，也可能就是「..」。
+// 拼进安装路径前先收拾掉，免得写到目录外面去。
+func categorySegment(category string) string {
+	segment := strings.TrimSpace(category)
+	if segment == "" {
+		return ""
+	}
+	segment = strings.ReplaceAll(segment, "/", "-")
+	segment = strings.ReplaceAll(segment, "\\", "-")
+	segment = strings.Trim(segment, ". ")
+	if segment == "" {
+		return ""
+	}
+	if runes := []rune(segment); len(runes) > 64 {
+		segment = string(runes[:64])
+	}
+	return segment
+}
+
 // ScanDirs 是这个 Agent 要扫的目录：主目录加上它自己配置的额外扫描根。
 //
 // 全局的那份额外扫描根（sync.extra_dirs）由调用方另算——它是所有 Agent 共用的。

@@ -88,6 +88,7 @@ func newRootCmd() *cobra.Command {
 		newDoctorCmd(), NewUpdateCmd(), newTrashCmd(),
 		newLogsCmd(), newSelfInstallCmd(),
 		newWatchCmd(), newShareCmd(),
+		newFixSkillCmd(),
 	)
 	hideAdvancedCommands(root)
 	return root
@@ -125,6 +126,7 @@ func applyTimeout(c *cobra.Command, raw string) error {
 func hideAdvancedCommands(root *cobra.Command) {
 	advanced := map[string]bool{
 		"add": true, "cloud": true, "doctor": true,
+		"fix-skill": true,
 		"group": true, "installations": true, "logs": true,
 		"review": true, "scan": true, "self-install": true,
 		"share": true, "source": true, "trash": true, "update": true, "watch": true,

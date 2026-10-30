@@ -236,6 +236,16 @@ const specMeta = computed(() => {
   if (Array.isArray(platforms) && platforms.length) {
     items.push({ label: 'platforms', value: platforms.join('、') })
   }
+  const tags = meta.tags
+  if (Array.isArray(tags) && tags.length) {
+    items.push({ label: 'tags', value: tags.join('、') })
+  }
+  // Hermes 的分类：装的时候它决定要不要按 <category>/<name>/ 分层。
+  const category = (meta.metadata as { hermes?: { category?: unknown } } | undefined)?.hermes
+    ?.category
+  if (typeof category === 'string' && category) {
+    items.push({ label: 'hermes.category', value: category })
+  }
   return items
 })
 

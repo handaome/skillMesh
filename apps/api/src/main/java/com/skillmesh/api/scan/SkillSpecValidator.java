@@ -41,6 +41,10 @@ public final class SkillSpecValidator {
             return parsed.error();
         }
         String name = text(parsed.meta().get("name"));
+        if (exempt(parsed.meta())) {
+            // 显式声明了不按规范校验：给改不了源文件的第三方 skill 留个口子。
+            return null;
+        }
         if (name.isEmpty()) {
             return "SKILL.md 的 frontmatter 缺 name";
         }
@@ -56,6 +60,9 @@ public final class SkillSpecValidator {
         if (descLen > MAX_DESCRIPTION_LEN) {
             return "SKILL.md 的 description 有 " + descLen + " 个字符，超过上限 "
                 + MAX_DESCRIPTION_LEN;
+        }
+        if (parsed.body().isBlank()) {
+            return "SKILL.md 只有 frontmatter，没有正文";
         }
         return null;
     }
@@ -93,9 +100,6 @@ public final class SkillSpecValidator {
         if (body.startsWith("\n")) {
             body = body.substring(1);
         }
-        if (body.isBlank()) {
-            return new Parsed(null, null, "SKILL.md 只有 frontmatter，没有正文");
-        }
         Map<?, ?> meta;
         try {
             Object parsed = new Yaml().load(text.substring(4, end));
@@ -111,5 +115,23 @@ public final class SkillSpecValidator {
 
     private static String text(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    /**
+     * 这个 skill 是否声明了「不按 agentskills.io 规范校验」。
+     *
+     * 声明在 frontmatter 的 {@code metadata.skillmesh.spec_exempt} 里。
+     * 与 CLI 侧同一套口径：两边都认，绕开哪一边都不管用。
+     */
+    private static boolean exempt(Map<?, ?> meta) {
+        Object metadata = meta.get("metadata");
+        if (!(metadata instanceof Map<?, ?> metadataMap)) {
+            return false;
+        }
+        Object skillmesh = metadataMap.get("skillmesh");
+        if (!(skillmesh instanceof Map<?, ?> map)) {
+            return false;
+        }
+        return Boolean.TRUE.equals(map.get("spec_exempt"));
     }
 }

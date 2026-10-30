@@ -120,6 +120,16 @@ func mergeAgents(lock *lockfile.Lock, entry lockfile.LockedSkill) lockfile.Locke
 				entry.Agents = append(entry.Agents, name)
 			}
 		}
+		// 目标路径也得留着：这次只装了一个 Agent，
+		// 之前装到别的 Agent 那份路径不能被这次覆盖掉。
+		paths := map[string]string{}
+		for name, path := range existing.TargetPaths {
+			paths[name] = path
+		}
+		for name, path := range entry.TargetPaths {
+			paths[name] = path
+		}
+		entry.TargetPaths = paths
 	}
 	return entry
 }
@@ -197,8 +207,11 @@ type installPlan struct {
 // 校验失败只影响它自己；安装名冲突或目标被占则跳过，不静默覆盖。
 //
 // source 是来源标识（仓库地址），用来判断目标目录里装的是不是同一个东西。
-func PlanInstalls(root string, candidates []skillscan.Candidate, base string,
-	source string, replace bool) installPlan {
+//
+// 目标路径按 agentName 算：分类分层（Hermes 的 <category>/<name>/）
+// 由 SKILL.md 声明决定，算出来的才是真正要装的位置。
+func PlanInstalls(root string, candidates []skillscan.Candidate,
+	agentName, scope, projectRoot, source string, replace bool) installPlan {
 	var plan installPlan
 	used := map[string]string{} // 安装名 -> 来源路径
 	for _, candidate := range candidates {
@@ -226,7 +239,11 @@ func PlanInstalls(root string, candidates []skillscan.Candidate, base string,
 		}
 		used[name] = rel
 
-		target := filepath.Join(base, name)
+		target, err := installTargetOf(agentName, scope, projectRoot, candidate.Dir, name)
+		if err != nil {
+			plan.Fail = append(plan.Fail, failItem{Path: rel, Why: err.Error()})
+			continue
+		}
 		if err := CheckTarget(target, source, replace); err != nil {
 			plan.Skip = append(plan.Skip, skipItem{Path: rel, Why: err.Error()})
 			continue

@@ -3,10 +3,8 @@ package cmd
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
@@ -136,13 +134,13 @@ func restoreOne(ctx context.Context, client *apiclient.Client, skill apiclient.S
 	installed := 0
 	var notes []string
 	for _, agentName := range options.Agents {
-		base, err := agent.Dir(Cfg, agentName, options.Scope, options.ProjectRoot)
+		installPath, err := installTargetOf(agentName, options.Scope, options.ProjectRoot,
+			skillDir, name)
 		if err != nil {
 			result.State = restoreFailed
 			result.Why = err.Error()
 			return result
 		}
-		installPath := filepath.Join(base, name)
 		exists := false
 		if _, err := os.Stat(installPath); err == nil {
 			exists = true

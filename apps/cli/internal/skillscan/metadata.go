@@ -31,7 +31,7 @@ func ReadMetadata(dir string) Metadata {
 	if err != nil {
 		return Metadata{}
 	}
-	frontmatter, _, ok := splitFrontmatter(string(data))
+	frontmatter, _, ok := SplitFrontmatter(string(data))
 	if !ok {
 		return Metadata{}
 	}
@@ -69,6 +69,46 @@ func (m Metadata) Extra() map[string]any {
 		extra["metadata"] = m.Metadata
 	}
 	return extra
+}
+
+// Exempt 判断这个 skill 是否声明了「不按 agentskills.io 规范校验」。
+//
+// 声明写在 frontmatter 的 metadata.skillmesh.spec_exempt 里。
+// 给改不了源文件的第三方 skill 留个口子——不然它们只能被拦死。
+//
+// 注意：没有 frontmatter 的老 skill 用不了豁免（声明本身要写在 frontmatter 里），
+// 只能用 fix-skill 先补一段。
+func (m Metadata) Exempt() bool {
+	skillmesh, ok := m.Metadata["skillmesh"].(map[string]any)
+	if !ok {
+		return false
+	}
+	exempt, ok := skillmesh["spec_exempt"].(bool)
+	return ok && exempt
+}
+
+// Category 是这个 skill 声明的分类。
+//
+// Hermes 的官方布局是 <category>/<name>/，分类取 frontmatter 里
+// metadata.hermes.category；没声明就没有分类，装的时候还是一层。
+func (m Metadata) Category() string {
+	hermes, ok := m.Metadata["hermes"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	category, ok := hermes["category"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(category)
+}
+
+// CategoryOf 读一个 Skill 目录里声明的分类。
+//
+// 没有 frontmatter 或没声明分类时返回空串——分类是可选的，
+// 没有分类的 skill 照样能装（装成一层）。
+func CategoryOf(dir string) string {
+	return ReadMetadata(dir).Category()
 }
 
 // SlugFromDirName 把目录名转成 API 接受的 slug。

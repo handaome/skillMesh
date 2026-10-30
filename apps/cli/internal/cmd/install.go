@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
@@ -181,15 +179,14 @@ func fetchArtifact(ctx context.Context, client *apiclient.Client,
 func installIntoAgent(ctx context.Context, client *apiclient.Client, skillDir string,
 	req installRequest, agentName, projectRoot string) (string, error) {
 
-	base, err := agent.Dir(Cfg, agentName, req.Scope, projectRoot)
-	if err != nil {
-		return "", err
-	}
 	name, err := skillDirName(skillDir)
 	if err != nil {
 		return "", err
 	}
-	installPath := filepath.Join(base, name)
+	installPath, err := installTargetOf(agentName, req.Scope, projectRoot, skillDir, name)
+	if err != nil {
+		return "", err
+	}
 	// 目标是链接时写它指向的真实目录（skills 管理器把库里的目录挂进 Agent 目录），
 	// 链接本身保留：替换掉等于把用户的目录布局拆了。
 	writePath := skillscan.WriteTarget(installPath)
@@ -236,17 +233,15 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		return err
 	}
 
-	// 装到多个 Agent 时记第一个的路径：锁文件一条对应一个安装，
-	// 目标路径记主要那个（设计文档 §9.1）。
-	installedPath := ""
+	// 装到多个 Agent 时每个都记一条路径：锁文件一条对应一个安装，
+	// 目标路径按 Agent 分开记（设计文档 §9.1）。
+	installedPaths := map[string]string{}
 	for _, agentName := range req.Agents {
 		path, err := installIntoAgent(ctx, client, skillDir, req, agentName, projectRoot)
 		if err != nil {
 			return err
 		}
-		if installedPath == "" {
-			installedPath = path
-		}
+		installedPaths[agentName] = path
 	}
 	if err := RecordInstall(InstallRecord{
 		ProjectRoot:   projectRoot,
@@ -256,7 +251,7 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		Scope:         req.Scope,
 		Agents:        req.Agents,
 		InstalledHash: InstalledDigest(skillDir),
-		TargetPath:    installedPath,
+		TargetPaths:   installedPaths,
 	}); err != nil {
 		return err
 	}
@@ -311,9 +306,10 @@ type InstallRecord struct {
 	Scope         string
 	Agents        []string
 	InstalledHash string
-	// TargetPath 是装到哪：Agent 目录改了以后，按配置重算的位置
+	// TargetPaths 是装到哪：Agent 目录改了以后，按配置重算的位置
 	// 与当初装的对不上（设计文档 §9.1 要求记「目标路径」）。
-	TargetPath string
+	// 一个 Agent 一条：装到几个 Agent 就有几个路径。
+	TargetPaths map[string]string
 }
 
 // RecordInstall 把这次安装写进锁文件。
@@ -331,7 +327,7 @@ func RecordInstall(record InstallRecord) error {
 		Scope:         record.Scope,
 		InstalledHash: record.InstalledHash,
 		Agents:        record.Agents,
-		TargetPath:    record.TargetPath,
+		TargetPaths:   record.TargetPaths,
 	}
 	if record.Target.Artifact != nil {
 		entry.SHA256 = record.Target.Artifact.SHA256

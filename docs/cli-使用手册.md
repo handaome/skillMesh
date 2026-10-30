@@ -357,6 +357,56 @@ description: 排查 Java 服务的启动与线程问题
 frontmatter 里还可以写 `platforms`、`tags`、`license`、`author`、`metadata.hermes.*`，
 发布时会随 skill 一起上云，别的地方装的时候能读到。
 
+### 补齐不合规的老 Skill
+
+存量 skill 没有 frontmatter 的，装不上也发不了云。跑一次就能补齐：
+
+```bash
+./skillmesh.exe fix-skill <目录>
+```
+
+`name` 取目录名，`description` 取正文第一段；已有的字段不动。加 `--dry-run` 只看会改成什么。
+补完还是不合规（比如正文也是空的）会直接报错，不会假装修好了。
+
+### 不想改源文件的老 Skill
+
+改不了源文件的第三方 skill，可以在 frontmatter 里声明豁免：
+
+```yaml
+---
+metadata:
+  skillmesh:
+    spec_exempt: true
+---
+```
+
+声明了就跳过规范校验，CLI 与服务端两边都认。没有 frontmatter 的老 skill 用不了豁免
+（声明本身要写在 frontmatter 里），先用 `fix-skill` 补一段。
+
+### Hermes 的分类目录
+
+Hermes 的官方布局是 `~/.hermes/skills/<category>/<name>/SKILL.md`。在 frontmatter 里
+声明分类，装的时候就会按分类分层：
+
+```yaml
+---
+name: java-debug
+description: 排查 Java 服务的启动与线程问题
+metadata:
+  hermes:
+    category: devops
+---
+```
+
+没声明分类还是装成一层。分类只在装到 Hermes 时生效——别的 Agent 不受影响。
+不想分层就在 `config.yaml` 里关掉：
+
+```yaml
+agents:
+  hermes:
+    category_dirs: false
+```
+
 ## 从注册中心装一个 Skill
 
 ```bash
@@ -581,6 +631,7 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 | `cloud recycle list` / `restore <path>` | 云端回收站：找回云端某个 Skill 里被删掉的文件 |
 | `cloud revoke <slug> <version>` | 撤回云端的某个版本（不可逆；要恢复只能发新版本） |
 | `share <agent> --from <agent>` | 让一个 Agent 共用另一个 Agent 的技能目录（磁盘上只存一份） |
+| `fix-skill <目录>` | 补齐 SKILL.md 的 frontmatter，让不合规的 Skill 能装能发 |
 
 `update` 默认只报不装——要动手得显式给 `--all` 或指定 Skill 名字。作用域（`user` 还是 `project`）记在锁文件里，`update`/`uninstall`/`list` 都以记录为准，不会把项目级安装误当成用户级。
 

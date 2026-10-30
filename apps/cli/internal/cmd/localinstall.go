@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
@@ -73,7 +72,8 @@ func installFromDir(opts localInstallOptions) error {
 
 	// 先把全部候选校验一遍、定好计划，再动手装：
 	// 一个 Skill 有问题不该挡住其他全部。
-	plan := PlanInstalls(opts.Root, candidates, base, opts.Source, opts.Replace)
+	plan := PlanInstalls(opts.Root, candidates, targets[0], targetScope, projectRoot,
+		opts.Source, opts.Replace)
 	reportPlan(plan, base, opts.DryRun)
 	if opts.DryRun {
 		return nil
@@ -97,12 +97,12 @@ func installFromDir(opts localInstallOptions) error {
 		// 每个目标 Agent 都装一份；一个失败不影响别的。
 		installedHere := false
 		for _, agentName := range targets {
-			agentBase, err := agent.Dir(Cfg, agentName, targetScope, projectRoot)
+			target, err := installTargetOf(agentName, targetScope, projectRoot,
+				item.Candidate.Dir, item.Name)
 			if err != nil {
 				plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
 				continue
 			}
-			target := filepath.Join(agentBase, item.Name)
 			if err := installer.InstallAtomic(item.Candidate.Dir, target, true); err != nil {
 				plan.Fail = append(plan.Fail, failItem{Path: item.RelPath, Why: err.Error()})
 				continue
@@ -128,7 +128,7 @@ func installFromDir(opts localInstallOptions) error {
 				Agents:         []string{agentName},
 				// 记下实际装到哪：Agent 目录改了以后，
 				// 按配置重算的位置与当初装的对不上（设计文档 §9.1）。
-				TargetPath: target,
+				TargetPaths: map[string]string{agentName: target},
 				// 许可证识别结果只是线索，不等于可以再分发。
 				License: skillscan.DetectLicense(item.Candidate.Dir, opts.Root),
 			}))

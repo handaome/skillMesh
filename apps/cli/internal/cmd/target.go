@@ -1,8 +1,21 @@
 package cmd
 
 import (
+	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
+	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 )
+
+// installTargetOf 算出某个 Skill 目录装到某个 Agent 的哪个路径。
+//
+// 分类分层（Hermes 的 <category>/<name>/）由 SKILL.md 里
+// metadata.hermes.category 决定，Agent 没开 category_dirs 时不分层。
+//
+// 装、列、卸都走这里：路径只由这一处说了算，别的地方各自拼一遍就会对不上。
+func installTargetOf(agentName, scope, projectRoot, skillDir, skillName string) (string, error) {
+	return agent.InstallPath(Cfg, agentName, scope, projectRoot, skillName,
+		skillscan.CategoryOf(skillDir))
+}
 
 // CheckTarget 检查安装目标能不能用。
 //

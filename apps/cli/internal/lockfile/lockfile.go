@@ -39,13 +39,20 @@ type LockedSkill struct {
 	Scope          string   `yaml:"scope,omitempty"`
 	UpdatePolicy   string   `yaml:"update_policy,omitempty"`
 	Agents         []string `yaml:"agents"`
-	// TargetPath 是实际装到哪。记下来是因为 Agent 目录会变：
-	// 改了 config 里的路径，按配置重算出来的位置与当初装的对不上，
-	// 卸载就会卸错地方（设计文档 §9.1 要求锁文件记「目标路径」）。
-	TargetPath string `yaml:"target_path,omitempty"`
+	// TargetPaths 是每个 Agent 的实际安装路径（Agent 名 -> 路径）。
+	//
+	// 记下来是因为 Agent 目录会变：改了 config 里的路径，按配置重算出来的
+	// 位置与当初装的对不上，卸载就会卸错地方（设计文档 §9.1 要求锁文件记
+	// 「目标路径」）。一个 Agent 一条：装到几个 Agent 就有几个路径。
+	TargetPaths map[string]string `yaml:"target_paths,omitempty"`
 	// License 是识别到的许可证及识别状态（设计文档 §7.1）。
 	// 只能重新分发不等于一定能分发，识别结果只是线索。
 	License string `yaml:"license,omitempty"`
+}
+
+// TargetPathOf 取某个 Agent 的实际安装路径。没记录时返回空串。
+func (s LockedSkill) TargetPathOf(agentName string) string {
+	return s.TargetPaths[agentName]
 }
 
 func Path(projectRoot string) string {

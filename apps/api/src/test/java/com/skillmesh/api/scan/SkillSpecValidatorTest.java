@@ -41,6 +41,26 @@ class SkillSpecValidatorTest {
             .isNull();
     }
 
+    /**
+     * 声明了豁免的 skill 放行：改不了源文件的第三方 skill 得有个出口。
+     *
+     * 豁免声明写在 frontmatter 的 {@code metadata.skillmesh.spec_exempt} 里，
+     * 与 CLI 侧同一套口径。
+     */
+    @Test
+    void 声明了豁免的放行() {
+        assertThat(violation("---\nmetadata:\n  skillmesh:\n    spec_exempt: true\n---\n\n正文。\n"))
+            .isNull();
+        assertThat(violation("---\nname: x\ndescription: y\nmetadata:\n  skillmesh:\n"
+            + "    spec_exempt: true\n---\n\n   \n")).isNull();
+    }
+
+    @Test
+    void 豁免写错了不算豁免() {
+        assertThat(violation("---\nmetadata:\n  skillmesh:\n    spec_exempt: nope\n---\n\n正文。\n"))
+            .contains("缺 name");
+    }
+
     @Test
     void 不合规的制品扫描结论是失败() {
         byte[] zip = zip("SKILL.md", "# 没有 frontmatter\n");

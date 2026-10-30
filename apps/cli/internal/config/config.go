@@ -96,6 +96,13 @@ type Agent struct {
 	// 有些 Agent 的 skills 目录是扁平的，递归会把技能自带的子目录也当成候选。
 	// 用指针而不是 bool：bool 分不出「没配」与「显式关掉」。
 	RecursiveScan *bool `yaml:"recursive_scan,omitempty"`
+	// CategoryDirs 控制安装时要不要按分类分层。
+	//
+	// Hermes 的官方布局是 <category>/<name>/SKILL.md，分类取 SKILL.md 里
+	// metadata.hermes.category 声明的值；没声明还是装成一层。
+	// 用指针而不是 bool：bool 分不出「没配」与「显式关掉」——
+	// 没配时该沿用默认（Hermes 开、其它关）。
+	CategoryDirs *bool `yaml:"category_dirs,omitempty"`
 	// DetectedDir 是启动时在本机探测到的目录（设计文档 §8：
 	// 「按当前 Cursor 版本验证支持路径」）。空串表示没探测到，用的是配置值。
 	DetectedDir string `yaml:"-"`
@@ -104,6 +111,10 @@ type Agent struct {
 // 在本机上确实存在的目录才算探测到——目录不存在说明这个 Cursor 版本
 // 可能根本不用它，写进去也没人读。
 func (a Agent) Detected() bool { return a.DetectedDir != "" }
+
+// boolPtr 取一个 bool 的指针。配置里的开关用指针表示「没配」，
+// 默认值与显式设置才分得开。
+func boolPtr(v bool) *bool { return &v }
 
 // dirExists 目录在不在。
 func dirExists(path string) bool {
@@ -133,13 +144,15 @@ func defaults() Config {
 			},
 			// Hermes 的技能目录：~/.hermes/skills。
 			//
-			// 官方布局是 <category>/<name>/SKILL.md，这里装成扁平的一层：
-			// Hermes 递归扫技能目录，一层子目录同样能发现（skill_view 先按
-			// 目录名直接找，找不到再递归按目录名匹配）。扁平对别的 Agent 也没坏处。
+			// 官方布局是 <category>/<name>/SKILL.md：分类取 SKILL.md 里
+			// metadata.hermes.category 声明的值，没声明还是一层。
+			// Hermes 递归扫技能目录，两种布局它都认（skill_view 先按目录名
+			// 直接找，找不到再递归按目录名匹配）。
 			"hermes": {
 				Enabled:       true,
 				UserSkillsDir: filepath.Join(homeDir(), ".hermes", "skills"),
 				ProjectSkills: filepath.Join(".hermes", "skills"),
+				CategoryDirs:  boolPtr(true),
 			},
 			// Cursor 有两个候选用户级路径（设计文档 §8）：
 			// ~/.cursor/skills 与 ~/.agents/skills。启动时探测哪个真的存在，
@@ -270,6 +283,10 @@ func applyFile(Cfg *Config, file Config) {
 		}
 		if agent.ProjectSkills != "" {
 			existing.ProjectSkills = agent.ProjectSkills
+		}
+		// 分层开关：没配就沿用默认（Hermes 开、其它关）。
+		if agent.CategoryDirs != nil {
+			existing.CategoryDirs = agent.CategoryDirs
 		}
 		Cfg.Agents[name] = existing
 	}

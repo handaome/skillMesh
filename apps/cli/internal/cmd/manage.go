@@ -34,6 +34,22 @@ func agentDirFor(name string, entry lockfile.LockedSkill, projectRoot string) (s
 	return agent.Dir(Cfg, name, scopeOf(entry.Scope, projectRoot), projectRoot)
 }
 
+// targetPathOf 算出这个 Skill 在某个 Agent 里的实际安装路径。
+//
+// 优先用锁文件里记的路径：Agent 目录改了以后，按配置重算出来的位置与当初
+// 装的对不上，卸载就会卸错地方（设计文档 §9.1）。
+// 老锁文件没有这个字段，才退回按配置算。
+func targetPathOf(agentName string, entry lockfile.LockedSkill, projectRoot string) (string, error) {
+	if path := entry.TargetPathOf(agentName); path != "" {
+		return path, nil
+	}
+	base, err := agentDirFor(agentName, entry, projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, entry.Name), nil
+}
+
 // listEntry 是 list 的一行。数据来自本机锁文件与磁盘实态，云端没有对应结构。
 type listEntry struct {
 	Skill   string `json:"skill"`
@@ -91,11 +107,10 @@ func listEntries(lock lockfile.Lock, projectRoot string) []listEntry {
 	entries := make([]listEntry, 0, len(lock.Skills))
 	for _, skill := range lock.Skills {
 		for _, agentName := range skill.Agents {
-			base, err := agentDirFor(agentName, skill, projectRoot)
+			target, err := targetPathOf(agentName, skill, projectRoot)
 			if err != nil {
-				base = "?"
+				target = "?"
 			}
-			target := filepath.Join(base, skill.Name)
 			shown := target
 			if !verbose {
 				shown = redact.Path(target)
@@ -185,11 +200,10 @@ func newUninstallCmd() *cobra.Command {
 				return fmt.Errorf("锁文件中没有 %s", args[0])
 			}
 			for _, agentName := range entry.Agents {
-				base, err := agentDirFor(agentName, entry, projectRoot)
+				target, err := targetPathOf(agentName, entry, projectRoot)
 				if err != nil {
 					return err
 				}
-				target := filepath.Join(base, entry.Name)
 				if err := uninstallTarget(entry.Name, target, force, purge); err != nil {
 					return err
 				}

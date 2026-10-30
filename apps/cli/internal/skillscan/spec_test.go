@@ -64,3 +64,28 @@ func TestValidateSpec正文里的分隔线(t *testing.T) {
 		t.Fatalf("不该拦：%v", err)
 	}
 }
+
+// 声明了豁免的 skill 不按规范校验：改不了源文件的第三方 skill 得有个出口。
+// 豁免声明写在 metadata.skillmesh.spec_exempt 里，与服务端同一套口径。
+func TestValidateSpec豁免(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nmetadata:\n  skillmesh:\n    spec_exempt: true\n---\n\n正文。\n"
+	if err := os.WriteFile(filepath.Join(dir, SkillFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSpec(dir); err != nil {
+		t.Fatalf("豁免的不该拦：%v", err)
+	}
+}
+
+// 豁免写错了不算豁免：值必须是 true。
+func TestValidateSpec豁免写错了不算豁免(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nmetadata:\n  skillmesh:\n    spec_exempt: nope\n---\n\n正文。\n"
+	if err := os.WriteFile(filepath.Join(dir, SkillFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSpec(dir); err == nil {
+		t.Fatal("不该放行")
+	}
+}

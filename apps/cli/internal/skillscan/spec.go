@@ -31,7 +31,13 @@ func ValidateSpec(dir string) error {
 	if err != nil {
 		return fmt.Errorf("缺少 %s，不是合法的 Skill 目录", SkillFile)
 	}
-	content := string(data)
+	return ValidateSpecContent(string(data))
+}
+
+// ValidateSpecContent 校验一份 SKILL.md 的内容。
+//
+// 分出来是为了让豁免判断与内容解析只做一次：豁免声明本身就在 frontmatter 里。
+func ValidateSpecContent(content string) error {
 	if n := len([]rune(content)); n > MaxSkillFileChars {
 		return fmt.Errorf("%s 共 %d 字符，超过上限 %d", SkillFile, n, MaxSkillFileChars)
 	}
@@ -39,13 +45,16 @@ func ValidateSpec(dir string) error {
 	if !strings.HasPrefix(normalized, "---\n") {
 		return fmt.Errorf("%s 开头必须是 --- 包裹的 YAML frontmatter", SkillFile)
 	}
-	frontmatter, body, ok := splitFrontmatter(normalized)
+	frontmatter, body, ok := SplitFrontmatter(normalized)
 	if !ok {
 		return fmt.Errorf("%s 的 frontmatter 没有闭合", SkillFile)
 	}
 	var meta Metadata
 	if err := yaml.Unmarshal([]byte(frontmatter), &meta); err != nil {
 		return fmt.Errorf("%s 的 frontmatter 不是合法 YAML：%v", SkillFile, err)
+	}
+	if meta.Exempt() {
+		return nil
 	}
 	if meta.Name == "" {
 		return fmt.Errorf("%s 的 frontmatter 缺 name", SkillFile)
@@ -66,11 +75,11 @@ func ValidateSpec(dir string) error {
 	return nil
 }
 
-// splitFrontmatter 取出开头 --- ... --- 之间的 YAML 与之后的正文。
+// SplitFrontmatter 取出开头 --- ... --- 之间的 YAML 与之后的正文。
 //
 // 闭合标记认的是行首的 ---（后跟换行或文件结束），免得正文里的分隔线
 // 把 frontmatter 提前截断。
-func splitFrontmatter(content string) (string, string, bool) {
+func SplitFrontmatter(content string) (string, string, bool) {
 	normalized := strings.ReplaceAll(content, "\r\n", "\n")
 	if !strings.HasPrefix(normalized, "---\n") {
 		return "", "", false
