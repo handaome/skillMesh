@@ -7,8 +7,8 @@ import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.group.dto.GroupRequest;
 import com.skillmesh.api.group.dto.GroupResponse;
 import com.skillmesh.api.install.InstallationRepository;
-import com.skillmesh.api.org.OrgService;
-import com.skillmesh.api.org.Roles;
+import com.skillmesh.api.org.AuthorizationService;
+import com.skillmesh.api.org.Permission;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
@@ -41,16 +41,17 @@ public class GroupService {
     private final SkillRepository skills;
     private final SkillService skillService;
     private final InstallationRepository installations;
-    private final OrgService orgs;
+    private final AuthorizationService auth;
     private final AuditService audit;
 
     public GroupService(GroupRepository groups, SkillRepository skills, SkillService skillService,
-                        InstallationRepository installations, OrgService orgs, AuditService audit) {
+                        InstallationRepository installations, AuthorizationService auth,
+                        AuditService audit) {
         this.groups = groups;
         this.skills = skills;
         this.skillService = skillService;
         this.installations = installations;
-        this.orgs = orgs;
+        this.auth = auth;
         this.audit = audit;
     }
 
@@ -170,9 +171,7 @@ public class GroupService {
 
     private GroupEntity requireOwned(CurrentUser user, UUID id) {
         GroupEntity entity = requireVisible(user, id);
-        if (!user.id().equals(entity.getOwnerUserId())) {
-            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能改这个集合");
-        }
+        auth.requireOwner(user, entity.getOwnerUserId(), "只有属主能改这个集合");
         return entity;
     }
 
@@ -185,12 +184,12 @@ public class GroupService {
             return true;
         }
         if ("organization".equals(entity.getVisibility())) {
-            return orgs.roleIn(entity.getOrganizationId(), null, user.id()) != null
-                && !orgs.roleIn(entity.getOrganizationId(), null, user.id()).isEmpty();
+            return !auth.effectiveRole(user.id(), entity.getOrganizationId(), null).isEmpty();
         }
         if ("team".equals(entity.getVisibility())) {
-            String role = orgs.roleIn(entity.getOrganizationId(), entity.getOwnerTeamId(), user.id());
-            return role != null && !role.isEmpty();
+            String role = auth.effectiveRole(user.id(), entity.getOrganizationId(),
+                entity.getOwnerTeamId());
+            return !role.isEmpty();
         }
         return false;
     }
@@ -200,10 +199,7 @@ public class GroupService {
         if (organizationId == null) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "团队集合要指定组织");
         }
-        String role = orgs.roleIn(organizationId, teamId, user.id());
-        if (role == null || role.isEmpty() || !OrgService.roleAtLeast(role, Roles.PUBLISHER_ROLE)) {
-            throw new ApiException(403, ErrorCodes.FORBIDDEN, "需要 publisher 及以上角色");
-        }
+        auth.requirePermission(user, Permission.GROUP_PUBLISH, organizationId, teamId);
     }
 
     private static String requireSupportedVisibility(String visibility) {

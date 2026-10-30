@@ -46,6 +46,9 @@ public final class Roles {
      * 组织管理员档位（owner 与 admin）：能管成员、邀请、团队。
      *
      * 从词表推出来，不手敲字面量——往词表里加一档新角色时权限判断自动认它。
+     *
+     * 只用于词表自检与「这一档是不是管理员」的查询；
+     * 能不能做某件事认 {@link RolePermissions} 里的权限点，改这里不会改权限。
      */
     public static final Set<String> ORG_ADMIN_ROLES = atOrAbove(ORG_RANK, ADMIN_ROLE);
 
@@ -61,7 +64,7 @@ public final class Roles {
     /** 组织 owner 档位：改 owner 身份只有这一档能做。 */
     public static final Set<String> ORG_OWNER_ROLES = atOrAbove(ORG_RANK, OWNER_ROLE);
 
-    /** 团队管理员档位。 */
+    /** 团队管理员档位。同样只用于词表自检，权限判定见 {@link RolePermissions}。 */
     public static final Set<String> TEAM_ADMIN_ROLES = atOrAbove(TEAM_RANK, ADMIN_ROLE);
 
     /** 邀请能授的组织角色（有序）：ORG_RANK 去掉 owner。 */

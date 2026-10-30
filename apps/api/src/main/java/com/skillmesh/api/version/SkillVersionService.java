@@ -8,6 +8,7 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
@@ -48,11 +49,13 @@ public class SkillVersionService {
     private final ArtifactStorage storage;
     private final ScanRepository scans;
     private final AuditService audit;
+    private final AuthorizationService auth;
 
     public SkillVersionService(ScanRepository scans, SkillVersionRepository versions,
                                SkillRepository skills, SkillService skillService,
                                UploadSessionRepository uploads, ArtifactService artifacts,
-                               ArtifactStorage storage, AuditService audit) {
+                               ArtifactStorage storage, AuditService audit,
+                               AuthorizationService auth) {
         this.versions = versions;
         this.skills = skills;
         this.skillService = skillService;
@@ -61,6 +64,7 @@ public class SkillVersionService {
         this.uploads = uploads;
         this.artifacts = artifacts;
         this.storage = storage;
+        this.auth = auth;
     }
 
     /** 创建候选版本，同时开一个上传会话，返回直传对象存储的签名地址。 */
@@ -272,9 +276,7 @@ public class SkillVersionService {
     @Transactional
     public Map<String, Object> revoke(CurrentUser user, UUID skillId, String version, String reason) {
         SkillEntity skill = skillService.requireVisibleSkill(user, skillId);
-        if (!skill.getOwnerUserId().equals(user.id())) {
-            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能撤回自己的版本");
-        }
+        auth.requireOwner(user, skill.getOwnerUserId(), "只有属主能撤回自己的版本");
         SkillVersionEntity entity = versions.findBySkillIdAndVersionForUpdate(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
         if ("revoked".equals(entity.getStatus())) {
