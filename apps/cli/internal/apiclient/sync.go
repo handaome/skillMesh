@@ -3,6 +3,7 @@ package apiclient
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 
@@ -78,6 +79,55 @@ func (c *Client) SubmitChangeset(ctx context.Context, deviceID, IdempotencyKey s
 	headers := map[string]string{"X-Device-Id": deviceID, "Idempotency-Key": IdempotencyKey}
 	if err := c.doWith(ctx, http.MethodPost, "/sync/changesets", nil, req, &out, headers); err != nil {
 		return SyncChangesetResponse{}, err
+	}
+	return out, nil
+}
+
+// SyncFileSpec 是要上传的一个文件：变更集里 upsert 的那一项。
+type SyncFileSpec struct {
+	Path        string `json:"path"`
+	SHA256      string `json:"sha256"`
+	SizeBytes   int64  `json:"size_bytes"`
+	ContentType string `json:"content_type,omitempty"`
+}
+
+// SyncUploadSlot 是服务端开好的上传会话。
+type SyncUploadSlot struct {
+	Path string `json:"path"`
+	// UploadID 是上传会话的 ID：传完用它调 complete 让服务端校验。
+	UploadID string `json:"upload_id"`
+	// UploadURL 是把文件内容 PUT 过去的位置（相对 API base 的地址）。
+	UploadURL string            `json:"upload_url"`
+	Headers   map[string]string `json:"headers"`
+}
+
+// OpenChangesetUploads 为变更集里变了的文件开上传会话。
+//
+// 只开变了的那些：没变的文件服务端从基线里取，不用重传
+// （设计文档 §6.2「未变化文件不重复传输」）。
+func (c *Client) OpenChangesetUploads(ctx context.Context, changesetID string,
+	files []SyncFileSpec) ([]SyncUploadSlot, error) {
+
+	var out []SyncUploadSlot
+	path := "/sync/changesets/" + url.PathEscape(changesetID) + "/uploads"
+	if err := c.doWith(ctx, http.MethodPost, path, nil, files, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CommitChangeset 提交变更集：基线对得上就生成新版本，对不上服务端回 409。
+func (c *Client) CommitChangeset(ctx context.Context, changesetID,
+	expectedRevision string) (map[string]any, error) {
+
+	body := map[string]any{}
+	if expectedRevision != "" {
+		body["expected_revision"] = expectedRevision
+	}
+	var out map[string]any
+	path := "/sync/changesets/" + url.PathEscape(changesetID) + "/commit"
+	if err := c.doWith(ctx, http.MethodPost, path, nil, body, &out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

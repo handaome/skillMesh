@@ -353,6 +353,12 @@ type SyncTarget struct {
 	// CloudHash 是本次看到的云端已发布版本内容摘要。
 	// 决策用它，上传也用它：两者不是同一个值的话，服务端的基线校验形同虚设。
 	CloudHash string
+	// CloudFiles 是云端已发布版本的逐文件摘要。
+	// 增量上传靠它算出「哪些文件变了」：没变的文件不用重传（设计文档 §6.2）。
+	CloudFiles map[string]string
+	// ChangesetID 是这次同步在服务端登记的变更集。
+	// 增量上传用它开上传会话并提交（详细设计 §2.4.2）；空串表示没有变更集。
+	ChangesetID string
 	// BaseFiles / BaseSnapshot 是上次同步时的逐文件摘要与内容副本。
 	// 这次同步没达成新共识时要原样带回去：基线只能前进，不能被写成本地当前内容。
 	BaseFiles    map[string]string
@@ -551,11 +557,12 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
 	cloudHash := ""
+	cloudFiles := map[string]string{}
 	if found {
 		// 云端给的 ID 才是真的：本机记的可能指向旧库（服务端的库重建过，
 		// 旧的 skill_id 就是条死链），拿它去报变更集只会换来一句 404。
 		target.SkillID = skill.ID
-		cloudHash, err = cloudDigest(ctx, client, skill.ID, local.SHA256)
+		cloudHash, cloudFiles, err = cloudPublished(ctx, client, skill.ID, local.SHA256)
 		if err != nil {
 			return failedResult(target, err.Error()), syncstate.Entry{}, nil
 		}
@@ -563,6 +570,7 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	// 记下这次看到的云端摘要：决策用它，上传也用它。
 	// 上传带的基线必须是决策时依据的那个值，否则服务端的基线校验形同虚设。
 	target.CloudHash = cloudHash
+	target.CloudFiles = cloudFiles
 
 	decision := syncstate.Decide(target.BaseHash, localHash, cloudHash)
 	changeset := ""
@@ -585,6 +593,8 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 			decision = syncstate.Conflict
 		}
 	}
+	// 变更集留着：增量上传要用它开上传会话并提交（详细设计 §2.4.2）。
+	target.ChangesetID = changeset
 	result, entry, err := ApplyDecision(ctx, client, target, decision, local, localHash,
 		skill, found, options)
 	if result.SkillID == "" {
@@ -742,6 +752,12 @@ func ApplyDecision(ctx context.Context, client *apiclient.Client, target SyncTar
 		if reason := deleteBlocked(target, local, options); reason != "" {
 			return syncResult{Name: target.Name, Path: target.Path, Outcome: PendingDelete,
 				Detail: reason}, entry, nil
+		}
+		// 增量上传：云端有已发布版本、且这次登记了变更集时，只传变了的文件，
+		// 服务端拿基线补齐其余的（设计文档 §6.2）。
+		// 拿不到变更集（老服务端、演练）就退回整包发布那条路。
+		if target.ChangesetID != "" && len(target.CloudFiles) > 0 {
+			return uploadByChangeset(ctx, client, target, local, localHash, skill, found)
 		}
 		result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
 			RelPath: filepath.Base(target.Path)},
@@ -1025,28 +1041,40 @@ func ManifestDigest(entries []packager.Entry) string {
 	return skillscan.Digest(files)
 }
 
-// cloudDigest 取云端最新已发布版本的内容摘要。
+// cloudPublished 取云端最新已发布版本的内容摘要与逐文件摘要。
+//
 // 老版本没有 manifest，退化成比 zip 摘要（拿不到就返回空串，判定为「云端没有可比的内容」）。
-func cloudDigest(ctx context.Context, client *apiclient.Client, skillID,
-	localZipSHA string) (string, error) {
+func cloudPublished(ctx context.Context, client *apiclient.Client, skillID,
+	localZipSHA string) (string, map[string]string, error) {
 
 	versions, err := client.Versions(ctx, skillID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	for _, item := range versions.Items {
 		if item.Status != "published" {
 			continue
 		}
 		if len(item.Manifest) > 0 {
-			return remoteDigest(item), nil
+			return remoteDigest(item), cloudFiles(item), nil
 		}
 		if item.Artifact != nil && item.Artifact.SHA256 == localZipSHA {
-			return "", nil // 内容和本地一样，判定会走 UpToDate
+			return "", nil, nil // 内容和本地一样，判定会走 UpToDate
 		}
-		return localZipSHA + "-zip", nil
+		return localZipSHA + "-zip", nil, nil
 	}
-	return "", nil
+	return "", nil, nil
+}
+
+// cloudFiles 把云端版本的清单摊成「路径 -> 内容摘要」。
+//
+// 增量上传靠它算出「哪些文件变了」：云端没这个文件是新增，摘要不一样是改动。
+func cloudFiles(version apiclient.SkillVersion) map[string]string {
+	files := make(map[string]string, len(version.Manifest))
+	for _, entry := range version.Manifest {
+		files[entry.Path] = entry.SHA256
+	}
+	return files
 }
 
 func remoteDigest(version apiclient.SkillVersion) string {

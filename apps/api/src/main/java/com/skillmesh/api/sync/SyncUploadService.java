@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -103,6 +104,15 @@ public class SyncUploadService {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         // 顺手清过期会话：对象存储的临时对象会自动过期，这张表不跟着清就一直涨。
         uploads.deleteExpired(now);
+        // 重传同一路径时复用已有的会话：临时对象 key 与 (变更集, 路径) 绑定，
+        // 重新建会话会撞唯一索引（uq_sync_upload_path）变成 500——
+        // 一次网络抖动后的重传就再也传不上去，同步卡死在那一版。
+        Map<String, UploadSessionEntity> reusable = new LinkedHashMap<>();
+        for (UploadSessionEntity session :
+                uploads.findByChangesetIdAndPurposeOrderByRelativePathAsc(
+                    changesetId, UploadSessionEntity.PURPOSE_SYNC_FILE)) {
+            reusable.put(session.getRelativePath(), session);
+        }
         List<UploadSlot> slots = new ArrayList<>();
         Set<String> paths = new HashSet<>();
         for (FileSpec file : files) {
@@ -113,18 +123,23 @@ public class SyncUploadService {
                 throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                     "变更集里有重名的文件：" + file.path());
             }
-            UploadSessionEntity session = new UploadSessionEntity();
-            session.setId(UUID.randomUUID());
-            session.setActorUserId(user.id());
-            session.setDeviceId(changeset.getDeviceId());
-            session.setPurpose(UploadSessionEntity.PURPOSE_SYNC_FILE);
-            session.setChangesetId(changesetId);
-            session.setRelativePath(file.path());
-            session.setTemporaryStorageKey(tempKey(changesetId, file.path()));
+            UploadSessionEntity session = reusable.remove(file.path());
+            if (session == null) {
+                session = new UploadSessionEntity();
+                session.setId(UUID.randomUUID());
+                session.setActorUserId(user.id());
+                session.setDeviceId(changeset.getDeviceId());
+                session.setPurpose(UploadSessionEntity.PURPOSE_SYNC_FILE);
+                session.setChangesetId(changesetId);
+                session.setRelativePath(file.path());
+                session.setTemporaryStorageKey(tempKey(changesetId, file.path()));
+                session.setCreatedAt(now);
+            }
+            // 复用时把状态拨回「待上传」：传完的那次可能已经校验过，
+            // 但内容要重新传一遍才作数。
             session.setExpectedSha256(file.sha256());
             session.setExpectedSizeBytes(file.sizeBytes());
             session.setStatus("created");
-            session.setCreatedAt(now);
             session.setExpiresAt(now.plus(ArtifactService.UPLOAD_TTL));
             uploads.save(session);
 
@@ -176,7 +191,23 @@ public class SyncUploadService {
                     + ContentDigest.shortDigest(cloud) + "），本次提交没生效");
         }
 
-        List<UploadedFile> files = collectUploadedFiles(changesetId);
+        List<UploadedFile> files = mergeFiles(baselineFiles(changeset, rows),
+            collectUploadedFiles(changesetId), manifestOf(changeset));
+        if (files.isEmpty()) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "变更集里没有文件");
+        }
+        // 合出来的内容必须与客户端声明的目标一致：对不上就是合错了，
+        // 这时候宁可报错也别发布一份缺文件的版本（设计文档 §6.2）。
+        String merged = ContentDigest.of(manifestJson(files));
+        String declared = changeset.getTargetRevision();
+        if (declared != null && !declared.isBlank() && !declared.equals(merged)) {
+            changeset.setStatus("conflict");
+            changesets.save(changeset);
+            throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
+                "这次同步的内容与本地声明的不一致（合出来 "
+                    + ContentDigest.shortDigest(merged) + "，声明 "
+                    + ContentDigest.shortDigest(declared) + "），没有提交");
+        }
         byte[] zip = zip(files);
         String sha256 = ContentDigest.sha256(zip);
         // 内容寻址落桶：同一份内容在桶里只留一份。
@@ -251,9 +282,102 @@ public class SyncUploadService {
         result.put("changeset_id", changesetId.toString());
         result.put("status", "completed");
         result.put("version", version.getVersion());
+        result.put("version_status", version.getStatus());
         result.put("sha256", sha256);
         result.put("files", files.size());
         return result;
+    }
+
+    /**
+     * 基线文件：上次同步时双方都认可的那份内容。
+     *
+     * 增量上传只传变了的文件，服务端要拿基线补齐其余的——
+     * 「未变化文件不重复传输」（设计文档 §6.2）说的就是这件事。
+     *
+     * 基线就是「基线摘要对得上、且有制品」的那一版已发布版本；
+     * 找不到就当没有基线（传上来的就是全部）。
+     */
+    private Map<String, byte[]> baselineFiles(SyncChangesetEntity changeset,
+                                             List<SkillVersionEntity> rows) throws IOException {
+        String base = changeset.getBaseRevision();
+        if (base == null || base.isBlank()) {
+            return Map.of();
+        }
+        SkillVersionEntity version = baselineVersion(rows, base);
+        if (version == null) {
+            return Map.of();
+        }
+        ArtifactEntity artifact = artifacts.require(version.getArtifactId());
+        Map<String, byte[]> files = new LinkedHashMap<>();
+        try (ZipInputStream zis = new ZipInputStream(artifacts.open(artifact))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                files.put(entry.getName(), zis.readAllBytes());
+            }
+        }
+        return files;
+    }
+
+    /** 基线版本：内容摘要与基线对得上、且有制品的那一版已发布版本。 */
+    private SkillVersionEntity baselineVersion(List<SkillVersionEntity> rows, String base) {
+        for (SkillVersionEntity row : rows) {
+            if (!"published".equals(row.getStatus()) || row.getArtifactId() == null) {
+                continue;
+            }
+            if (row.getManifestJson() == null || row.getManifestJson().isEmpty()) {
+                continue;
+            }
+            if (base.equals(ContentDigest.of(row.getManifestJson()))) {
+                return row;
+            }
+        }
+        return null;
+    }
+
+    /** 变更集声明的清单：这次同步完成后的文件集（路径 -> 内容摘要）。 */
+    private Map<String, String> manifestOf(SyncChangesetEntity changeset) {
+        Map<String, String> manifest = new LinkedHashMap<>();
+        List<Map<String, Object>> entries = changeset.getManifestJson();
+        if (entries == null) {
+            return manifest;
+        }
+        for (Map<String, Object> item : entries) {
+            manifest.put(String.valueOf(item.get("path")), String.valueOf(item.get("sha256")));
+        }
+        return manifest;
+    }
+
+    /**
+     * 合成这次要发布的内容：基线里没变的文件原样留着，变了的用新传的替换，
+     * 新内容里没有的（本地删掉了）从基线里去掉。
+     *
+     * 客户端只传变了的文件，服务端拿基线补齐其余的。
+     * 全量上传也走得通：传的每个文件都会盖掉基线里的同名文件。
+     */
+    static List<UploadedFile> mergeFiles(Map<String, byte[]> baseline,
+                                         List<UploadedFile> uploaded,
+                                         Map<String, String> newManifest) {
+        Map<String, byte[]> merged = new LinkedHashMap<>();
+        for (Map.Entry<String, byte[]> entry : baseline.entrySet()) {
+            String sha = newManifest.get(entry.getKey());
+            if (sha == null) {
+                continue; // 新内容里没有它：本地删掉了，不带过去
+            }
+            if (sha.equals(ContentDigest.sha256(entry.getValue()))) {
+                merged.put(entry.getKey(), entry.getValue()); // 没变：沿用基线那份
+            }
+        }
+        for (UploadedFile file : uploaded) {
+            merged.put(file.path(), file.data()); // 变了的与新增的
+        }
+        List<UploadedFile> files = new ArrayList<>();
+        for (Map.Entry<String, byte[]> entry : merged.entrySet()) {
+            files.add(new UploadedFile(entry.getKey(), entry.getValue()));
+        }
+        return files;
     }
 
     /** sync_file 会话完成时只做校验，不转正成制品——要等 commit。 */
@@ -291,9 +415,6 @@ public class SyncUploadService {
                     "同步内容总量超过 " + MAX_TOTAL_BYTES + " 字节");
             }
             files.add(new UploadedFile(session.getRelativePath(), data));
-        }
-        if (files.isEmpty()) {
-            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "变更集里没有文件");
         }
         return files;
     }
