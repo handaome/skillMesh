@@ -1,6 +1,7 @@
 package com.skillmesh.backup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillmesh.api.backup.BackupRestoreService;
 import com.skillmesh.api.backup.BackupService;
 import com.skillmesh.api.config.MinioClients;
 import io.minio.MinioClient;
@@ -16,11 +17,12 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
- * 独立跑一次备份，不启动应用。
+ * 独立跑一次备份或恢复，不启动应用。
  *
  * 用法：
  * <pre>
- * bash infra/scripts/backup.sh &lt;备份目录&gt;
+ * bash infra/scripts/backup.sh &lt;备份目录&gt;            # 导出
+ * bash infra/scripts/backup.sh restore &lt;备份目录&gt;       # 恢复
  * </pre>
  *
  * 为什么要它：常规的备份入口是 BackupRunner——随应用启动跑。
@@ -37,23 +39,39 @@ public class BackupTool {
 
     public static void main(String[] args) {
         if (args.length < 1) {
-            System.err.println("用法：BackupTool <备份目录>");
+            System.err.println("用法：BackupTool <备份目录> | BackupTool restore <备份目录> [schema]");
             System.exit(2);
         }
-        Path dir = Path.of(args[0]);
+        boolean restore = "restore".equals(args[0]);
+        if (restore && args.length < 2) {
+            System.err.println("用法：BackupTool restore <备份目录> [schema]");
+            System.exit(2);
+        }
+        Path dir = Path.of(restore ? args[1] : args[0]);
+        String schema = restore && args.length > 2 ? args[2] : "public";
         // Flyway 不参与：备份要能在一个迁移历史对不上的库上跑。
         System.setProperty("spring.flyway.enabled", "false");
         System.setProperty("spring.main.banner-mode", "off");
         try (ConfigurableApplicationContext ctx = SpringApplication.run(BackupTool.Config.class)) {
+            if (restore) {
+                BackupRestoreService restores = ctx.getBean(BackupRestoreService.class);
+                BackupRestoreService.RestoreResult result = restores.restore(dir, schema);
+                System.out.println(result.summary());
+                return;
+            }
             BackupService backup = ctx.getBean(BackupService.class);
-            BackupService.BackupResult result = backup.exportAndVerify(dir);
+            // 落在 <目录>/<时间戳>/ 里：一次导出一个目录，
+            // 下一次不会把上一次的恢复点覆盖掉（备份目录里只留最新一份的，
+            // 那就没有可回退的地方了）。
+            Path run = backup.newRunDir(Path.of(args[0]));
+            BackupService.BackupResult result = backup.exportAndVerify(run);
             if (!result.ok()) {
                 System.err.println(result.problemSummary());
                 System.exit(1);
             }
             System.out.println(result.summary());
         } catch (Exception e) {
-            System.err.println("备份失败：" + e.getMessage());
+            System.err.println((restore ? "恢复失败：" : "备份失败：") + e.getMessage());
             System.exit(1);
         }
     }
@@ -66,7 +84,7 @@ public class BackupTool {
      */
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration(exclude = {FlywayAutoConfiguration.class})
-    @Import(BackupService.class)
+    @Import({BackupService.class, BackupRestoreService.class})
     static class Config {
 
         @Bean
@@ -81,6 +99,13 @@ public class BackupTool {
         BackupService backupService(JdbcTemplate jdbc, MinioClient minio, ObjectMapper json,
             @Value("${skillmesh.minio.bucket}") String bucket) {
             return new BackupService(jdbc, minio, json, bucket);
+        }
+
+        @Bean
+        BackupRestoreService backupRestoreService(JdbcTemplate jdbc, MinioClient minio,
+            ObjectMapper json, @Value("${skillmesh.minio.bucket}") String bucket,
+            BackupService backups) {
+            return new BackupRestoreService(jdbc, minio, json, bucket, backups);
         }
     }
 }

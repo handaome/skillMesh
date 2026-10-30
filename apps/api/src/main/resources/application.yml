@@ -72,6 +72,19 @@ skillmesh:
     # git 走哪个代理。留空就用系统环境里的 HTTPS_PROXY / HTTP_PROXY——
     # 服务端所在机器访问不了 GitHub 时，两者配一个就行。
     proxy: ${SM_GIT_PROXY:}
+  # 备份（设计文档 §14「生产部署需要定期备份数据库与对象存储，并验证恢复流程」）。
+  # 目录留空就是不做备份；配了就在启动时备份一次。
+  backup:
+    dir: ${SM_BACKUP_DIR:}
+    # 定时备份默认不开：多副本部署时每个副本都备份一遍是白费力气，
+    # 由部署方在一个实例上打开。
+    schedule-enabled: ${SM_BACKUP_SCHEDULE_ENABLED:false}
+    # 间隔用毫秒数：cron 得按时区解释，换个时区备份时间就悄悄变了。
+    interval-ms: ${SM_BACKUP_INTERVAL_MS:3600000}
+    # 启动后先等一会儿再跑第一次，别和迁移、启动扫描抢资源。
+    initial-delay-ms: ${SM_BACKUP_INITIAL_DELAY_MS:600000}
+    # 留最近的多少份备份。备份占的正是最要紧的那块盘，不清理迟早塞满。
+    keep: ${SM_BACKUP_KEEP:24}
 
 management:
   endpoints:

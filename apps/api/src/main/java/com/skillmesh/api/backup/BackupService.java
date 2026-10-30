@@ -14,10 +14,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,6 +41,9 @@ import org.springframework.stereotype.Service;
 public class BackupService {
 
     private static final Logger log = LoggerFactory.getLogger(BackupService.class);
+
+    /** 一次备份的目录名：UTC 时间戳。 */
+    private static final Pattern RUN_ID = Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}Z");
 
     private final JdbcTemplate jdbc;
     private final MinioClient minio;
@@ -73,6 +79,12 @@ public class BackupService {
             .bucket(bucket).recursive(true).build());
         for (Result<Item> result : listed) {
             Item item = result.get();
+            // 临时对象不进备份：它们是上传暂存（整包上传的 tmp/、文件级同步的
+            // sync-staging/），几天后就过期，备份它们只会把备份撑大，
+            // 恢复时还要特意排除——排除的逻辑漏一处就会把垃圾灌回桶里。
+            if (isTransient(item.objectName())) {
+                continue;
+            }
             Path file = objectsDir.resolve(item.objectName());
             Files.createDirectories(file.getParent());
             try (InputStream in = minio.getObject(GetObjectArgs.builder()
@@ -228,6 +240,65 @@ public class BackupService {
             "select table_name from information_schema.tables "
                 + "where table_schema = current_schema() and table_type = 'BASE TABLE' "
                 + "order by table_name", String.class);
+    }
+
+    /**
+     * 新的一次备份目录：{@code <base>/<时间戳>/}。
+     *
+     * 定时备份要留多个恢复点。都写同一个目录，上一份会被覆盖掉——
+     * 上一份要是恰好是坏的呢？那就没有可回退的地方了。
+     */
+    public Path newRunDir(Path base) throws IOException {
+        String id = OffsetDateTime.now(ZoneOffset.UTC)
+            .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH-mm-ss'Z'"));
+        Path dir = base.resolve(id);
+        Files.createDirectories(dir);
+        return dir;
+    }
+
+    /**
+     * 只留最近的若干次备份。
+     *
+     * 不清理的话磁盘会被一次次备份塞满——备份占的正是最要紧的那块盘。
+     */
+    public void pruneRuns(Path base, int keep) {
+        if (keep <= 0) {
+            return;
+        }
+        List<Path> runs;
+        try (var stream = Files.list(base)) {
+            runs = stream.filter(Files::isDirectory)
+                .filter(path -> RUN_ID.matcher(path.getFileName().toString()).matches())
+                .sorted(Comparator.comparing((Path path) -> path.getFileName().toString())
+                    .reversed())
+                .toList();
+        } catch (IOException e) {
+            log.warn("清理旧备份目录失败: {}", e.getMessage());
+            return;
+        }
+        for (Path run : runs.subList(Math.min(keep, runs.size()), runs.size())) {
+            deleteTree(run);
+        }
+    }
+
+    /** 删掉一整个目录树。 */
+    private void deleteTree(Path dir) {
+        try (var stream = Files.walk(dir)) {
+            stream.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException ignored) {
+                    // 删不掉就留着：下一次清理还会再试一次。
+                }
+            });
+        } catch (IOException e) {
+            log.warn("删除旧备份目录失败 {}: {}", dir, e.getMessage());
+        }
+    }
+
+    /** 临时对象：上传暂存，不属于要备份恢复的内容。 */
+    private boolean isTransient(String key) {
+        return key.startsWith("tmp/") || key.startsWith("sync-staging/");
     }
 
     private long countLines(Path file) throws IOException {

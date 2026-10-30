@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# 导出一份备份（数据库表 + 对象存储）。
+# 导出一份备份（数据库表 + 对象存储），或把一份备份恢复回去。
 #
 #   bash infra/scripts/backup.sh [备份目录]
+#   bash infra/scripts/backup.sh restore <备份目录> [schema]
 #
 # 默认目录：$HOME/.skillmesh-data/backup
+#
+# 恢复要指到某一次备份的目录（<备份根目录>/<时间戳>/），
+# 目标库得是空的——恢复是往空库里灌，有数据会直接拒绝。
 #
 # 走应用自己的备份器（BackupTool），不用 pg_dump / mc——
 # 那两个客户端每台机器上都要装，而这两个 SDK 本来就在依赖里。
@@ -14,7 +18,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 API_DIR="$ROOT/apps/api"
+
+MODE="export"
+if [ "${1:-}" = "restore" ]; then
+  MODE="restore"
+  shift
+fi
 TARGET="${1:-$HOME/.skillmesh-data/backup}"
+SCHEMA="${2:-public}"
 
 set -a
 [ -f "$ROOT/.env" ] && . "$ROOT/.env"
@@ -117,5 +128,10 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-echo "导出到 $TARGET ..."
-java -cp "$CP" com.skillmesh.backup.BackupTool "$TARGET"
+if [ "$MODE" = "restore" ]; then
+  echo "从 $TARGET 恢复到 schema $SCHEMA ..."
+  java -cp "$CP" com.skillmesh.backup.BackupTool restore "$TARGET" "$SCHEMA"
+else
+  echo "导出到 $TARGET ..."
+  java -cp "$CP" com.skillmesh.backup.BackupTool "$TARGET"
+fi
