@@ -16,10 +16,15 @@ const notice = ref('')
 const busy = ref(false)
 
 /**
- * 只有待审核的版本能过审。已过审/已拒绝的版本再点一次，服务端会回
- * 409 VERSION_CONFLICT——按钮干脆不显示，页面也不该让人点必然失败的按钮。
+ * 能不能做审核动作。
+ *
+ * 判定在服务端：它知道我的审核权（团队优先回落）、这条是不是我发的、
+ * 扫描结论是不是阻断。前端只照着它显示按钮——
+ * 自己 replicate 一遍规则，迟早与服务端不一致。
  */
-const canDecide = computed(() => detail.value?.item.status === 'pending_review')
+const canDecide = computed(() => detail.value?.item.can_decide ?? false)
+/** 能不能放行。自己发布的版本不能自己放行（驳回可以）。 */
+const canApprove = computed(() => detail.value?.item.can_approve ?? false)
 
 async function load() {
   error.value = ''
@@ -93,16 +98,32 @@ onMounted(load)
         决定按钮放在最上面：审版本的人来这里就是要放行或拒绝，
         证据在下面读，但按钮不该要滚到底才找得到。
       -->
-      <div v-if="canDecide" class="sm-row sm-mb-16">
-        <button class="sm-btn sm-btn--primary" data-test="approve" :disabled="busy" @click="decide(true)">
+      <div v-if="canDecide || canApprove" class="sm-row sm-mb-16">
+        <button
+          v-if="canApprove"
+          class="sm-btn sm-btn--primary"
+          data-test="approve"
+          :disabled="busy"
+          @click="decide(true)"
+        >
           通过并发布
         </button>
-        <button class="sm-btn sm-btn--danger" data-test="reject" :disabled="busy" @click="decide(false)">
+        <button
+          v-if="canDecide"
+          class="sm-btn sm-btn--danger"
+          data-test="reject"
+          :disabled="busy"
+          @click="decide(false)"
+        >
           拒绝
         </button>
       </div>
       <p v-else class="sm-muted sm-mb-16" data-test="not-decidable">
-        该版本已不在待审核状态（当前：{{ detail.item.status }}），不需要再处理。
+        {{
+          detail.item.status === 'pending_review'
+            ? '这条你没有审核权。'
+            : `该版本已不在待审核状态（当前：${detail.item.status}），不需要再处理。`
+        }}
       </p>
 
       <div class="sm-panel sm-mb-16">

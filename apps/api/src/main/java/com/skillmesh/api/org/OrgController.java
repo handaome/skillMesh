@@ -5,6 +5,7 @@ import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.org.dto.MemberResponse;
 import com.skillmesh.api.org.dto.MemberUpdateRequest;
+import com.skillmesh.api.org.dto.OrgPermissionsResponse;
 import com.skillmesh.api.org.dto.RoleRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -33,10 +34,13 @@ public class OrgController {
 
     private final OrgService orgs;
     private final CurrentUserService currentUserService;
+    private final AuthorizationService auth;
 
-    public OrgController(OrgService orgs, CurrentUserService currentUserService) {
+    public OrgController(OrgService orgs, CurrentUserService currentUserService,
+                          AuthorizationService auth) {
         this.orgs = orgs;
         this.currentUserService = currentUserService;
+        this.auth = auth;
     }
 
     @PostMapping("/organizations")
@@ -74,7 +78,7 @@ public class OrgController {
     public List<Map<String, Object>> listTeams(@AuthenticationPrincipal Jwt jwt,
                                               @PathVariable UUID organizationId) {
         CurrentUser user = currentUserService.current(jwt);
-        if (!orgs.isOrgMember(organizationId, user.id())) {
+        if (!auth.hasOrgPermission(user, Permission.ORG_VIEW_MEMBERS, organizationId)) {
             throw ApiException.notFound("组织");
         }
         return orgs.teamsOf(organizationId).stream().map(OrgController::toResponse).toList();
@@ -84,10 +88,22 @@ public class OrgController {
     public List<MemberResponse> listOrgMembers(@AuthenticationPrincipal Jwt jwt,
                                                @PathVariable UUID organizationId) {
         CurrentUser user = currentUserService.current(jwt);
-        if (!orgs.isOrgMember(organizationId, user.id())) {
+        if (!auth.hasOrgPermission(user, Permission.ORG_VIEW_MEMBERS, organizationId)) {
             throw ApiException.notFound("组织");
         }
         return orgs.orgMembers(organizationId);
+    }
+
+    /**
+     * 我在这个组织下的权限清单。
+     *
+     * 前端按它决定按钮显隐：没有的权限点了也是 403，不如别显示。
+     * 看的是自己的权限，不需要额外的权限校验。
+     */
+    @GetMapping("/organizations/{organizationId}/permissions")
+    public OrgPermissionsResponse permissions(@AuthenticationPrincipal Jwt jwt,
+                                              @PathVariable UUID organizationId) {
+        return orgs.permissionsOf(currentUserService.current(jwt), organizationId);
     }
 
     @GetMapping("/organizations/{organizationId}/teams/{teamId}/members")
@@ -97,8 +113,7 @@ public class OrgController {
         CurrentUser user = currentUserService.current(jwt);
         // 团队必须在这个组织里——否则换个组织 id 就能看别的团队的成员。
         orgs.requireTeamInOrg(organizationId, teamId);
-        if (!orgs.isTeamMember(teamId, user.id())
-            && !orgs.isOrgMember(organizationId, user.id())) {
+        if (!auth.hasTeamPermission(user, Permission.TEAM_VIEW_MEMBERS, teamId)) {
             throw ApiException.notFound("团队");
         }
         return orgs.teamMembers(teamId);

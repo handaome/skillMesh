@@ -9,7 +9,8 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.diff.ArtifactDiffService;
-import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.org.AuthorizationService;
+import com.skillmesh.api.org.Permission;
 import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.review.dto.PendingReviewItem;
 import com.skillmesh.api.review.dto.ReviewDetailResponse;
@@ -62,20 +63,20 @@ public class ReviewQueueService {
     private final SourceRepository sources;
     private final ScanRepository scans;
     private final ArtifactRepository artifacts;
-    private final OrgService orgs;
+    private final AuthorizationService auth;
     private final UserRepository users;
     private final ArtifactDiffService diffs;
 
     public ReviewQueueService(SkillVersionRepository versions, SkillRepository skills,
                               SourceRepository sources, ScanRepository scans,
-                              ArtifactRepository artifacts, OrgService orgs,
+                              ArtifactRepository artifacts, AuthorizationService auth,
                               UserRepository users, ArtifactDiffService diffs) {
         this.versions = versions;
         this.skills = skills;
         this.sources = sources;
         this.scans = scans;
         this.artifacts = artifacts;
-        this.orgs = orgs;
+        this.auth = auth;
         this.users = users;
         this.diffs = diffs;
     }
@@ -93,7 +94,7 @@ public class ReviewQueueService {
         // 一页里的技能、扫描、来源、人各查一次：逐条查就是 4N 次往返，
         // 本机到远程库一次往返几十毫秒，一页 50 条就是 200 次。
         Lookups lookups = lookupsOf(page.items());
-        return page.map(items -> items.stream().map(version -> toItem(version, lookups)).toList());
+        return page.map(items -> items.stream().map(version -> toItem(user, version, lookups)).toList());
     }
 
     /** 下一页的起点：这一页最后一条的 (submitted_at, created_at, id)。 */
@@ -117,12 +118,13 @@ public class ReviewQueueService {
     public ReviewDetailResponse detail(CurrentUser user, UUID skillId, String version) {
         SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
-        if (!canReview(user, entity)) {
+        Lookups lookups = lookupsOf(List.of(entity));
+        SkillEntity skill = lookups.skills().get(entity.getSkillId());
+        if (!canReview(user, skill)) {
             throw ApiException.notFound("版本");
         }
-        Lookups lookups = lookupsOf(List.of(entity));
         List<Map<String, Object>> findings = findingsOf(entity, lookups);
-        return new ReviewDetailResponse(toItem(entity, lookups),
+        return new ReviewDetailResponse(toItem(user, entity, lookups),
             diffs.readSkillMarkdown(artifactOf(entity)),
             entity.getChangelog(),
             findings,
@@ -138,19 +140,47 @@ public class ReviewQueueService {
      * 团队范围才看团队角色：组织范围的版本只有组织角色这一层，
      * 别让一个挂在组织可见 Skill 上的 owner_team_id 把审核作用域带偏。
      */
-    private boolean canReview(CurrentUser user, SkillVersionEntity version) {
-        SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
+    private boolean canReview(CurrentUser user, SkillEntity skill) {
         if (skill == null) {
             return false;
         }
         UUID scopeTeamId = "team".equals(skill.getVisibility()) ? skill.getOwnerTeamId() : null;
-        String role = orgs.roleIn(skill.getOrganizationId(), scopeTeamId, user.id());
-        return OrgService.roleAtLeast(role, "reviewer");
+        return auth.hasPermission(user, Permission.SKILL_REVIEW, skill.getOrganizationId(),
+            scopeTeamId);
+    }
+
+    /**
+     * 能不能做审核动作（放行或驳回）。
+     *
+     * 与 {@code ReviewService.decide} 的闸对齐：有审核权、版本在待审状态。
+     * 服务端算好了给前端——前端自己推一遍规则，迟早与服务端不一致。
+     */
+    private boolean canDecide(CurrentUser user, SkillVersionEntity version, SkillEntity skill) {
+        return "pending_review".equals(version.getStatus())
+            && canReview(user, skill);
+    }
+
+    /**
+     * 能不能放行。
+     *
+     * 比驳回多两道闸：不能放行自己发布的版本，扫描结论阻断的也不能放行
+     * （放行即发布，被服务端拦下来的东西不能发出去）。
+     */
+    private boolean canApprove(CurrentUser user, SkillVersionEntity version, SkillEntity skill,
+                               Map<UUID, ScanEntity> scans) {
+        if (!canDecide(user, version, skill)) {
+            return false;
+        }
+        if (version.getCreatedBy() != null && version.getCreatedBy().equals(user.id())) {
+            return false;
+        }
+        ScanEntity scan = scans.get(version.getId());
+        return scan == null || !ReviewService.isBlocked(scan.getStatus());
     }
 
     // ponytail: 逐条查 skills/scans/sources/users（N+1），一页 50 条就是 200 次查询。
     // 已改：整页的关联数据一次批量查齐（见 lookupsOf），逐条拼装时只查表不查库。
-    private PendingReviewItem toItem(SkillVersionEntity version, Lookups lookups) {
+    private PendingReviewItem toItem(CurrentUser user, SkillVersionEntity version, Lookups lookups) {
         SkillEntity skill = lookups.skills().get(version.getSkillId());
         return new PendingReviewItem(
             version.getSkillId(),
@@ -162,7 +192,9 @@ public class ReviewQueueService {
             submittedAt(version),
             scanSummary(version, lookups.scans()),
             sourceSummary(version, lookups.sources()),
-            version.getStatus());
+            version.getStatus(),
+            canDecide(user, version, skill),
+            canApprove(user, version, skill, lookups.scans()));
     }
 
     /**

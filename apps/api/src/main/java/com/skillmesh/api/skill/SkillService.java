@@ -5,8 +5,10 @@ import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.OrgService;
-import com.skillmesh.api.org.Roles;
+import com.skillmesh.api.org.Permission;
+import com.skillmesh.api.org.RolePermissions;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.dto.BatchArchiveRequest;
 import com.skillmesh.api.skill.dto.BatchTagRequest;
@@ -45,14 +47,18 @@ public class SkillService {
 
     private final AuditService audit;
 
+    private final AuthorizationService auth;
+
     private final TransactionTemplate transactions;
 
     public SkillService(SkillRepository skills, OrgService orgs, SourceRepository sources,
-                        AuditService audit, PlatformTransactionManager transactionManager) {
+                        AuditService audit, AuthorizationService auth,
+                        PlatformTransactionManager transactionManager) {
         this.skills = skills;
         this.orgs = orgs;
         this.sources = sources;
         this.audit = audit;
+        this.auth = auth;
         this.transactions = new TransactionTemplate(transactionManager);
         // 每条一个独立事务。默认的 REQUIRED 会加入调用方的事务：
         // 一条失败就把整个外层标记成 rollback-only，已经改好的跟着被撤回来。
@@ -196,9 +202,7 @@ public class SkillService {
     /** 改展示性元数据。批量也走这里——批量用 TransactionTemplate 开着事务，不走代理。 */
     private SkillResponse doUpdate(CurrentUser user, UUID id, UpdateSkillRequest req) {
         SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
-        if (!user.id().equals(entity.getOwnerUserId())) {
-            throw new ApiException(403, ErrorCodes.FORBIDDEN, "只有属主能改这个 Skill");
-        }
+        auth.requireOwner(user, entity.getOwnerUserId(), "只有属主能改这个 Skill");
         // 改了哪些字段要留下：光记「改过」看不出改了什么。
         List<String> changed = new ArrayList<>();
         if (req.name() != null) {
@@ -336,9 +340,7 @@ public class SkillService {
             requireOrgPublisher(user, entity.getOrganizationId());
             return;
         }
-        if (!user.id().equals(entity.getOwnerUserId())) {
-            throw ApiException.forbidden(deniedMessage);
-        }
+        auth.requireOwner(user, entity.getOwnerUserId(), deniedMessage);
     }
 
     /**
@@ -450,8 +452,9 @@ public class SkillService {
      * 外部调用方（版本、制品、审计）都走这里，所以一处判就够。
      *
      * 读与审的口径刻意不同，别混：
-     *   读/搜/装 —— 该团队成员；该组织的 owner/admin（{@link Roles#ORG_ADMIN_ROLES}）。
-     *   审/批    —— 团队角色 reviewer+，没有团队成员行才回落组织角色（{@link OrgService#roleIn}）。
+     *   读/搜/装 —— 该团队成员；该组织的 owner/admin（{@link Permission#ORG_MANAGE_MEMBERS}）。
+     *   审/批    —— 团队角色 reviewer+，没有团队成员行才回落组织角色
+     *              （{@link AuthorizationService#effectiveRole}）。
      *
      * 团队可见的内容归团队管：组织里的普通成员看不到别的团队的 Skill。
      * 但组织的 owner/admin 放行——他们建团队时没有团队成员行，
@@ -483,8 +486,8 @@ public class SkillService {
      * {@code Set.of} 的 contains(null) 会抛 NPE。
      */
     private boolean isOrgAdmin(UUID organizationId, UUID userId) {
-        String role = orgs.orgRoleOf(organizationId, userId);
-        return role != null && Roles.ORG_ADMIN_ROLES.contains(role);
+        return RolePermissions.orgPermissions(auth.orgRole(userId, organizationId))
+            .contains(Permission.ORG_MANAGE_MEMBERS);
     }
 
     /**
@@ -564,11 +567,7 @@ public class SkillService {
      * 把组织角色永久遮住，手册给的解法（提组织角色）在服务端就不生效了。
      */
     private void requireOrgPublisher(CurrentUser user, UUID organizationId) {
-        String role = orgs.roleIn(organizationId, null, user.id());
-        if (!OrgService.roleAtLeast(role, Roles.PUBLISHER_ROLE)) {
-            throw new ApiException(403, ErrorCodes.FORBIDDEN,
-                "在该组织里需要 publisher 及以上角色才能发布");
-        }
+        auth.requireOrgPermission(user, Permission.SKILL_PUBLISH, organizationId);
     }
 
     /**

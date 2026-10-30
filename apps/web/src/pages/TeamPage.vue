@@ -14,8 +14,13 @@ import {
   updateTeamRole,
 } from '../api'
 import { currentOrg } from '../auth/currentOrg'
-import { loadMe, meError } from '../auth/session'
+import { loadMe, meError, session } from '../auth/session'
 import { usePagedList } from '../composables/usePagedList'
+import {
+  loadPermissions,
+  memberPermissionList,
+  orgPermissionList,
+} from '../composables/usePermissions'
 import type { Invitation, Member, Team } from '../types'
 import { errorText } from '../utils/errorText'
 import EmptyState from '../components/EmptyState.vue'
@@ -49,6 +54,8 @@ const {
 })
 /** 成员区的错（改角色、读成员、读团队） */
 const memberError = ref('')
+/** 权限清单没拉到的错 */
+const permissionError = ref('')
 /** 邀请区的错（生成、撤销、读邀请） */
 const inviteError = ref('')
 const notice = ref('')
@@ -73,8 +80,55 @@ const createError = ref('')
 const ORG_ROLE_OPTIONS = ['owner', 'admin', 'publisher', 'reviewer', 'member', 'viewer']
 const TEAM_ROLE_OPTIONS = ['admin', 'publisher', 'reviewer', 'member', 'viewer']
 
-/** 角色下拉的选项：选了团队就是团队角色，没选就是组织角色。 */
-const roleOptions = computed(() => (selectedTeam.value ? TEAM_ROLE_OPTIONS : ORG_ROLE_OPTIONS))
+/**
+ * 我在这个组织里的权限。
+ *
+ * 清单没拉到之前一律按没有算：按钮先不显示，等清单到了再显示——
+ * 显示一个点了必然 403 的按钮比不显示更糟。
+ */
+const orgPermissions = computed(() => orgPermissionList(org.value?.id))
+const canInvite = computed(() => orgPermissions.value.includes('ORG_INVITE'))
+const canManageMembers = computed(() => orgPermissions.value.includes('ORG_MANAGE_MEMBERS'))
+const canManageTeams = computed(() => orgPermissions.value.includes('ORG_MANAGE_TEAMS'))
+const canGrantOwner = computed(() => orgPermissions.value.includes('ORG_GRANT_OWNER'))
+const canRevokeOwner = computed(() => orgPermissions.value.includes('ORG_REVOKE_OWNER'))
+/** 团队成员管理权：团队角色与组织角色的并集。 */
+const teamMemberPermissions = computed(() =>
+  memberPermissionList(org.value?.id, selectedTeam.value),
+)
+const canManageTeamMembers = computed(() =>
+  teamMemberPermissions.value.includes('TEAM_MANAGE_MEMBERS'),
+)
+/** 当前范围能不能改别人的角色。 */
+const canChangeRole = computed(() =>
+  selectedTeam.value ? canManageTeamMembers.value : canManageMembers.value,
+)
+
+/**
+ * 角色下拉的选项：选了团队就是团队角色，没选就是组织角色。
+ *
+ * 组织角色里的 owner 只有 owner 本人能给：没有授予权的人看见这个选项
+ * 也只能选出一个 403，下拉里就不该出现。
+ */
+const roleOptions = computed(() => {
+  if (selectedTeam.value) return TEAM_ROLE_OPTIONS
+  return canGrantOwner.value
+    ? ORG_ROLE_OPTIONS
+    : ORG_ROLE_OPTIONS.filter((role) => role !== 'owner')
+})
+
+/**
+ * 能不能禁用/启用这个成员。
+ *
+ * 不能禁自己（把自己的路堵死），也不能禁组织 owner——
+ * owner 是组织的最后一道保险，要换人得先降级（两次请求）。
+ */
+function canToggleStatus(member: Member): boolean {
+  if (!canManageMembers.value) return false
+  if (member.user_id === session.user?.id) return false
+  if (member.role === 'owner' && !canRevokeOwner.value) return false
+  return true
+}
 
 /**
  * 角色是什么意思。表头只说「角色」时没人知道改的是哪一层——
@@ -151,6 +205,16 @@ async function load() {
   }
   memberError.value = ''
   inviteError.value = ''
+  permissionError.value = ''
+
+  // 权限清单决定哪些按钮显示，先拿到它再渲染操作区。
+  // 放在后面的并行块里的话，首屏按钮会先缺席再出现——用户看见的是按钮在跳。
+  try {
+    await loadPermissions(orgId)
+  } catch (e) {
+    if (org.value?.id !== orgId) return
+    permissionError.value = `权限清单没拉到，操作按钮可能显示不全：${errorText(e)}`
+  }
 
   await Promise.all([
     (async () => {
@@ -382,6 +446,7 @@ onMounted(load)
           </select>
           <span class="sm-spacer" />
           <button
+            v-if="canManageTeams"
             class="sm-btn sm-btn--sm"
             data-test="create-team-toggle"
             @click="showNewTeam = !showNewTeam"
@@ -425,6 +490,15 @@ onMounted(load)
           {{ memberError }}
         </p>
 
+        <!-- 权限清单没拉到：按钮按「没有权限」显示，说清楚为什么少了东西。 -->
+        <p
+          v-if="permissionError"
+          class="sm-note sm-note--error sm-mb-12"
+          data-test="permission-error"
+        >
+          {{ permissionError }}
+        </p>
+
         <!--
           表格只在有数据时渲染：读失败不是没有成员，
           两个空态并排会把人读歪。
@@ -455,7 +529,9 @@ onMounted(load)
                 </td>
                 <td class="sm-muted sm-cell-sub">{{ member.email ?? '—' }}</td>
                 <td>
+                  <!-- 没有改角色的权限就只显示角色，不给一个点了必然 403 的下拉。 -->
                   <select
+                    v-if="canChangeRole"
                     class="sm-select sm-role-select"
                     :value="member.role"
                     data-test="role-edit"
@@ -465,9 +541,11 @@ onMounted(load)
                       {{ role }}
                     </option>
                   </select>
+                  <span v-else class="sm-muted" data-test="role-readonly">{{ member.role }}</span>
                 </td>
                 <td v-if="!selectedTeam">
                   <button
+                    v-if="canToggleStatus(member)"
                     class="sm-btn sm-btn--quiet sm-btn--sm"
                     data-test="member-status-toggle"
                     @click="toggleMemberStatus(member)"
@@ -494,7 +572,8 @@ onMounted(load)
           <h2 class="sm-section">邀请</h2>
           <span class="sm-meta">链接 7 天内有效，只显示一次</span>
         </div>
-        <div class="sm-field-grid sm-mb-16">
+        <!-- 没邀请权的人不显示这些：邀请是 owner/admin 的事，成员看见只会白点一次。 -->
+        <div v-if="canInvite" class="sm-field-grid sm-mb-16">
           <div class="sm-field">
             <label for="invite-org-role">组织角色</label>
             <select id="invite-org-role" v-model="inviteOrgRole" class="sm-select" data-test="org-role-select">
@@ -533,7 +612,7 @@ onMounted(load)
             </select>
           </div>
         </div>
-        <div class="sm-toolbar">
+        <div v-if="canInvite" class="sm-toolbar">
           <button class="sm-btn sm-btn--primary" data-test="invite" @click="invite">
             生成邀请链接
           </button>
@@ -597,7 +676,7 @@ onMounted(load)
                 </td>
                 <td class="sm-actions">
                   <button
-                    v-if="row.status === 'pending'"
+                    v-if="row.status === 'pending' && canInvite"
                     class="sm-btn sm-btn--quiet sm-btn--sm"
                     @click="revoke(row.id)"
                   >

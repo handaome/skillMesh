@@ -4,7 +4,8 @@ import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
-import com.skillmesh.api.org.OrgService;
+import com.skillmesh.api.org.AuthorizationService;
+import com.skillmesh.api.org.Permission;
 import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.review.dto.BatchDecideRequest;
 import com.skillmesh.api.scan.ScanEntity;
@@ -39,24 +40,24 @@ public class ReviewService {
 
     private final SkillRepository skills;
     private final SkillVersionRepository versions;
-    private final OrgService orgs;
     private final AuditService audit;
     private final ReviewRepository reviews;
     private final ScanRepository scans;
     private final RecycleService recycle;
+    private final AuthorizationService auth;
     private final TransactionTemplate transactions;
 
     public ReviewService(SkillRepository skills, SkillVersionRepository versions,
-                         OrgService orgs, AuditService audit, ReviewRepository reviews,
-                         ScanRepository scans, RecycleService recycle,
+                         AuditService audit, ReviewRepository reviews,
+                         ScanRepository scans, RecycleService recycle, AuthorizationService auth,
                          PlatformTransactionManager transactionManager) {
         this.skills = skills;
         this.versions = versions;
-        this.orgs = orgs;
         this.audit = audit;
         this.reviews = reviews;
         this.scans = scans;
         this.recycle = recycle;
+        this.auth = auth;
         this.transactions = new TransactionTemplate(transactionManager);
         // 每条一个独立事务。默认的 REQUIRED 会加入调用方的事务：
         // 一条失败就把整个外层标记成 rollback-only，已经放行的条目跟着被撤回来。
@@ -118,7 +119,7 @@ public class ReviewService {
         // 提交审核是「发布」的一部分，门槛与 publish 一致：判组织角色。
         // 判团队角色的话，接受邀请写下的 team_role=member 会把组织角色永久遮住——
         // 手册教的「把组织角色提到 publisher」在服务端就不生效。
-        requireRole(user, skill, "publisher", null);
+        requirePermission(user, skill, Permission.SKILL_PUBLISH, null);
         SkillVersionEntity entity = requireVersionForUpdate(skillId, version);
         if ("published".equals(entity.getStatus())) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已发布，无需再提交审核");
@@ -165,7 +166,7 @@ public class ReviewService {
         // 审核放行权是团队范围内的事，判团队角色（没有团队成员行才回落到组织角色）。
         // 团队范围才看团队角色：组织范围的版本只有组织角色这一层
         // （团队治理文档「审核这一侧先看团队角色」那条）。
-        requireRole(user, skill, "reviewer",
+        requirePermission(user, skill, Permission.SKILL_REVIEW,
             "team".equals(skill.getVisibility()) ? skill.getOwnerTeamId() : null);
         // 锁住版本行：审核决定要串行化。两个人同时点「通过」都读到 pending_review
         // 就会各写一条 approved；「通过」与「拒绝」交错还会把 published_by 写回 null。
@@ -234,7 +235,7 @@ public class ReviewService {
     }
 
     /** 扫描结论是不是阻断（skill_scans.status 的 failed / error）。 */
-    private static boolean isBlocked(String scanStatus) {
+    static boolean isBlocked(String scanStatus) {
         return "failed".equals(scanStatus) || "error".equals(scanStatus);
     }
 
@@ -293,20 +294,20 @@ public class ReviewService {
     }
 
     /**
-     * 角色门槛。
+     * 权限门槛。
      *
      * scopeTeamId 传团队 id 就按团队范围判（审核放行权，团队内的事），
      * 传 null 只判组织角色（发布门槛，与 SkillService.requireVisibilitySupported 一致）。
      * 两者别混：接受邀请会写一行 team_role=member，团队角色优先的组织角色会被它遮住。
+     *
+     * 个人空间没有组织角色这一说——个人 Skill 只有属主能操作（requireSkill 已挡住别人），
+     * 所以这里只判组织与团队范围。
      */
-    private void requireRole(CurrentUser user, SkillEntity skill, String required, UUID scopeTeamId) {
+    private void requirePermission(CurrentUser user, SkillEntity skill, Permission permission,
+                                   UUID scopeTeamId) {
         if (skill.getOrganizationId() == null) {
             return;
         }
-        String role = orgs.roleIn(skill.getOrganizationId(), scopeTeamId, user.id());
-        if (!OrgService.roleAtLeast(role, required)) {
-            throw new ApiException(403, ErrorCodes.FORBIDDEN,
-                "需要 " + required + " 及以上角色，当前：" + (role.isEmpty() ? "无" : role));
-        }
+        auth.requirePermission(user, permission, skill.getOrganizationId(), scopeTeamId);
     }
 }

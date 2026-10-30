@@ -8,9 +8,11 @@ import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.invite.dto.InvitationSummary;
+import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.OrgRepository;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.OrganizationEntity;
+import com.skillmesh.api.org.Permission;
 import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.org.TeamEntity;
 import com.skillmesh.api.org.TeamRepository;
@@ -47,6 +49,7 @@ public class InvitationService {
 
     private final InvitationRepository invitations;
     private final OrgService orgs;
+    private final AuthorizationService auth;
     private final OrgRepository organizations;
     private final TeamRepository teams;
     private final AuditService audit;
@@ -54,10 +57,12 @@ public class InvitationService {
     private final SecureRandom random = new SecureRandom();
 
     public InvitationService(InvitationRepository invitations, OrgService orgs,
+                             AuthorizationService auth,
                              OrgRepository organizations, TeamRepository teams,
                              AuditService audit,
                              @Value("${skillmesh.web.base-url:http://127.0.0.1:5174}") String webBaseUrl) {
         this.invitations = invitations;
+        this.auth = auth;
         this.orgs = orgs;
         this.organizations = organizations;
         this.teams = teams;
@@ -69,7 +74,7 @@ public class InvitationService {
     @Transactional
     public Created create(CurrentUser actor, UUID organizationId, UUID teamId,
                           String orgRole, String teamRole, String subject) {
-        orgs.requireOrgAdmin(actor, organizationId);
+        auth.requireOrgPermission(actor, Permission.ORG_INVITE, organizationId);
         String role = orDefault(orgRole, Roles.DEFAULT_ROLE);
         if (!Roles.INVITABLE_ORG_ROLES.contains(role)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
@@ -225,7 +230,7 @@ public class InvitationService {
 
     @Transactional
     public void revoke(CurrentUser actor, UUID organizationId, UUID invitationId) {
-        orgs.requireOrgAdmin(actor, organizationId);
+        auth.requireOrgPermission(actor, Permission.ORG_INVITE, organizationId);
         InvitationEntity entity = invitations.findById(invitationId)
             .orElseThrow(() -> ApiException.notFound("邀请"));
         if (!entity.getOrganizationId().equals(organizationId)) {
@@ -283,12 +288,12 @@ public class InvitationService {
      * （设计文档 §5.1：已是组织成员 → 200 直接返回当前角色）。
      */
     private Accepted toAccepted(InvitationEntity entity, UUID userId) {
-        String orgRole = orgs.orgRoleOf(entity.getOrganizationId(), userId);
+        String orgRole = auth.orgRole(userId, entity.getOrganizationId());
         String teamRole = entity.getTeamId() == null ? null
-            : orgs.teamRoleOf(entity.getTeamId(), userId);
+            : auth.teamRole(userId, entity.getTeamId());
         return new Accepted(entity.getId(), entity.getOrganizationId(), entity.getTeamId(),
-            orgRole == null ? entity.getOrgRole() : orgRole,
-            teamRole == null ? entity.getTeamRole() : teamRole);
+            orgRole.isEmpty() ? entity.getOrgRole() : orgRole,
+            teamRole == null || teamRole.isEmpty() ? entity.getTeamRole() : teamRole);
     }
 
     private String newToken() {
