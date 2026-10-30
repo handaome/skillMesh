@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { batchDecide, listRecentReviews, listReviews } from '../api'
 import { useMultiSelect } from '../composables/useMultiSelect'
@@ -101,6 +101,15 @@ const batchBusy = ref(false)
 const confirmOpen = ref(false)
 const pendingAction = ref<'approve' | 'reject'>('approve')
 
+/**
+ * 选中的条目里有没有能放行的 / 能驳回的。
+ *
+ * 能不能审由服务端算（can_approve / can_decide）：自己发布的版本不能自己放行，
+ * 扫描阻断的也不能放行。按钮按这个显示，别让人点了必然 403。
+ */
+const canApproveSelected = computed(() => selectedItems.value.some((item) => item.can_approve))
+const canRejectSelected = computed(() => selectedItems.value.some((item) => item.can_decide))
+
 function askBatch(action: 'approve' | 'reject') {
   pendingAction.value = action
   confirmOpen.value = true
@@ -178,6 +187,7 @@ onMounted(async () => {
       -->
       <MultiSelectToolbar :count="selectedCount" :busy="batchBusy" @clear="clear">
         <button
+          v-if="canApproveSelected"
           class="sm-btn sm-btn--primary sm-btn--sm"
           data-test="batch-approve"
           :disabled="batchBusy"
@@ -186,6 +196,7 @@ onMounted(async () => {
           批量放行
         </button>
         <button
+          v-if="canRejectSelected"
           class="sm-btn sm-btn--quiet sm-btn--sm"
           data-test="batch-reject"
           :disabled="batchBusy"
@@ -217,6 +228,7 @@ onMounted(async () => {
             class="sm-item-check"
             type="checkbox"
             :checked="isSelected(review)"
+            :disabled="!review.can_decide"
             :aria-label="`选择 ${review.skill_name ?? review.skill_id} ${review.version}`"
             data-test="review-check"
             @change="toggle(review)"

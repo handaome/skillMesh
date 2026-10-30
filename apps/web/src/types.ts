@@ -243,6 +243,44 @@ export interface Invitation {
   created_at: string
 }
 
+/**
+ * 权限点。与服务端 Permission 枚举一一对应。
+ *
+ * 前端拿它决定按钮显隐：没有的权限点了也是 403，不如别显示。
+ */
+export type Permission =
+  | 'ORG_VIEW_MEMBERS'
+  | 'ORG_INVITE'
+  | 'ORG_MANAGE_MEMBERS'
+  | 'ORG_MANAGE_TEAMS'
+  | 'ORG_GRANT_OWNER'
+  | 'ORG_REVOKE_OWNER'
+  | 'TEAM_VIEW_MEMBERS'
+  | 'TEAM_MANAGE_MEMBERS'
+  | 'SKILL_PUBLISH'
+  | 'SKILL_REVIEW'
+  | 'GROUP_PUBLISH'
+
+/**
+ * 我在这个组织下的权限清单。
+ *
+ * 三种作用域各给一份，语义与服务端一致：组织域、组织与团队的并集（管团队成员用）、
+ * 团队优先回落（审核权用）。
+ */
+export interface OrgPermissions {
+  organization_id: string
+  /** 我在这个组织的角色。 */
+  role: string
+  organization_permissions: Permission[]
+  teams: {
+    team_id: string
+    /** 团队优先回落：审核权看这个。 */
+    scope_permissions: Permission[]
+    /** 团队与组织的并集：管团队成员看这个。 */
+    member_permissions: Permission[]
+  }[]
+}
+
 // 邀请列表的一页：与服务端的 InvitationPage 同形状，跟 SkillPage 一个口径。
 export type InvitationPage = Page<Invitation>
 
@@ -298,6 +336,10 @@ export interface PendingReview {
   source: ReviewSource
   /** 版本自己的状态：draft / scanning / pending_review / published / rejected / quarantined。 */
   status: string
+  /** 我能不能做审核动作（放行或驳回）。服务端算的——审核权怎么判，前端 replicate 一遍就会漂。 */
+  can_decide: boolean
+  /** 我能不能放行。自己发布的版本不能自己放行（驳回可以）。 */
+  can_approve: boolean
 }
 
 export interface FileChange {

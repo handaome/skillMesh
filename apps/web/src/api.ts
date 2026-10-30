@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, OrgPermissions, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -314,6 +314,16 @@ export function listOrgMembers(organizationId: string): Promise<Member[]> {
 
 export function listTeamMembers(organizationId: string, teamId: string): Promise<Member[]> {
   return request<Member[]>(`/organizations/${organizationId}/teams/${teamId}/members`)
+}
+
+/**
+ * 我在这个组织下的权限清单。
+ *
+ * 前端按它决定按钮显隐：没有的权限点了也是 403，不如别显示。
+ * 服务端仍然是最终裁决者，这份清单只决定界面长什么样。
+ */
+export function getOrgPermissions(organizationId: string): Promise<OrgPermissions> {
+  return request<OrgPermissions>(`/organizations/${organizationId}/permissions`, 'GET')
 }
 
 /**
