@@ -105,6 +105,8 @@ func newLoginStatusCmd() *cobra.Command {
 // 没传就认环境变量 SM_OIDC_ISSUER。
 func runOidcLogin(ctx context.Context, server string, explicit, manual bool) error {
 	var issuerURL string
+	// 服务端是不是只开了内置账号。走不通浏览器授权码时，靠它说清该怎么办。
+	localAuthOnly := false
 	clientID := Cfg.ClientID
 	if explicit {
 		// 位置参数是服务端地址：从它的公开配置里取 issuer。
@@ -113,9 +115,10 @@ func runOidcLogin(ctx context.Context, server string, explicit, manual bool) err
 		cfg, err := apiclient.FetchPublicConfig(ctx, server)
 		if err != nil {
 			return fmt.Errorf("取服务端公开配置失败（%s）：%w；"+
-				"也可以用环境变量 SM_KEYCLOAK_ISSUER 直接指定 issuer", server, err)
+				"也可以用环境变量 SM_OIDC_ISSUER 直接指定 issuer", server, err)
 		}
 		issuerURL = cfg.Issuer
+		localAuthOnly = cfg.LocalAuth && cfg.Issuer == ""
 		if cfg.ClientID != "" {
 			clientID = cfg.ClientID
 		}
@@ -127,6 +130,11 @@ func runOidcLogin(ctx context.Context, server string, explicit, manual bool) err
 		issuerURL = os.Getenv("SM_OIDC_ISSUER")
 	}
 	if issuerURL == "" {
+		// 服务端只开了内置账号：浏览器授权码这条路根本走不通。
+		// 直接说清要加 --username，别让人去设一个不存在的 issuer。
+		if localAuthOnly {
+			return fmt.Errorf("这个服务端只支持内置账号登录：请加 --username <用户名>")
+		}
 		return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
 			"或设环境变量 SM_OIDC_ISSUER")
 	}
