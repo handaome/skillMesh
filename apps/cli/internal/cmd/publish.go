@@ -30,7 +30,7 @@ func newPublishCmd() *cobra.Command {
 	var (
 		version, visibility, channel, slug, name, description string
 		orgSlug, teamSlug                                     string
-		all, dryRun, skipSecretScan                           bool
+		all, skipSecretScan                                   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "publish <path>",
@@ -71,7 +71,7 @@ func newPublishCmd() *cobra.Command {
 				Slug:                slug,
 				Name:                name,
 				Description:         description,
-				DryRun:              dryRun,
+				DryRun:              globalDryRun,
 				SkipSecretScan:      skipSecretScan,
 				Scope:               scope,
 				RequestedVisibility: requested,
@@ -92,7 +92,7 @@ func newPublishCmd() *cobra.Command {
 					map[string]string{"path": target.Dir})
 				published++
 			}
-			fmt.Printf("\n%s %d 个，失败 %d 个\n", map[bool]string{true: "演练", false: "已发布"}[dryRun], published, Failed)
+			fmt.Printf("\n%s %d 个，失败 %d 个\n", map[bool]string{true: "演练", false: "已发布"}[globalDryRun], published, Failed)
 			if Failed > 0 {
 				return fmt.Errorf("%d 个发布失败", Failed)
 			}
@@ -108,10 +108,9 @@ func newPublishCmd() *cobra.Command {
 	cmd.Flags().StringVar(&orgSlug, "org", "", "发布到的组织（slug）")
 	cmd.Flags().StringVar(&teamSlug, "team", "", "发布到的团队（slug），需同时指定 --org")
 	cmd.Flags().BoolVar(&all, "all", false, "发布目录树里的全部 Skill")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只走完流程不真的发布")
 	cmd.Flags().BoolVar(&skipSecretScan, "skip-secret-scan", false,
 		"跳过密钥扫描（确认命中是占位符时再用）")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // PublishOptions 是发布时的可调项。

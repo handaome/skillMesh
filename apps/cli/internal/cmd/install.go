@@ -16,9 +16,8 @@ import (
 )
 
 func newInstallCmd() *cobra.Command {
-	var agentNames []string
-	var scope, version, file string
-	var locked, dryRun, replace bool
+	var version, file string
+	var locked, replace bool
 
 	cmd := &cobra.Command{
 		Use:   "install <skill-id>",
@@ -38,8 +37,9 @@ func newInstallCmd() *cobra.Command {
 				defer cleanup()
 				return installFromDir(localInstallOptions{
 					Root: root, Source: "local:" + file, SourceType: "local",
-					Provider: "local", Scope: scope, Agents: agentNames,
-					UpdatePolicy: "manual", Replace: replace, DryRun: dryRun,
+					Provider: "local", Scope: scopeOr("user"),
+					Agents:       agentNamesOr("claude-code"),
+					UpdatePolicy: "manual", Replace: replace, DryRun: globalDryRun,
 				})
 			}
 			if len(args) == 0 {
@@ -58,18 +58,16 @@ func newInstallCmd() *cobra.Command {
 			// 参数可以是 Skill ID，也可以是锁文件里记的名字：
 			// 后者支持 `install <名字> --version <旧版本>` 回滚，
 			// 这样就不用再记一个 rollback 命令。
-			skillID, agents, targetScope := args[0], agentNames, scope
+			skillID, agents, targetScope := args[0], agentNamesOr("claude-code"), scopeOr("user")
 			if hasLock && fromLock.SourceID != "" {
 				skillID = fromLock.SourceID
+				// 没显式给 --agent / --scope 时，沿用上次装的那次。
 				if !cmd.Flags().Changed("agent") && len(fromLock.Agents) > 0 {
 					agents = fromLock.Agents
 				}
 				if !cmd.Flags().Changed("scope") && fromLock.Scope != "" {
 					targetScope = fromLock.Scope
 				}
-			}
-			if targetScope == "" {
-				targetScope = "user"
 			}
 
 			versions, err := client.Versions(cmd.Context(), skillID)
@@ -93,7 +91,7 @@ func newInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if dryRun {
+			if globalDryRun {
 				fmt.Printf("演练：将从 %s@%s 安装 %d 字节到 %v\n",
 					skillID, target.Version, len(data), agents)
 				return nil
@@ -107,15 +105,12 @@ func newInstallCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringSliceVar(&agentNames, "agent", []string{"claude-code"}, "目标 Agent，可重复指定")
-	cmd.Flags().StringVar(&scope, "scope", "user", "user 或 project")
 	cmd.Flags().StringVar(&version, "version", "", "指定版本，默认取最新已发布")
 	cmd.Flags().StringVar(&file, "file", "",
 		"从本地 zip 安装（不进注册中心，来源只写锁文件）")
 	cmd.Flags().BoolVar(&locked, "locked", false, "严格按锁文件校验，不符则失败")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只演练不落盘")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // installRequest 是一次注册中心安装的全部参数。

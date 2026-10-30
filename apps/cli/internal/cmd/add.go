@@ -18,11 +18,10 @@ var CloneRepo = gitx.Clone
 
 func NewAddCmd() *cobra.Command {
 	var (
-		ref, subpath, scope, credentialRef string
-		agentNames                         []string
-		refType, updatePolicy              string
-		replace, all, dryRun               bool
-		localDir                           string
+		ref, subpath, credentialRef string
+		refType, updatePolicy       string
+		replace, all                bool
+		localDir                    string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <repo-url>",
@@ -48,9 +47,9 @@ func NewAddCmd() *cobra.Command {
 				}
 				return installFromDir(localInstallOptions{
 					Root: root, Source: "local:" + root, SourceType: "local",
-					Provider: "local", Subpath: subpath, All: all, Scope: scope,
-					Agents: agentNames, UpdatePolicy: updatePolicy,
-					Replace: replace, DryRun: dryRun,
+					Provider: "local", Subpath: subpath, All: all, Scope: scopeOr(""),
+					Agents: agentNamesOr("claude-code"), UpdatePolicy: updatePolicy,
+					Replace: replace, DryRun: globalDryRun,
 				})
 			}
 			if len(args) == 0 {
@@ -82,8 +81,9 @@ func NewAddCmd() *cobra.Command {
 				Root: root, Source: repo, SourceType: "git",
 				Repository: repo, Provider: providerOf(repo),
 				RefType: refType, Ref: ref, Commit: commit,
-				Subpath: subpath, All: all, Scope: scope, Agents: agentNames,
-				UpdatePolicy: updatePolicy, Replace: replace, DryRun: dryRun,
+				Subpath: subpath, All: all, Scope: scopeOr(""),
+				Agents:       agentNamesOr("claude-code"),
+				UpdatePolicy: updatePolicy, Replace: replace, DryRun: globalDryRun,
 			})
 		},
 	}
@@ -93,12 +93,8 @@ func NewAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&subpath, "path", "", "仓库内 Skill 子目录")
 	cmd.Flags().StringVar(&localDir, "local", "",
 		"从本地目录安装（不进注册中心，来源只写锁文件）")
-	cmd.Flags().StringSliceVar(&agentNames, "agent", []string{"claude-code"},
-		"目标 Agent，可重复指定；all 表示所有已启用的适配器")
-	cmd.Flags().StringVar(&scope, "scope", "", "user 或 project（默认有项目根时为 project）")
 	cmd.Flags().StringVar(&credentialRef, "credential-ref", "", "本机凭据管理器中的凭据引用")
 	cmd.Flags().BoolVar(&all, "all", false, "安装仓库里的全部 Skill")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只列出会装什么，不实际安装")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
 	cmd.Flags().StringVar(&updatePolicy, "update-policy", "notify",
 		"更新策略：manual（不动）/ notify（默认，只提示）/ auto_safe（无本地改动时自动更新）")
@@ -106,7 +102,7 @@ func NewAddCmd() *cobra.Command {
 	// 藏起来：帮助里只该出现 --dry-run 这一个「装不装」的开关。
 	cmd.Flags().Bool("install", true, "解析和扫描通过后立即安装（默认行为，已废弃）")
 	_ = cmd.Flags().MarkDeprecated("install", "add 默认就安装，用 --dry-run 只看不装")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // mergeAgents 把新条目并进锁文件里已有的那一条。

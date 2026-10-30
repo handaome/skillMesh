@@ -36,7 +36,6 @@ type scanEntry struct {
 
 func newScanCmd() *cobra.Command {
 	var (
-		agentNames       []string
 		path             string
 		allAgents        bool
 		asJSON           bool
@@ -51,10 +50,10 @@ func newScanCmd() *cobra.Command {
 			"扫不到的目录会报出来，不会当成空目录——一次权限异常不该被解读成「这些 Skill 都没了」。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if allAgents && len(agentNames) > 0 {
+			if allAgents && len(globalAgents) > 0 {
 				return fmt.Errorf("--all-agents 与 --agent 不能同时用")
 			}
-			dirs, err := scanDirs(args, path, agentNames, allAgents)
+			dirs, err := scanDirs(args, path, globalAgents, allAgents)
 			if err != nil {
 				return err
 			}
@@ -69,7 +68,6 @@ func newScanCmd() *cobra.Command {
 			return reportScan(entries)
 		},
 	})
-	cmd.Flags().StringSliceVar(&agentNames, "agent", nil, "只扫指定 Agent 的目录")
 	cmd.Flags().StringVar(&path, "path", "", "直接指定要扫的目录")
 	cmd.Flags().BoolVar(&allAgents, "all-agents", false, "扫所有已启用的 Agent")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "输出 JSON（等同全局 --json）")

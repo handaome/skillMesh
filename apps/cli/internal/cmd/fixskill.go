@@ -19,7 +19,6 @@ import (
 // 只补缺的，不改已有的：作者写的 name 与描述是它自己的声明，不该被工具改掉。
 
 func newFixSkillCmd() *cobra.Command {
-	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "fix-skill <dir>",
 		Short: "补齐 SKILL.md 的 frontmatter，让它符合 agentskills.io 规范",
@@ -40,7 +39,7 @@ func newFixSkillCmd() *cobra.Command {
 				fmt.Println("已经合规，不用改。")
 				return nil
 			}
-			if dryRun {
+			if globalDryRun {
 				fmt.Println("会改成这样（--dry-run 没有落盘）：")
 				fmt.Println(fixed)
 				return nil
@@ -53,8 +52,7 @@ func newFixSkillCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只显示会改成什么，不落盘")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // fixSkillFile 算出合规后的 SKILL.md 内容。

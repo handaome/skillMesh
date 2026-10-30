@@ -687,6 +687,15 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 | `--timeout DURATION` | 命令整体超时，如 `30s`、`2m` |
 | `--no-color` | 禁用 ANSI 色彩（本 CLI 输出本来就没有色彩，留着是为了脚本调用时不必判断） |
 | `--yes` | 对可安全自动确认的提示采用默认值（**不**绕过安全阻断、权限与破坏性操作） |
+| `--agent NAME` | 目标 Agent，可重复指定；`all` 表示所有已启用的适配器 |
+| `--scope user\|project` | 安装范围 |
+| `--dry-run` | 只演练不落盘 |
+
+写在哪都行：`skillmesh --agent hermes install x` 与 `skillmesh install x --agent hermes` 等价。
+
+`--agent`/`--scope`/`--dry-run` 是全局参数，但每条命令仍有自己的默认值——不给时：`install`/`group install` 装到 `claude-code` 的 `user` 范围，`add` 有项目根时装到 `project`，`scan`/`sync` 用全部启用的 Agent。`install` 回滚旧版本时，没给 `--agent`/`--scope` 就沿用锁文件里上次装的那次。
+
+`--dry-run` 只在认它的命令上生效：`install`、`add`、`group install`、`sync`、`publish`、`share`、`update`、`fix-skill`。其余命令（比如 `uninstall`）收到 `--dry-run` 会在 stderr 提示「该命令暂不支持 --dry-run，会照常执行」——别把演练当成保护。
 
 **项目根目录**：默认从当前目录向上找带 `.git` 或 `skillmesh.yaml` 的目录——在仓库的子目录里跑命令，锁文件和项目级安装目录跟着仓库走，不跟着当前子目录走。`--project` 可以直接指定：
 

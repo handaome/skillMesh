@@ -143,7 +143,7 @@ func checkUpdates(ctx context.Context, lock lockfile.Lock, skipManual bool) ([]U
 }
 
 func NewUpdateCmd() *cobra.Command {
-	var checkOnly, all, dryRun, auto bool
+	var checkOnly, all, auto bool
 	cmd := &cobra.Command{
 		Use:   "update [skill-name]",
 		Short: "检查或应用更新",
@@ -200,20 +200,19 @@ func NewUpdateCmd() *cobra.Command {
 				}
 			}
 			if err := applyUpdates(cmd.Context(), projectRoot, &lock, selected,
-				dryRun || checkOnly); err != nil {
+				globalDryRun || checkOnly); err != nil {
 				return err
 			}
-			if dryRun || checkOnly {
+			if globalDryRun || checkOnly {
 				return nil
 			}
 			return lock.Save(projectRoot)
 		},
 	}
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "只检查不应用")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只报出会更新什么，不落盘")
 	cmd.Flags().BoolVar(&auto, "auto", false, "只应用标记了 auto_safe 且本地无改动的来源")
 	cmd.Flags().BoolVar(&all, "all", false, "应用全部更新")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // applyUpdates 按仓库分组应用更新：同一个仓库只 clone 一次，

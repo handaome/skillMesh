@@ -64,6 +64,11 @@ func newRootCmd() *cobra.Command {
 			if jsonOut && c.Annotations[jsonAnnotation] != "true" {
 				fmt.Fprintln(os.Stderr, "提示：该命令暂不支持 --json，输出仍是人读格式。")
 			}
+			// 同理：不支持 --dry-run 的命令要说清楚会照常执行。
+			// 用户以为演练过、实际删了数据，比报错更坏。
+			if globalDryRun && c.Annotations[dryRunAnnotation] != "true" {
+				fmt.Fprintln(os.Stderr, "提示：该命令暂不支持 --dry-run，会照常执行。")
+			}
 			return nil
 		},
 	}
@@ -76,6 +81,11 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&jsonOut, "json", false, "输出稳定 JSON，供脚本调用")
 	root.PersistentFlags().BoolVar(&quiet, "quiet", false, "减少普通提示，错误仍输出到 stderr")
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "显示平时隐藏的完整绝对路径")
+	root.PersistentFlags().StringSliceVar(&globalAgents, "agent", nil,
+		"目标 Agent，可重复指定；all 表示所有已启用的适配器（install/add/group install/scan/sync 用）")
+	root.PersistentFlags().StringVar(&globalScope, "scope", "",
+		"安装范围：user 或 project（默认 user；add 有项目根时为 project。install/add/group install 用）")
+	root.PersistentFlags().BoolVar(&globalDryRun, "dry-run", false, "只演练不落盘")
 	root.Version = cliVersion
 
 	root.AddCommand(
@@ -127,7 +137,7 @@ func hideAdvancedCommands(root *cobra.Command) {
 	advanced := map[string]bool{
 		"add": true, "cloud": true, "doctor": true,
 		"fix-skill": true,
-		"group": true, "installations": true, "logs": true,
+		"group":     true, "installations": true, "logs": true,
 		"review": true, "scan": true, "self-install": true,
 		"share": true, "source": true, "trash": true, "update": true, "watch": true,
 	}

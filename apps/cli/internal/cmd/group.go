@@ -146,9 +146,7 @@ func newGroupCreateCmd() *cobra.Command {
 }
 
 func newGroupInstallCmd() *cobra.Command {
-	var agentNames []string
-	var scope string
-	var replace, dryRun bool
+	var replace bool
 	cmd := supportsJSON(&cobra.Command{
 		Use:   "install <slug>",
 		Short: "把集合里的 Skill 全装上",
@@ -164,11 +162,22 @@ func newGroupInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// 演练：只报出会装哪些成员，不动本地目录。
+			if globalDryRun {
+				if jsonEnabled() {
+					return writeJSON(map[string]any{"planned": group.Members})
+				}
+				for _, member := range group.Members {
+					fmt.Printf("演练：会装 %s（%s）\n", member.Slug, member.Name)
+				}
+				fmt.Printf("\n演练：会装 %d 个成员，不实际安装\n", len(group.Members))
+				return nil
+			}
 			projectRoot := projectRootDir()
 			installed, failed := 0, 0
 			for _, member := range group.Members {
-				if err := installGroupMember(cmd.Context(), client, projectRoot, member, agentNames,
-					scope, replace); err != nil {
+				if err := installGroupMember(cmd.Context(), client, projectRoot, member,
+					agentNamesOr("claude-code"), scopeOr("user"), replace); err != nil {
 					failed++
 					notice("装 %s 失败：%s\n", member.Slug, err)
 					continue
@@ -185,12 +194,8 @@ func newGroupInstallCmd() *cobra.Command {
 			return nil
 		},
 	})
-	cmd.Flags().StringSliceVar(&agentNames, "agent", []string{"claude-code"},
-		"目标 Agent，可重复指定")
-	cmd.Flags().StringVar(&scope, "scope", "user", "user 或 project")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只列出会装什么，不实际安装")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // installGroupMember 装集合里的一个成员。

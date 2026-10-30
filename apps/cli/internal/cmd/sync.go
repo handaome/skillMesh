@@ -98,6 +98,8 @@ func newSyncCmd() *cobra.Command {
 			"本地删掉整个 Skill 要往云端传删除，得加 --propagate-delete。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			options.Agents = globalAgents
+			options.DryRun = globalDryRun
 			if options.Direction != "upload" && options.Direction != "download" &&
 				options.Direction != "both" {
 				return fmt.Errorf("--direction 只能是 upload / download / both")
@@ -126,21 +128,19 @@ func newSyncCmd() *cobra.Command {
 			return reportErr
 		},
 	}
-	cmd.Flags().StringSliceVar(&options.Agents, "agent", nil, "只同步指定 Agent 的目录，不填用全部启用的")
 	cmd.Flags().StringVar(&options.Only, "skill", "", "只同步这一个 Skill")
 	cmd.Flags().StringVar(&options.Direction, "direction", "both", "同步方向：upload / download / both")
 	cmd.Flags().BoolVar(&options.OnlyExisting, "only-existing", false,
 		"只处理已收编的 Skill：本地新发现的不上传，云端新增的也不装")
 	cmd.Flags().StringVar(&options.Resolve, "resolve", "",
 		"冲突解决方式：keep-local / keep-cloud / keep-both")
-	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "只报出会同步什么，不落盘")
 	cmd.Flags().BoolVar(&options.AllowDelete, "allow-delete", false,
 		"确认把本地删掉的文件也同步到云端（删除传播需要显式确认）")
 	cmd.Flags().BoolVar(&options.PropagateDelete, "propagate-delete", false,
 		"本地删掉的整个 Skill 也从云端删掉（软删除，回收期内可还原）")
 	cmd.Flags().BoolVar(&options.NoShare, "no-share", false,
 		"不把技能统一到共享目录（默认统一到 sync.shared_dir）")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // syncResult 是一条同步结果。

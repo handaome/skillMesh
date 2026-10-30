@@ -22,7 +22,6 @@ import (
 // Agent 自己的目录（Codex 的 .system 之类）不该被搬走。
 func newShareCmd() *cobra.Command {
 	var from string
-	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "share <agent>",
 		Short: "让一个 Agent 共用另一个 Agent 的技能目录（磁盘上只存一份）",
@@ -32,12 +31,11 @@ func newShareCmd() *cobra.Command {
 			"以后装了新技能，再跑一次这个命令补上链接。",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runShare(args[0], from, dryRun)
+			return runShare(args[0], from, globalDryRun)
 		},
 	}
 	cmd.Flags().StringVar(&from, "from", "", "实体所在的 Agent（默认取第一个启用的其它 Agent）")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只看会怎么动，不真改")
-	return cmd
+	return supportsDryRun(cmd)
 }
 
 // runShare 共享一次。
