@@ -119,53 +119,70 @@ func linkSharedToAgents(sharedDir string, options SyncOptions) ([]syncResult, bo
 	if err != nil {
 		return []syncResult{{Name: "统一技能目录", Outcome: Failed, Detail: err.Error()}}, false
 	}
-	dirs := agentDirs(options)
+	targets := agentDirs(options)
 	var results []syncResult
 	linked := false
 	for _, name := range names {
-		if !appearsIn(dirs, name) {
+		// 链接该放在哪儿：按每个 Agent 自己的规则算。分类分层的 Agent
+		// （Hermes 的 <category>/<name>/）要放在分类下面——
+		// 放错地方等于同一个技能装了两份。
+		category := skillscan.CategoryOf(filepath.Join(sharedDir, name))
+		links := make([]string, 0, len(targets))
+		for _, target := range targets {
+			link, err := agent.InstallPath(Cfg, target.name, "user", "", name, category)
+			if err != nil {
+				continue
+			}
+			links = append(links, link)
+		}
+		if !appearsIn(links) {
 			continue // 没被任何 Agent 收编过，不塞给它们
 		}
-		for _, dir := range dirs {
-			link := filepath.Join(dir, name)
+		for _, link := range links {
 			if _, err := os.Lstat(link); err == nil {
 				continue // 已经有东西了
 			}
 			if options.DryRun {
 				results = append(results, syncResult{Name: name, Path: link, Outcome: WouldShare,
-					Detail: "演练：会给 " + filepath.Base(dir) + " 目录补一个链接"})
+					Detail: "演练：会补一个链接"})
 				continue
 			}
-			if err := skillscan.LinkDir(filepath.Join(sharedDir, name), link); err != nil {
+			if err := linkSkill(filepath.Join(sharedDir, name), link); err != nil {
 				results = append(results, syncResult{Name: name, Path: link, Outcome: Failed,
 					Detail: "建链接失败: " + err.Error()})
 				continue
 			}
 			results = append(results, syncResult{Name: name, Path: link, Outcome: Shared,
-				Detail: "已给 " + filepath.Base(dir) + " 目录补上链接"})
+				Detail: "已补上链接"})
 			linked = true
 		}
 	}
 	return results, linked
 }
 
+// agentTarget 是一个 Agent 的技能目录。
+type agentTarget struct {
+	name string
+	dir  string
+}
+
 // agentDirs 是这次要往里放链接的 Agent 目录（共享目录本身排除）。
-func agentDirs(options SyncOptions) []string {
-	var dirs []string
+func agentDirs(options SyncOptions) []agentTarget {
+	var targets []agentTarget
 	for _, agentName := range syncAgentNames(options.Agents) {
 		dir, err := agent.Dir(Cfg, agentName, "user", "")
 		if err != nil || sameDir(dir, Cfg.Sync.SharedSkillsDir()) {
 			continue
 		}
-		dirs = append(dirs, dir)
+		targets = append(targets, agentTarget{name: agentName, dir: dir})
 	}
-	return dirs
+	return targets
 }
 
-// appearsIn 判断这个名字是不是已经在某个 Agent 目录里出现过。
-func appearsIn(dirs []string, name string) bool {
-	for _, dir := range dirs {
-		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+// appearsIn 判断这些位置里是不是已经有一个了。
+func appearsIn(paths []string) bool {
+	for _, path := range paths {
+		if _, err := os.Lstat(path); err == nil {
 			return true
 		}
 	}

@@ -59,7 +59,9 @@
 - 错误码沿用服务端 problem+json 的口径，**没有引入对方那套 `kind`/`details` 词表**，避免两套错误码并存。
 - 退出码由错误类型推出：服务端 `FORBIDDEN` 退 4、`NOT_FOUND` 退 9、`SYNC_CONFLICT` 退 7、`RATE_LIMITED` 退 5，认证失败退 3；没登记的错误码退回按 HTTP 状态判断。
 
-还没做的：`--verbose`、`--no-color`、`--yes`、`--timeout`、`--profile`、`--project` 仍未实现（`--agent`/`--scope`/`--dry-run` 仍是各命令的局部参数，尚未提升为全局）。这些同样是 §3.2 写死、实现为空的设计欠账。
+还没做的：`--agent`/`--scope`/`--dry-run` 仍是各命令的局部参数，尚未提升为全局。
+（`--verbose`、`--no-color`、`--yes`、`--timeout`、`--profile`、`--project`
+已补成全局参数，见 §3.2 的实现状态表。）
 
 
 **2. Agent 反向驱动入口（收敛版）** —— ✅ **已实现（2026-10-27）**

@@ -4,7 +4,7 @@ import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
-import com.skillmesh.api.scan.SkillSpecValidator;
+import com.skillmesh.api.scan.SkillFrontmatter;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.skill.SlugRules;
 import com.skillmesh.api.skill.SourceEntity;
@@ -15,8 +15,6 @@ import com.skillmesh.api.source.dto.ImportFromGitBatchRequest;
 import com.skillmesh.api.source.dto.ImportFromGitBatchResponse;
 import com.skillmesh.api.source.dto.ImportFromGitRequest;
 import com.skillmesh.api.source.dto.ImportFromGitResponse;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -75,10 +73,12 @@ public class GitSourceImportService {
         try (SourceService.Checkout checkout =
                  sources.checkout(req.repositoryUrl(), req.ref())) {
             Path skillDir = updates.locate(checkout.root(), req.path());
+            Map<?, ?> meta = SkillFrontmatter.read(skillDir);
 
             var created = skillService.create(user, new CreateSkillRequest(
                 req.slug(), req.name(), req.description(), req.visibility(),
-                null, null, req.tags(), Map.of(),
+                null, null, mergeTags(req.tags(), SkillFrontmatter.tags(meta)),
+                SkillFrontmatter.extension(meta),
                 new SkillSourceInput("git", providerOf(req.repositoryUrl()),
                     req.repositoryUrl(), req.path(),
                     sources.refType(checkout.root(), req.ref()), req.ref(),
@@ -143,9 +143,9 @@ public class GitSourceImportService {
                                                            SourceService.Checkout checkout,
                                                            String path) {
         Path skillDir = updates.locate(checkout.root(), path);
-        Map<?, ?> meta = readFrontmatter(skillDir);
-        String name = text(meta.get("name"));
-        String description = text(meta.get("description"));
+        Map<?, ?> meta = SkillFrontmatter.read(skillDir);
+        String name = SkillFrontmatter.text(meta, "name");
+        String description = SkillFrontmatter.text(meta, "description");
         String dirName = skillDir.getFileName().toString();
         if (name.isEmpty()) {
             name = dirName;
@@ -157,7 +157,8 @@ public class GitSourceImportService {
 
         var created = skillService.create(user, new CreateSkillRequest(
             slug, name, description, req.visibility(),
-            null, null, req.tags(), Map.of(),
+            null, null, mergeTags(req.tags(), SkillFrontmatter.tags(meta)),
+            SkillFrontmatter.extension(meta),
             new SkillSourceInput("git", providerOf(req.repositoryUrl()),
                 req.repositoryUrl(), path,
                 sources.refType(checkout.root(), req.ref()), req.ref(),
@@ -178,21 +179,35 @@ public class GitSourceImportService {
             created.slug(), published.version(), published.commit(), published.status());
     }
 
-    /** 读 SKILL.md 的 frontmatter。读不到就当没有——名字与描述会退回目录名。 */
-    private Map<?, ?> readFrontmatter(Path skillDir) {
-        Path file = skillDir.resolve(SkillSpecValidator.FILE_NAME);
-        try {
-            if (!Files.exists(file)) {
-                return Map.of();
+    /**
+     * 合并标签：请求里给的在前，frontmatter 里的补在后面。
+     *
+     * 重复的只留一个。服务端最多收 30 个，超了请求校验会挡下整个导入。
+     */
+    private List<String> mergeTags(List<String> requested, List<String> fromFrontmatter) {
+        List<String> merged = new ArrayList<>();
+        for (String tag : concat(requested, fromFrontmatter)) {
+            String trimmed = tag == null ? "" : tag.trim();
+            if (trimmed.isEmpty() || merged.contains(trimmed)) {
+                continue;
             }
-            return SkillSpecValidator.frontmatter(Files.readAllBytes(file));
-        } catch (IOException e) {
-            return Map.of();
+            merged.add(trimmed);
+            if (merged.size() == 30) {
+                break;
+            }
         }
+        return merged;
     }
 
-    private String text(Object value) {
-        return value == null ? "" : String.valueOf(value).trim();
+    private List<String> concat(List<String> left, List<String> right) {
+        List<String> all = new ArrayList<>();
+        if (left != null) {
+            all.addAll(left);
+        }
+        if (right != null) {
+            all.addAll(right);
+        }
+        return all;
     }
 
     /** 从仓库地址猜出来源类型。猜不出就是 generic_git。 */

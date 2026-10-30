@@ -46,6 +46,26 @@ skillmesh publish <本地目录> --team <团队>
 发到组织或团队会进入审核队列，**这是流程的不可逆起点**：提交后作者本人
 不能再改那一份的内容，只能等审核结果或撤回重发。要发之前先跟用户确认。
 
+## SKILL.md 不合规时
+
+SKILL.md 开头要有 YAML frontmatter，`name`（≤64 字符）与 `description`（≤1024 字符）
+必填、后面要有正文——这是 [agentskills.io](https://agentskills.io) 规范，
+Hermes 这类按规范扫的 Agent 只认合规的 skill。装与发之前 CLI 都会过这道闸，
+不合规会直接报错说清缺什么。
+
+本地 skill 不合规时先补齐，别改内容：
+
+```bash
+skillmesh fix-skill <目录>            # 补 frontmatter：name 取目录名，description 取正文第一段
+skillmesh fix-skill <目录> --dry-run  # 先看会改成什么
+```
+
+它只补缺的，已有字段不动；补完仍不合规（比如正文也是空的）会报错——
+那种情况要请用户自己补说明。
+
+改不了源文件的第三方 skill，可以在 frontmatter 里声明豁免
+（`metadata.skillmesh.spec_exempt: true`），CLI 与服务端都认。
+
 ## 不可逆操作：必须让用户确认
 
 以下操作会删东西或改状态，执行前必须得到用户明确同意：

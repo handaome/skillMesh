@@ -62,16 +62,16 @@ func runShare(targetName, fromName string, dryRun bool) error {
 	if info, err := os.Stat(fromDir); err != nil || !info.IsDir() {
 		return fmt.Errorf("%s 的技能目录还不存在，没东西可共用：%s", fromName, fromDir)
 	}
-	plan, err := planShare(fromDir, toDir)
+	plan, err := planShare(fromDir, toDir, targetName)
 	if err != nil {
 		return err
 	}
 	if len(plan.conflicts) > 0 {
 		fmt.Fprintf(os.Stderr, "有 %d 个技能两边同名但内容不同，先处理掉再共享：\n",
 			len(plan.conflicts))
-		for _, name := range plan.conflicts {
-			fmt.Fprintf(os.Stderr, "  %s（%s 与 %s）\n", name,
-				filepath.Join(toDir, name), filepath.Join(fromDir, name))
+		for _, item := range plan.conflicts {
+			fmt.Fprintf(os.Stderr, "  %s（%s 与 %s）\n", item.name,
+				item.path, filepath.Join(fromDir, item.name))
 		}
 		return fmt.Errorf("同名内容不同的技能没有动，其它也没动")
 	}
@@ -105,55 +105,127 @@ func pickShareSource(targetName string) (string, error) {
 	return "", fmt.Errorf("没有别的启用的 Agent 可选，用 --from 指定一个")
 }
 
+// shareItem 是共享时涉及的一个技能。
+type shareItem struct {
+	// name 是技能名（SKILL.md 里声明的）。
+	name string
+	// path 是它现在的路径：源目录里的实体，或目标目录里的那份。
+	path string
+	// link 是共享后目标目录里该放链接的位置。
+	link string
+}
+
 // sharePlan 是共享一次要做的动作。
 type sharePlan struct {
-	move      []string // 目标目录独有：搬去源目录
-	drop      []string // 两边内容一样：删掉目标目录里那份
-	link      []string // 源目录有、目标目录没有：建链接
-	conflicts []string // 同名但内容不同：用户自己决定，命令不碰
-	leftovers []string // 目标目录里不是技能的东西：原样留着
+	move      []shareItem // 目标目录独有：搬去源目录
+	drop      []shareItem // 两边内容一样：删掉目标目录里那份
+	link      []shareItem // 源目录有、目标目录没有：建链接
+	conflicts []shareItem // 同名但内容不同：用户自己决定，命令不碰
 }
 
 // planShare 算共享要做的动作。
-func planShare(fromDir, toDir string) (sharePlan, error) {
+//
+// 目标目录里放链接的位置按目标 Agent 的规则算：分类分层的 Agent
+// （Hermes 的 <category>/<name>/）放分类下面，与安装时是同一套规则。
+func planShare(fromDir, toDir, targetAgent string) (sharePlan, error) {
 	plan := sharePlan{}
-	toNames, err := skillNames(toDir)
+	fromItems, err := scanSkillDirs(fromDir)
 	if err != nil {
 		return plan, err
 	}
-	fromNames, err := skillNames(fromDir)
+	toItems, err := scanSkillDirs(toDir)
 	if err != nil {
 		return plan, err
 	}
-	fromSet := map[string]bool{}
-	for _, name := range fromNames {
-		fromSet[name] = true
+	fromByName := map[string]shareItem{}
+	for _, item := range fromItems {
+		fromByName[item.name] = item
 	}
-	for _, name := range toNames {
-		if !fromSet[name] {
-			plan.move = append(plan.move, name)
+	toByName := map[string]shareItem{}
+	for _, item := range toItems {
+		toByName[item.name] = item
+	}
+
+	// 链接该放在哪儿：按名字算一次，两边同名的是同一个技能，位置一样。
+	links := map[string]string{}
+	linkOf := func(item shareItem) (string, error) {
+		if path, ok := links[item.name]; ok {
+			return path, nil
+		}
+		path, err := agent.InstallPath(Cfg, targetAgent, "user", "", item.name,
+			skillscan.CategoryOf(item.path))
+		if err != nil {
+			return "", err
+		}
+		links[item.name] = path
+		return path, nil
+	}
+
+	for _, item := range toItems {
+		source, ok := fromByName[item.name]
+		if !ok {
+			// 目标目录独有：搬去源目录，那边才是实体。
+			link, err := linkOf(item)
+			if err != nil {
+				return plan, err
+			}
+			item.link = link
+			plan.move = append(plan.move, item)
 			continue
 		}
-		same, err := sameSkillContent(filepath.Join(toDir, name), filepath.Join(fromDir, name))
+		same, err := sameSkillContent(item.path, source.path)
+		if err != nil {
+			return plan, err
+		}
+		link, err := linkOf(source)
 		if err != nil {
 			return plan, err
 		}
 		if same {
-			plan.drop = append(plan.drop, name)
-		} else {
-			plan.conflicts = append(plan.conflicts, name)
+			item.link = link
+			plan.drop = append(plan.drop, item)
+			continue
 		}
+		plan.conflicts = append(plan.conflicts, item)
 	}
-	toSet := map[string]bool{}
-	for _, name := range toNames {
-		toSet[name] = true
-	}
-	for _, name := range fromNames {
-		if !toSet[name] {
-			plan.link = append(plan.link, name)
+	for _, item := range fromItems {
+		if _, ok := toByName[item.name]; ok {
+			continue
 		}
+		link, err := linkOf(item)
+		if err != nil {
+			return plan, err
+		}
+		item.link = link
+		plan.link = append(plan.link, item)
 	}
 	return plan, nil
+}
+
+// scanSkillDirs 列出目录里的技能目录（含分类分层的那几层）。
+//
+// 递归着扫：分类分层的 Agent 目录里，技能在 <category>/<name>/ 下面，
+// 只看直接子目录会以为那儿没有技能。
+func scanSkillDirs(dir string) ([]shareItem, error) {
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // 目录还没建：那儿就是没有技能
+		}
+		return nil, err
+	}
+	candidates, err := skillscan.Candidates(dir, true)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]shareItem, 0, len(candidates))
+	for _, candidate := range candidates {
+		name, err := skillDirName(candidate.Dir)
+		if err != nil {
+			continue // 名字不能当目录名用的，跳过
+		}
+		items = append(items, shareItem{name: name, path: candidate.Dir})
+	}
+	return items, nil
 }
 
 // skillNames 列出目录里的技能目录名。
@@ -207,28 +279,22 @@ func printSharePlan(targetName, fromName, toDir, fromDir string, plan sharePlan,
 	fmt.Printf("%s让 %s 共用 %s 的技能内容：%s -> %s\n",
 		prefix, targetName, fromName, toDir, fromDir)
 	if len(plan.move) > 0 {
-		fmt.Printf("  搬过去 %d 个技能（源目录没有的）：%s\n",
-			len(plan.move), summarize(plan.move))
+		fmt.Printf("  搬过去 %d 个技能（源目录没有的）：%s\n", len(plan.move), summarize(plan.move))
 	}
 	if len(plan.drop) > 0 {
-		fmt.Printf("  删掉 %d 个重复的（两边内容一样，只留一份）：%s\n",
-			len(plan.drop), summarize(plan.drop))
+		fmt.Printf("  删掉 %d 个重复的（两边内容一样，只留一份）：%s\n", len(plan.drop), summarize(plan.drop))
 	}
 	if len(plan.link) > 0 {
-		fmt.Printf("  建 %d 个链接（源目录有、这边没有的）：%s\n",
-			len(plan.link), summarize(plan.link))
-	}
-	if len(plan.leftovers) > 0 {
-		fmt.Printf("  %s 里 %d 个不是技能的东西原样留着：%s\n",
-			toDir, len(plan.leftovers), summarize(plan.leftovers))
-	}
-	if len(plan.move) == 0 && len(plan.drop) == 0 && len(plan.link) == 0 {
-		fmt.Println("  两边已经一致，不用动。")
+		fmt.Printf("  建 %d 个链接（源目录有、这边没有的）：%s\n", len(plan.link), summarize(plan.link))
 	}
 }
 
-// summarize 把一串名字压成一行，太多时只给个数。
-func summarize(names []string) string {
+// summarize 把一串名字压成一行，太多就只给个数。
+func summarize(items []shareItem) string {
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		names = append(names, item.name)
+	}
 	if len(names) <= 5 {
 		return strings.Join(names, "、")
 	}
@@ -254,30 +320,45 @@ func confirmPrompt(question string) bool {
 // applyShare 按计划把目标目录里的技能换成链接。
 func applyShare(fromDir, toDir string, plan sharePlan) error {
 	// 目标目录独有的技能：搬去源目录，那边才是实体。
-	for _, name := range plan.move {
-		if err := movePath(filepath.Join(toDir, name), filepath.Join(fromDir, name)); err != nil {
+	for _, item := range plan.move {
+		if err := movePath(item.path, filepath.Join(fromDir, item.name)); err != nil {
 			return err
 		}
 	}
 	// 内容一样的：目标目录里那份删掉，换成链接。
-	for _, name := range plan.drop {
-		if err := os.RemoveAll(filepath.Join(toDir, name)); err != nil {
-			return fmt.Errorf("删 %s 失败: %w", filepath.Join(toDir, name), err)
+	for _, item := range plan.drop {
+		if err := os.RemoveAll(item.path); err != nil {
+			return fmt.Errorf("删 %s 失败: %w", item.path, err)
 		}
 	}
 	// 源目录里的每个技能，在目标目录里都要有对应的链接。
-	names, err := skillNames(fromDir)
-	if err != nil {
-		return err
+	for _, item := range plan.link {
+		if err := linkSkill(item.path, item.link); err != nil {
+			return err
+		}
 	}
-	for _, name := range names {
-		link := filepath.Join(toDir, name)
-		if _, err := os.Lstat(link); err == nil {
-			continue // 已经是链接或实体了
+	// 搬过来的那几个也要放链接：搬走之后目标目录里就没它了。
+	for _, item := range plan.move {
+		if err := linkSkill(filepath.Join(fromDir, item.name), item.link); err != nil {
+			return err
 		}
-		if err := skillscan.LinkDir(filepath.Join(fromDir, name), link); err != nil {
-			return fmt.Errorf("建链接 %s 失败: %w", link, err)
-		}
+	}
+	return nil
+}
+
+// linkSkill 在 link 位置建一个指向 target 的目录链接。
+//
+// 已经有的不动：那儿可能有用户自己放的东西。
+// 分类分层的链接要建在 <category>/ 下面，父目录得先有。
+func linkSkill(target, link string) error {
+	if _, err := os.Lstat(link); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return fmt.Errorf("建 %s 失败: %w", filepath.Dir(link), err)
+	}
+	if err := skillscan.LinkDir(target, link); err != nil {
+		return fmt.Errorf("建链接 %s 失败: %w", link, err)
 	}
 	return nil
 }

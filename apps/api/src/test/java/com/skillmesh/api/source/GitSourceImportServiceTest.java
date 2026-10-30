@@ -87,8 +87,10 @@ class GitSourceImportServiceTest {
         Path checkout = Files.createTempDirectory("skillmesh-import-probe-");
         Path skillDir = Files.createDirectories(checkout.resolve("skills/probe"));
         // frontmatter 要合规：不符合 agentskills.io 规范的制品会被扫描拦成隔离态。
+        // 扩展字段也一起带上：它们是 skill 自己声明的，导入时不该丢掉。
         Files.writeString(skillDir.resolve("SKILL.md"),
-            "---\nname: probe\ndescription: 探针技能\n---\n\n# probe\n",
+            "---\nname: probe\ndescription: 探针技能\nlicense: MIT\nauthor: 探针作者\n"
+            + "tags:\n  - demo\nmetadata:\n  hermes:\n    category: devops\n---\n\n# probe\n",
             StandardCharsets.UTF_8);
         Path other = Files.createDirectories(checkout.resolve("skills/other"));
         Files.writeString(other.resolve("SKILL.md"),
@@ -148,8 +150,24 @@ class GitSourceImportServiceTest {
         assertThat(version.getSourceCommit()).isEqualTo(COMMIT);
     }
 
-    private ImportFromGitRequest request() {
-        return new ImportFromGitRequest("https://github.com/probe/probe-skill.git",
+    /**
+     * frontmatter 里的扩展元信息随 Skill 存进云端。
+     *
+     * 丢掉的话网页端的「规范元信息」是空的，Hermes 的分类也没人知道——
+     * 那正是导入时该带上的东西。
+     */
+    @Test
+    void 导入时带上frontmatter里的规范元信息() {
+        ImportFromGitResponse result = imports.importSkill(owner, request());
+
+        SkillEntity skill = skills.findById(UUID.fromString(result.skillId())).orElseThrow();
+        assertThat(skill.getMetadataJson()).containsEntry("license", "MIT");
+        assertThat(skill.getMetadataJson()).containsEntry("author", "探针作者");
+        assertThat(skill.getMetadataJson()).containsKey("metadata");
+        assertThat(skill.getTags()).containsExactly("demo");
+    }
+
+    private ImportFromGitRequest request() {        return new ImportFromGitRequest("https://github.com/probe/probe-skill.git",
             "skills/probe", "main", "probe-skill", "探针技能", "测试用",
             "private", List.of());
     }
