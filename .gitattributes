@@ -1,0 +1,6 @@
+# 迁移文件的行尾必须统一成 LF。
+#
+# Flyway 的 checksum 按文件内容算，CRLF 与 LF 是两份不同的内容：
+# Windows 上 checkout 出来是 CRLF，容器里是 LF，换台机器就报
+# 「Migration checksum mismatch」。锁死行尾，别让行尾参与 checksum。
+*.sql text eol=lf
