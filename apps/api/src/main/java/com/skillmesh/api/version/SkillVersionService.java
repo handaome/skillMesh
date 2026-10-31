@@ -14,9 +14,11 @@ import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.upload.UploadSessionEntity;
 import com.skillmesh.api.upload.UploadSessionRepository;
+import com.skillmesh.api.upload.UploadStatus;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import com.skillmesh.api.version.dto.CreateVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionResponse.UploadTarget;
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.scan.ScanEntity;
@@ -95,7 +97,7 @@ public class SkillVersionService {
         version.setSourceCommit(req.source_commit());
         version.setChangelog(req.changelog() == null ? "" : req.changelog());
         version.setManifestJson(toManifestJson(req.manifest()));
-        version.setStatus("draft");
+        version.setStatus(VersionStatus.draft);
         version.setCreatedBy(user.id());
         version.setCreatedAt(now);
         // 基线存到版本行：转正时还要再对一次（建版本到上传完成之间，
@@ -114,7 +116,7 @@ public class SkillVersionService {
         session.setExpectedSha256(req.sha256());
         session.setExpectedSizeBytes(req.size_bytes());
         session.setTemporaryStorageKey(tempKey);
-        session.setStatus("created");
+        session.setStatus(UploadStatus.created);
         session.setExpiresAt(now.plus(ArtifactService.UPLOAD_TTL));
         session.setCreatedAt(now);
         uploads.save(session);
@@ -279,7 +281,7 @@ public class SkillVersionService {
         auth.requireOwner(user, skill.getOwnerUserId(), "只有属主能撤回自己的版本");
         SkillVersionEntity entity = versions.findBySkillIdAndVersionForUpdate(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
-        if ("revoked".equals(entity.getStatus())) {
+        if (entity.getStatus() == VersionStatus.revoked) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已经是撤回状态");
         }
         // DDL 要求 revoked 的版本必须有制品（skill_versions 的 check 约束）。
@@ -288,19 +290,19 @@ public class SkillVersionService {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "该版本还没有上传制品，没有东西可撤回");
         }
-        String previous = entity.getStatus();
+        VersionStatus previous = entity.getStatus();
         // DDL 要求 revoked 必须带 revoked_at（V1__init.sql 的 check 约束）。
-        entity.setStatus("revoked");
+        entity.setStatus(VersionStatus.revoked);
         entity.setRevokedAt(OffsetDateTime.now(ZoneOffset.UTC));
         entity.setRevokeReason(reason == null ? "" : reason);
         versions.save(entity);
 
-        audit.record(user, "version.revoke", "skill", skillId, "success",
+        audit.record(user, "version.revoke", "skill", skillId, AuditOutcome.success,
             Map.of("version", version, "reason", reason == null ? "" : reason,
                 "previous_status", previous));
 
         return Map.of("skill_id", skillId.toString(), "version", version,
-            "status", "revoked", "reason", reason == null ? "" : reason);
+            "status", VersionStatus.revoked, "reason", reason == null ? "" : reason);
     }
 
 }

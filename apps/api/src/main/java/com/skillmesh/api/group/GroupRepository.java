@@ -18,14 +18,14 @@ public interface GroupRepository extends JpaRepository<GroupEntity, UUID> {
     @Query(value = """
         select g.* from skill_groups g
         where """ + VisibleGroups.WHERE + """
-          and g.status = 'active'
-        order by g.updated_at desc, g.id desc
+          and g.status = """ + GroupStatus.ACTIVE_SQL + """
+          order by g.updated_at desc, g.id desc
         """, nativeQuery = true)
     List<GroupEntity> findVisible(@Param("owner") UUID owner);
 
     @Query(value = """
         select g.* from skill_groups g
-        where g.id = :id and g.status = 'active'
+        where g.id = :id and g.status = """ + GroupStatus.ACTIVE_SQL + """
         """, nativeQuery = true)
     Optional<GroupEntity> findActiveById(@Param("id") UUID id);
 
@@ -33,7 +33,7 @@ public interface GroupRepository extends JpaRepository<GroupEntity, UUID> {
     @Query(value = """
         select case when count(g) > 0 then true else false end from skill_groups g
         where g.owner_user_id = :owner and g.organization_id is null
-          and g.slug = :slug and g.status = 'active'
+          and g.slug = :slug and g.status = """ + GroupStatus.ACTIVE_SQL + """
         """, nativeQuery = true)
     boolean existsPersonalSlug(@Param("owner") UUID owner, @Param("slug") String slug);
 
@@ -41,7 +41,7 @@ public interface GroupRepository extends JpaRepository<GroupEntity, UUID> {
     @Query(value = """
         select case when count(g) > 0 then true else false end from skill_groups g
         where g.organization_id = :organizationId
-          and g.slug = :slug and g.status = 'active'
+          and g.slug = :slug and g.status = """ + GroupStatus.ACTIVE_SQL + """
         """, nativeQuery = true)
     boolean existsOrganizationSlug(@Param("organizationId") UUID organizationId,
                                    @Param("slug") String slug);
@@ -49,11 +49,10 @@ public interface GroupRepository extends JpaRepository<GroupEntity, UUID> {
     /** 按 slug 取一个可见的集合：CLI 与网页端都按 slug 引用集合。 */
     @Query(value = """
         select g.* from skill_groups g
-        where g.slug = :slug and g.status = 'active'
-          and """ + VisibleGroups.WHERE
-        + """
-        order by g.updated_at desc, g.id desc
-        limit 1
+        where """ + VisibleGroups.WHERE + """
+          and g.slug = :slug and g.status = """ + GroupStatus.ACTIVE_SQL + """
+          order by g.updated_at desc, g.id desc
+          limit 1
         """, nativeQuery = true)
     Optional<GroupEntity> findVisibleBySlug(@Param("owner") UUID owner,
                                            @Param("slug") String slug);

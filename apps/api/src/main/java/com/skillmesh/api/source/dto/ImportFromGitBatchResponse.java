@@ -1,6 +1,7 @@
 package com.skillmesh.api.source.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.version.VersionStatus;
 import java.util.List;
 
 /**
@@ -17,7 +18,7 @@ public record ImportFromGitBatchResponse(
             String slug,
             String version,
             @JsonProperty("source_commit") String sourceCommit,
-            String status) {
+            VersionStatus status) {
     }
 
     /** 导入失败的一条，连原因一起报。 */

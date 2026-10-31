@@ -66,6 +66,7 @@ public interface SkillVersionRepository extends JpaRepository<SkillVersionEntity
      * 游标少了哪一级，同一时刻的多条待审顺序就不定，翻页会漏掉或重复。
      *
      * @param reviewerRoles 能审的角色集合：owner/admin/publisher/reviewer
+     * @param status 版本状态：小写字符串（原生 SQL 不能直接绑枚举）
      */
     @Query(value = """
         select v.* from skill_versions v

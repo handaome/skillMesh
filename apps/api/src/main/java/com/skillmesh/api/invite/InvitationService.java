@@ -1,5 +1,6 @@
 package com.skillmesh.api.invite;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
@@ -107,14 +108,14 @@ public class InvitationService {
         entity.setOrgRole(role);
         entity.setTeamRole(teamRoleValue);
         entity.setTokenHash(ContentDigest.sha256(token));
-        entity.setStatus("pending");
+        entity.setStatus(InvitationStatus.pending);
         entity.setInvitedBy(actor.id());
         entity.setSubject(subject);
         entity.setCreatedAt(now);
         entity.setExpiresAt(now.plusDays(DEFAULT_TTL_DAYS));
         invitations.save(entity);
 
-        audit.record(actor, "invitation.create", "invitation", entity.getId(), "success",
+        audit.record(actor, "invitation.create", "invitation", entity.getId(), AuditOutcome.success,
             Map.of("organization_id", organizationId.toString(),
                 "team_id", teamId == null ? "" : teamId.toString()));
         return new Created(entity.getId(), token, entity);
@@ -128,7 +129,7 @@ public class InvitationService {
         // 一份单次令牌把两个人拉进组织。抢不到的一方在这里排队，
         // 等前面那个提交完再读到新状态，按下面的契约给 409 或幂等 200。
         InvitationEntity entity = requireForUpdate(rawToken);
-        if ("accepted".equals(entity.getStatus())) {
+        if (entity.getStatus() == InvitationStatus.accepted) {
             // 真正的幂等只有「同一个人」成立：别人拿着链接再来，
             // 他根本没进组，却会拿到一句「已加入」。
             if (user.id().equals(entity.getAcceptedBy())) {
@@ -136,7 +137,7 @@ public class InvitationService {
             }
             throw new ApiException(409, ErrorCodes.INVITATION_INVALID, "邀请已被接受");
         }
-        if (!"pending".equals(entity.getStatus())) {
+        if (entity.getStatus() != InvitationStatus.pending) {
             throw new ApiException(409, ErrorCodes.INVITATION_INVALID, "邀请已失效");
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
@@ -151,11 +152,11 @@ public class InvitationService {
         if (entity.getTeamId() != null) {
             orgs.upsertTeamMember(user, entity.getTeamId(), user.id(), entity.getTeamRole());
         }
-        entity.setStatus("accepted");
+        entity.setStatus(InvitationStatus.accepted);
         entity.setAcceptedBy(user.id());
         entity.setAcceptedAt(now);
         invitations.save(entity);
-        audit.record(user, "invitation.accept", "invitation", entity.getId(), "success",
+        audit.record(user, "invitation.accept", "invitation", entity.getId(), AuditOutcome.success,
             Map.of("organization_id", entity.getOrganizationId().toString()));
         return toAccepted(entity, user.id());
     }
@@ -164,9 +165,9 @@ public class InvitationService {
      * 这份邀请现在是什么状态。过期按时间算，不改库里的 status。
      * 摘要页与接受邀请用同一套口径。
      */
-    public String effectiveStatus(InvitationEntity entity) {
-        if ("pending".equals(entity.getStatus()) && isExpired(entity, OffsetDateTime.now(ZoneOffset.UTC))) {
-            return "expired";
+    public InvitationStatus effectiveStatus(InvitationEntity entity) {
+        if (entity.getStatus() == InvitationStatus.pending && isExpired(entity, OffsetDateTime.now(ZoneOffset.UTC))) {
+            return InvitationStatus.expired;
         }
         return entity.getStatus();
     }
@@ -236,16 +237,16 @@ public class InvitationService {
         if (!entity.getOrganizationId().equals(organizationId)) {
             throw ApiException.notFound("邀请");
         }
-        entity.setStatus("revoked");
+        entity.setStatus(InvitationStatus.revoked);
         invitations.save(entity);
-        audit.record(actor, "invitation.revoke", "invitation", entity.getId(), "success", Map.of());
+        audit.record(actor, "invitation.revoke", "invitation", entity.getId(), AuditOutcome.success, Map.of());
     }
 
     /** 公开摘要。不存在/已撤销都当 404，不告诉调用方到底是哪个原因。 */
     @Transactional(readOnly = true)
     public InvitationEntity summary(String rawToken) {
         InvitationEntity entity = require(rawToken);
-        if ("revoked".equals(entity.getStatus())) {
+        if (entity.getStatus() == InvitationStatus.revoked) {
             throw ApiException.notFound("邀请");
         }
         return entity;

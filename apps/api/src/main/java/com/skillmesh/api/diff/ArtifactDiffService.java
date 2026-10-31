@@ -5,6 +5,7 @@ import com.skillmesh.api.artifact.ArtifactRepository;
 import com.skillmesh.api.artifact.ArtifactStorage;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionStatus;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -101,7 +102,7 @@ public class ArtifactDiffService {
      */
     private Optional<SkillVersionEntity> loadBase(UUID skillId, SkillVersionEntity next) {
         return versions.findBySkillIdOrderByCreatedAtDesc(skillId).stream()
-            .filter(version -> "published".equals(version.getStatus()))
+            .filter(version -> version.getStatus() == VersionStatus.published)
             .filter(version -> !version.getId().equals(next.getId()))
             .filter(version -> {
                 ArtifactEntity artifact = artifactOf(version.getArtifactId());

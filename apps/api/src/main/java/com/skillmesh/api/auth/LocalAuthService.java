@@ -69,7 +69,7 @@ public class LocalAuthService {
         user.setDisplayName(displayName == null || displayName.isBlank()
             ? username : displayName.trim());
         user.setEmail(email == null || email.isBlank() ? null : email.trim());
-        user.setStatus("active");
+        user.setStatus(UserStatus.active);
         user.setRole(role);
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         user.setCreatedAt(now);
@@ -108,7 +108,7 @@ public class LocalAuthService {
     }
 
     private static void rejectIfDisabled(UserEntity user) {
-        if ("disabled".equals(user.getStatus())) {
+        if (user.getStatus() == UserStatus.disabled) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "账号已禁用");
         }
     }

@@ -1,6 +1,7 @@
 package com.skillmesh.api.skill.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.skill.LicenseStatus;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -20,5 +21,4 @@ public record SkillSourceInput(
         @Size(max = 200) @JsonProperty("ref_value") String refValue,
         @Size(max = 64) @JsonProperty("resolved_commit") String resolvedCommit,
         @Size(max = 200) @JsonProperty("license_expression") String licenseExpression,
-        @Pattern(regexp = "unknown|detected|approved|restricted|incompatible")
-        @JsonProperty("license_status") String licenseStatus) {}
+        @JsonProperty("license_status") LicenseStatus licenseStatus) {}

@@ -1,6 +1,7 @@
 package com.skillmesh.api.artifact;
 
 import com.skillmesh.api.artifact.dto.DownloadInfo;
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
@@ -96,7 +97,7 @@ public class ArtifactController {
     /** 下载留痕：谁在什么时候取走了哪份制品。 */
     private void recordDownload(CurrentUser user, UUID artifactId) {
         for (SkillVersionEntity version : versions.findByArtifactId(artifactId)) {
-            audit.record(user, "artifact.download", "skill", version.getSkillId(), "success",
+            audit.record(user, "artifact.download", "skill", version.getSkillId(), AuditOutcome.success,
                 Map.of("version", version.getVersion(), "artifact_id", artifactId.toString()));
             return;
         }

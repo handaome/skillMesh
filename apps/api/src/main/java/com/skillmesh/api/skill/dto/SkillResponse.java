@@ -1,6 +1,8 @@
 package com.skillmesh.api.skill.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.common.Visibility;
+import com.skillmesh.api.skill.SkillStatus;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -12,8 +14,8 @@ public record SkillResponse(
         String slug,
         String name,
         String description,
-        String visibility,
-        String status,
+        Visibility visibility,
+        SkillStatus status,
         @JsonProperty("owner_user_id") UUID ownerUserId,
         @JsonProperty("organization_id") UUID organizationId,
         @JsonProperty("owner_team_id") UUID ownerTeamId,

@@ -1,6 +1,8 @@
 package com.skillmesh.api.group.dto;
 
+import com.skillmesh.api.common.Visibility;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.List;
@@ -16,7 +18,7 @@ public record GroupRequest(
     @NotBlank @Size(max = 120) String name,
     @Size(max = 1000) String description,
     /** private / public / team / organization。 */
-    @NotBlank String visibility,
+    @NotNull Visibility visibility,
     UUID organization_id,
     UUID team_id,
     /** 成员 Skill。必须是当前用户可见的。 */

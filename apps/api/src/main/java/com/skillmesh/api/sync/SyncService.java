@@ -78,7 +78,7 @@ public class SyncService {
         changeset.setStartedAt(now);
 
         boolean conflict = isConflict(req.base_hash(), req.local_hash(), cloud);
-        changeset.setStatus(conflict ? "conflict" : "completed");
+        changeset.setStatus(conflict ? ChangesetStatus.conflict : ChangesetStatus.completed);
         changeset.setSummaryJson(summary(req, cloud, conflict));
         changeset.setCompletedAt(now);
         changesets.save(changeset);
@@ -108,11 +108,11 @@ public class SyncService {
         SyncChangesetEntity changeset = changesets.findById(changesetId)
             .orElseThrow(() -> ApiException.notFound("变更集"));
         devices.require(user, changeset.getDeviceId());
-        String status = switch (resolution) {
-            case "keep-local" -> "resolved_local";
-            case "keep-cloud" -> "resolved_cloud";
-            case "keep-both" -> "resolved_merged";
-            default -> "dismissed";
+        ConflictStatus status = switch (resolution) {
+            case "keep-local" -> ConflictStatus.resolved_local;
+            case "keep-cloud" -> ConflictStatus.resolved_cloud;
+            case "keep-both" -> ConflictStatus.resolved_merged;
+            default -> ConflictStatus.dismissed;
         };
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         for (SyncConflictEntity conflict : conflicts.findByChangesetIdOrderByCreatedAtAsc(
@@ -121,7 +121,7 @@ public class SyncService {
             conflict.setResolvedAt(now);
             conflicts.save(conflict);
         }
-        changeset.setStatus("completed");
+        changeset.setStatus(ChangesetStatus.completed);
         changeset.setCompletedAt(now);
         changesets.save(changeset);
         return toResponse(changeset);
@@ -162,9 +162,10 @@ public class SyncService {
         state.setBaseRevision(emptyToNull(req.base_hash()));
         state.setLocalManifestHash(req.local_hash());
         state.setCloudManifestHash(emptyToNull(cloud));
-        state.setStatus(conflict ? "conflict"
-            : cloud == null || cloud.equals(req.local_hash()) ? "in_sync"
-            : "upload" .equals(req.direction()) ? "local_ahead" : "cloud_ahead");
+        state.setStatus(conflict ? SyncStateStatus.conflict
+            : cloud == null || cloud.equals(req.local_hash()) ? SyncStateStatus.in_sync
+            : "upload" .equals(req.direction()) ? SyncStateStatus.local_ahead
+            : SyncStateStatus.cloud_ahead);
         state.setUpdatedAt(now);
         if (!conflict) {
             state.setLastSyncedAt(now);
@@ -195,7 +196,7 @@ public class SyncService {
                 conflict.getCloudSha256(), conflict.getConflictType()));
         }
         String cloud = String.valueOf(changeset.getSummaryJson().getOrDefault("cloud_hash", ""));
-        String message = "conflict".equals(changeset.getStatus())
+        String message = changeset.getStatus() == ChangesetStatus.conflict
             ? "云端已被其他设备修改，这次提交不会自动覆盖" : "已受理";
         return new SyncChangesetResponse(changeset.getId(), changeset.getSkillId(),
             changeset.getStatus(), cloud, message, items, changeset.getCreatedAt());

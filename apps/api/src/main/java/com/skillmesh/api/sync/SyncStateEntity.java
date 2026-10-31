@@ -2,6 +2,8 @@ package com.skillmesh.api.sync;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -43,8 +45,9 @@ public class SyncStateEntity {
     @Column(name = "cloud_manifest_hash", length = 64)
     private String cloudManifestHash;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private SyncStateStatus status;
 
     @Column(name = "last_synced_at")
     private OffsetDateTime lastSyncedAt;
@@ -130,11 +133,11 @@ public class SyncStateEntity {
         this.cloudManifestHash = cloudManifestHash;
     }
 
-    public String getStatus() {
+    public SyncStateStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(SyncStateStatus status) {
         this.status = status;
     }
 

@@ -2,6 +2,7 @@ package com.skillmesh.api.auth.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.skillmesh.api.auth.UserEntity;
+import com.skillmesh.api.auth.UserStatus;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -15,7 +16,7 @@ public record UserAccount(
     String username,
     @JsonProperty("display_name") String displayName,
     String email,
-    String status,
+    UserStatus status,
     String role,
     @JsonProperty("created_at") OffsetDateTime createdAt) {
 

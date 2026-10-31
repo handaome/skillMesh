@@ -2,6 +2,8 @@ package com.skillmesh.api.review;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -21,8 +23,9 @@ public class ReviewEntity {
     @Column(name = "reviewer_id", nullable = false)
     private UUID reviewerId;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String decision;
+    private ReviewDecision decision;
 
     @Column(nullable = false)
     private String comment;
@@ -54,11 +57,11 @@ public class ReviewEntity {
         this.reviewerId = reviewerId;
     }
 
-    public String getDecision() {
+    public ReviewDecision getDecision() {
         return decision;
     }
 
-    public void setDecision(String decision) {
+    public void setDecision(ReviewDecision decision) {
         this.decision = decision;
     }
 

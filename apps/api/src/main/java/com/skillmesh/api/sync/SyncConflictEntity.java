@@ -2,6 +2,8 @@ package com.skillmesh.api.sync;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -40,8 +42,9 @@ public class SyncConflictEntity {
     @Column(name = "conflict_type", nullable = false)
     private String conflictType;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private ConflictStatus status;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "resolution_json", columnDefinition = "jsonb", nullable = false)
@@ -63,7 +66,7 @@ public class SyncConflictEntity {
         entity.setLocalSha256(blankToNull(local));
         entity.setCloudSha256(blankToNull(cloud));
         entity.setConflictType("both_modified");
-        entity.setStatus("open");
+        entity.setStatus(ConflictStatus.open);
         entity.setResolutionJson(new LinkedHashMap<>());
         entity.setCreatedAt(OffsetDateTime.now());
         return entity;
@@ -129,11 +132,11 @@ public class SyncConflictEntity {
         this.conflictType = conflictType;
     }
 
-    public String getStatus() {
+    public ConflictStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(ConflictStatus status) {
         this.status = status;
     }
 

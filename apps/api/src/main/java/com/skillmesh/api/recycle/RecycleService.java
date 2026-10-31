@@ -6,6 +6,7 @@ import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionStatus;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -94,7 +95,7 @@ public class RecycleService {
      */
     private String previousPublishedVersion(UUID skillId, String currentVersion) {
         for (SkillVersionEntity row : versions.findBySkillIdOrderByCreatedAtDescThenId(skillId)) {
-            if (!"published".equals(row.getStatus()) || row.getVersion().equals(currentVersion)) {
+            if (row.getStatus() != VersionStatus.published || row.getVersion().equals(currentVersion)) {
                 continue;
             }
             if (row.getManifestJson() == null || row.getManifestJson().isEmpty()) {
@@ -110,7 +111,8 @@ public class RecycleService {
     public List<RecycleFile> list(CurrentUser user, UUID skillId) {
         skillService.requireVisibleSkill(user, skillId);
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        // 顺手清掉过了回收期的：没有定时任务，看回收站的时候正是清理的时候。
+        // 顺手清掉过了回收期的：定时任务（RecycleScheduler）也会清，
+        // 这里再清一遍是兜底——万一调度被关掉，看回收站时还能顺手清干净。
         files.deleteExpired(now);
         List<RecycleFile> out = new ArrayList<>();
         for (RecycleFileEntity entity : files.findActive(skillId, now)) {

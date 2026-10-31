@@ -2,6 +2,8 @@ package com.skillmesh.api.scan;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -28,8 +30,9 @@ public class ScanEntity {
     @Column(name = "scanner_version", nullable = false)
     private String scannerVersion;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private ScanStatus status;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "findings_json", columnDefinition = "jsonb", nullable = false)
@@ -76,11 +79,11 @@ public class ScanEntity {
         this.scannerVersion = scannerVersion;
     }
 
-    public String getStatus() {
+    public ScanStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(ScanStatus status) {
         this.status = status;
     }
 

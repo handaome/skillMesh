@@ -9,7 +9,8 @@ public interface InstallationRepository extends JpaRepository<InstallationEntity
 
     List<InstallationEntity> findByUserIdOrderByLastUpdatedAtDesc(UUID userId);
 
-    List<InstallationEntity> findByUserIdAndStatusOrderByLastUpdatedAtDesc(UUID userId, String status);
+    List<InstallationEntity> findByUserIdAndStatusOrderByLastUpdatedAtDesc(
+        UUID userId, InstallationStatus status);
 
     Optional<InstallationEntity> findByIdAndUserId(UUID id, UUID userId);
 

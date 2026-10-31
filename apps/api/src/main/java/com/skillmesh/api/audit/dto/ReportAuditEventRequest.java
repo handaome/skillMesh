@@ -1,7 +1,7 @@
 package com.skillmesh.api.audit.dto;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.Map;
 
@@ -14,5 +14,5 @@ public record ReportAuditEventRequest(
         @NotBlank @Size(max = 64) String action,
         @Size(max = 64) String target_type,
         @Size(max = 128) String target_id,
-        @Pattern(regexp = "success|denied|failure") String outcome,
+        AuditOutcome outcome,
         Map<String, Object> details) {}

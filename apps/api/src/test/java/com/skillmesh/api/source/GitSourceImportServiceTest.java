@@ -9,6 +9,8 @@ import com.skillmesh.api.artifact.ArtifactRepository;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.UserEntity;
 import com.skillmesh.api.auth.UserRepository;
+import com.skillmesh.api.auth.UserStatus;
+import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SourceEntity;
@@ -18,6 +20,7 @@ import com.skillmesh.api.source.dto.ImportFromGitBatchResponse;
 import com.skillmesh.api.source.dto.ImportFromGitRequest;
 import com.skillmesh.api.source.dto.ImportFromGitResponse;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionStatus;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -132,7 +135,7 @@ class GitSourceImportServiceTest {
         assertThat(result.slug()).isEqualTo("probe-skill");
         assertThat(result.version()).isEqualTo("1.0.0");
         // 私有 Skill 是属主自己的，不用过审。
-        assertThat(result.status()).isEqualTo("published");
+        assertThat(result.status()).isEqualTo(VersionStatus.published);
         assertThat(result.sourceCommit()).isEqualTo(COMMIT);
 
         skillId = UUID.fromString(result.skillId());
@@ -146,7 +149,7 @@ class GitSourceImportServiceTest {
         assertThat(sources.get(0).getRefType()).isEqualTo("branch");
 
         var version = versions.findBySkillIdOrderByCreatedAtDesc(skillId).get(0);
-        assertThat(version.getStatus()).isEqualTo("published");
+        assertThat(version.getStatus()).isEqualTo(VersionStatus.published);
         assertThat(version.getSourceCommit()).isEqualTo(COMMIT);
     }
 
@@ -169,7 +172,7 @@ class GitSourceImportServiceTest {
 
     private ImportFromGitRequest request() {        return new ImportFromGitRequest("https://github.com/probe/probe-skill.git",
             "skills/probe", "main", "probe-skill", "探针技能", "测试用",
-            "private", List.of());
+            Visibility.PRIVATE, List.of());
     }
 
     @Test
@@ -177,14 +180,14 @@ class GitSourceImportServiceTest {
         ImportFromGitBatchResponse result = imports.importBatch(owner,
             new ImportFromGitBatchRequest("https://github.com/probe/probe-skill.git",
                 List.of("skills/probe", "skills/other", "skills/missing"),
-                "main", "private", List.of()));
+                "main", Visibility.PRIVATE, List.of()));
 
         // 两条导进来：slug 取目录名，名字取 frontmatter 里的声明。
         assertThat(result.imported()).hasSize(2);
         assertThat(result.imported()).extracting(ImportFromGitBatchResponse.Imported::slug)
             .containsExactlyInAnyOrder("probe", "other");
         assertThat(result.imported())
-            .allSatisfy(item -> assertThat(item.status()).isEqualTo("published"));
+            .allSatisfy(item -> assertThat(item.status()).isEqualTo(VersionStatus.published));
         // 找不到的那条单独算失败，不牵连别的。
         assertThat(result.failed()).hasSize(1);
         assertThat(result.failed().get(0).path()).isEqualTo("skills/missing");
@@ -198,10 +201,11 @@ class GitSourceImportServiceTest {
         user.setOidcIssuer("https://probe.local");
         user.setOidcSubject("probe-" + id);
         user.setDisplayName("探针属主");
-        user.setStatus("active");
+        user.setStatus(UserStatus.active);
         user.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         user.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         users.saveAndFlush(user);
-        return new CurrentUser(id, user.getOidcSubject(), user.getDisplayName(), null, "active", "user");
+        return new CurrentUser(id, user.getOidcSubject(), user.getDisplayName(), null,
+            UserStatus.active, "user");
     }
 }

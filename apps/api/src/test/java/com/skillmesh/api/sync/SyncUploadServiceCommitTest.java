@@ -8,18 +8,22 @@ import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.UserEntity;
 import com.skillmesh.api.auth.UserRepository;
+import com.skillmesh.api.auth.UserStatus;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.PathOrder;
+import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.device.DeviceService;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
+import com.skillmesh.api.skill.SkillStatus;
 import com.skillmesh.api.sync.dto.SyncChangesetRequest;
 import com.skillmesh.api.sync.dto.SyncChangesetResponse;
 import com.skillmesh.api.upload.UploadService;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionStatus;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -125,7 +129,7 @@ class SyncUploadServiceCommitTest {
             version.setChangelog("基线");
             version.setManifestJson(manifest);
             version.setArtifactId(artifact.getId());
-            version.setStatus("published");
+            version.setStatus(VersionStatus.published);
             version.setCreatedBy(owner.id());
             version.setPublishedBy(owner.id());
             version.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
@@ -171,7 +175,7 @@ class SyncUploadServiceCommitTest {
         content.put("guide.md", GUIDE_V1.getBytes(StandardCharsets.UTF_8));
 
         SyncChangesetResponse changeset = submit(content);
-        assertThat(changeset.status()).isNotEqualTo("conflict");
+        assertThat(changeset.status()).isNotEqualTo(ChangesetStatus.conflict);
 
         // 只传变了的那个文件，没变的那个不传。
         byte[] changed = content.get("SKILL.md");
@@ -187,11 +191,11 @@ class SyncUploadServiceCommitTest {
         Map<String, Object> result = syncUploads.commit(owner, changeset.changesetId(),
             baseRevision);
 
-        assertThat(result.get("version_status")).isEqualTo("published");
+        assertThat(result.get("version_status")).isEqualTo(VersionStatus.published);
         assertThat(result.get("files")).isEqualTo(2);
 
         SkillVersionEntity version = versionOf("1.0.1");
-        assertThat(version.getStatus()).isEqualTo("published");
+        assertThat(version.getStatus()).isEqualTo(VersionStatus.published);
         // 变了的用新传的，没变的从基线补齐——两份文件都在。
         Map<String, String> published = readZip(
             artifacts.open(artifacts.require(version.getArtifactId())));
@@ -253,12 +257,12 @@ class SyncUploadServiceCommitTest {
         user.setOidcIssuer("https://probe.local");
         user.setOidcSubject("probe-" + id);
         user.setDisplayName("探针属主");
-        user.setStatus("active");
+        user.setStatus(UserStatus.active);
         user.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         user.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         users.saveAndFlush(user);
-        return new CurrentUser(id, user.getOidcSubject(), user.getDisplayName(), null, "active",
-            "user");
+        return new CurrentUser(id, user.getOidcSubject(), user.getDisplayName(), null,
+            UserStatus.active, "user");
     }
 
     private UUID newSkill() {
@@ -268,8 +272,8 @@ class SyncUploadServiceCommitTest {
         entity.setName("探针技能");
         entity.setDescription("测试用");
         entity.setOwnerUserId(owner.id());
-        entity.setVisibility("private");
-        entity.setStatus("active");
+        entity.setVisibility(Visibility.PRIVATE);
+        entity.setStatus(SkillStatus.active);
         entity.setTags(new String[0]);
         entity.setMetadataJson(Map.of());
         entity.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));

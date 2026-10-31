@@ -216,7 +216,7 @@ public class VersionEditService {
     /** 最新已发布版本。 */
     private SkillVersionEntity latestPublished(UUID skillId) {
         for (SkillVersionEntity row : versions.findBySkillIdOrderByCreatedAtDescThenId(skillId)) {
-            if ("published".equals(row.getStatus()) && row.getArtifactId() != null) {
+            if (row.getStatus() == VersionStatus.published && row.getArtifactId() != null) {
                 return row;
             }
         }
@@ -320,7 +320,7 @@ public class VersionEditService {
     private String latestPublishedVersion(UUID skillId) {
         String latest = null;
         for (SkillVersionEntity version : versions.findBySkillIdOrderByCreatedAtDesc(skillId)) {
-            if (!"published".equals(version.getStatus())) {
+            if (version.getStatus() != VersionStatus.published) {
                 continue;
             }
             if (latest == null || VersionOrder.isGreater(version.getVersion(), latest)) {

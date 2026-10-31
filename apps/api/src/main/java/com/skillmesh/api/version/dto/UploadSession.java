@@ -2,6 +2,8 @@ package com.skillmesh.api.version.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.upload.UploadStatus;
+import com.skillmesh.api.version.VersionStatus;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
@@ -11,12 +13,12 @@ import java.util.UUID;
 public record UploadSession(
         UUID id,
         String purpose,
-        String status,
+        UploadStatus status,
         Upload upload,
         @JsonProperty("expires_at") OffsetDateTime expiresAt,
         @JsonProperty("verified_sha256") String verifiedSha256,
         @JsonProperty("error_code") String errorCode,
-        @JsonProperty("version_status") String versionStatus) {
+        @JsonProperty("version_status") VersionStatus versionStatus) {
 
     public record Upload(String method, String url, Map<String, String> headers) {}
 }

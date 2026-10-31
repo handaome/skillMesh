@@ -70,7 +70,7 @@ public class CurrentUserService {
         user.setOidcSubject(subject);
         user.setDisplayName(displayName(jwt));
         user.setEmail(jwt.getClaimAsString("email"));
-        user.setStatus("active");
+        user.setStatus(UserStatus.active);
         // 建档本身就是一次登录：顺手记上，省得后面再补一次写。
         user.setLastLoginAt(now);
         user.setCreatedAt(now);
@@ -91,7 +91,7 @@ public class CurrentUserService {
      * 建档那档（provision）设的是 active，不受影响。
      */
     private static void rejectIfDisabled(UserEntity user) {
-        if ("disabled".equals(user.getStatus())) {
+        if (user.getStatus() == UserStatus.disabled) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "账号已禁用");
         }
     }

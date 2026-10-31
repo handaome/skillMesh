@@ -66,7 +66,7 @@ class SkillSpecValidatorTest {
         byte[] zip = zip("SKILL.md", "# 没有 frontmatter\n");
         ScanResult result = new ArtifactScanner().scan(new java.io.ByteArrayInputStream(zip));
 
-        assertThat(result.status()).isEqualTo("failed");
+        assertThat(result.status()).isEqualTo(ScanStatus.failed);
         assertThat(result.findings()).anyMatch(finding ->
             "不符合 agentskills.io 规范".equals(finding.rule()));
     }
@@ -76,7 +76,7 @@ class SkillSpecValidatorTest {
         byte[] zip = zip("README.md", "说明\n");
         ScanResult result = new ArtifactScanner().scan(new java.io.ByteArrayInputStream(zip));
 
-        assertThat(result.status()).isEqualTo("failed");
+        assertThat(result.status()).isEqualTo(ScanStatus.failed);
     }
 
     private String violation(String content) {

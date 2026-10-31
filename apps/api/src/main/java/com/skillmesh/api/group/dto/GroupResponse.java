@@ -1,5 +1,6 @@
 package com.skillmesh.api.group.dto;
 
+import com.skillmesh.api.common.Visibility;
 import java.util.List;
 import java.util.UUID;
 
@@ -14,7 +15,7 @@ public record GroupResponse(
     String slug,
     String name,
     String description,
-    String visibility,
+    Visibility visibility,
     int member_count,
     int installed_count,
     List<Member> members) {

@@ -74,7 +74,7 @@ public class AuditReportController {
             requireRelatedSkill(user, targetId);
         }
         audit.record(user, req.action(), targetType, targetId,
-            req.outcome() == null ? "success" : req.outcome(), req.details());
+            req.outcome() == null ? AuditOutcome.success : req.outcome(), req.details());
         return ResponseEntity.created(URI.create("/api/v1/audit/events"))
             .body(Map.of("accepted", true, "action", req.action()));
     }

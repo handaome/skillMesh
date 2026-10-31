@@ -1,5 +1,6 @@
 package com.skillmesh.api.device;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import java.time.OffsetDateTime;
@@ -59,6 +60,6 @@ public class DeviceService {
         DeviceEntity device = require(user, deviceId);
         device.setRevokedAt(OffsetDateTime.now(ZoneOffset.UTC));
         devices.save(device);
-        audit.record(user, "device.revoke", "device", deviceId, "success", Map.of());
+        audit.record(user, "device.revoke", "device", deviceId, AuditOutcome.success, Map.of());
     }
 }

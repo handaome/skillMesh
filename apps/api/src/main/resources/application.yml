@@ -17,6 +17,11 @@ spring:
     properties:
       hibernate:
         default_schema: public
+  jackson:
+    mapper:
+      # 枚举取值不区分大小写。查询参数走 EnumParams，本来就大小写都认；
+      # 请求体这边要是严格，同一个值换个入口就 400。
+      accept-case-insensitive-enums: true
   security:
     oauth2:
       resourceserver:
@@ -28,6 +33,10 @@ spring:
 server:
   port: 8080
   address: 127.0.0.1
+  # 前面挂了反向代理（compose 里的 nginx、生产上的负载均衡）时，
+  # 认 X-Forwarded-For / X-Forwarded-Proto：审计要记真实来源 IP，
+  # 限流也要按真实 IP 分桶——不然所有请求都算在代理头上，全站共用一个额度。
+  forward-headers-strategy: ${SM_FORWARD_HEADERS_STRATEGY:framework}
   error:
     include-message: never
 
@@ -85,6 +94,14 @@ skillmesh:
     initial-delay-ms: ${SM_BACKUP_INITIAL_DELAY_MS:600000}
     # 留最近的多少份备份。备份占的正是最要紧的那块盘，不清理迟早塞满。
     keep: ${SM_BACKUP_KEEP:24}
+  # 回收站（设计文档 §6.4：删除走软删除，回收期内能恢复）。
+  recycle:
+    # 回收期到了的条目由定时任务清掉。默认开着：清理很便宜且幂等。
+    cleanup-enabled: ${SM_RECYCLE_CLEANUP_ENABLED:true}
+    # 间隔用毫秒数：cron 得按时区解释，换个时区清理时间就悄悄变了。
+    cleanup-interval-ms: ${SM_RECYCLE_CLEANUP_INTERVAL_MS:3600000}
+    # 启动后先等一会儿再跑第一次，别和迁移抢资源。
+    cleanup-initial-delay-ms: ${SM_RECYCLE_CLEANUP_INITIAL_DELAY_MS:600000}
 
 management:
   endpoints:

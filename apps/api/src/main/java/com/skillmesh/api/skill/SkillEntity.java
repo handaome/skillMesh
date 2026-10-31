@@ -1,7 +1,11 @@
 package com.skillmesh.api.skill;
 
+import com.skillmesh.api.common.Visibility;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -35,11 +39,13 @@ public class SkillEntity {
     @Column(name = "owner_team_id")
     private UUID ownerTeamId;
 
+    @Convert(converter = Visibility.DbConverter.class)
     @Column(nullable = false)
-    private String visibility;
+    private Visibility visibility;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private SkillStatus status;
 
     @Column(name = "tags", columnDefinition = "text[]", nullable = false)
     private String[] tags;
@@ -121,19 +127,19 @@ public class SkillEntity {
         this.ownerTeamId = ownerTeamId;
     }
 
-    public String getVisibility() {
+    public Visibility getVisibility() {
         return visibility;
     }
 
-    public void setVisibility(String visibility) {
+    public void setVisibility(Visibility visibility) {
         this.visibility = visibility;
     }
 
-    public String getStatus() {
+    public SkillStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(SkillStatus status) {
         this.status = status;
     }
 

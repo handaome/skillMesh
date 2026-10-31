@@ -2,6 +2,8 @@ package com.skillmesh.api.sync;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -37,8 +39,9 @@ public class SyncChangesetEntity {
     @Column(name = "target_revision")
     private String targetRevision;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private ChangesetStatus status;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "manifest_json", columnDefinition = "jsonb", nullable = false)
@@ -119,11 +122,11 @@ public class SyncChangesetEntity {
         this.targetRevision = targetRevision;
     }
 
-    public String getStatus() {
+    public ChangesetStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(ChangesetStatus status) {
         this.status = status;
     }
 

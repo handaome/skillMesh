@@ -2,6 +2,8 @@ package com.skillmesh.api.auth;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -38,8 +40,9 @@ public class UserEntity {
 
     private String email;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private UserStatus status;
 
     @Column(name = "last_login_at")
     private OffsetDateTime lastLoginAt;
@@ -114,11 +117,11 @@ public class UserEntity {
         this.email = email;
     }
 
-    public String getStatus() {
+    public UserStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(UserStatus status) {
         this.status = status;
     }
 

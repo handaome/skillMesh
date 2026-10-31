@@ -1,12 +1,15 @@
 package com.skillmesh.api.group;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.group.dto.GroupRequest;
 import com.skillmesh.api.group.dto.GroupResponse;
 import com.skillmesh.api.install.InstallationRepository;
+import com.skillmesh.api.install.InstallationStatus;
 import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.Permission;
 import com.skillmesh.api.skill.SkillEntity;
@@ -33,9 +36,6 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class GroupService {
-
-    private static final List<String> VISIBILITIES =
-        List.of("private", "public", "team", "organization");
 
     private final GroupRepository groups;
     private final SkillRepository skills;
@@ -75,16 +75,12 @@ public class GroupService {
 
     @Transactional
     public GroupResponse create(CurrentUser user, GroupRequest req) {
-        String visibility = requireSupportedVisibility(req.visibility());
-        if (!VISIBILITIES.contains(visibility)) {
-            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "visibility 只能是 private / public / team / organization");
-        }
+        Visibility visibility = req.visibility();
         UUID organizationId = req.organization_id();
         UUID teamId = req.team_id();
-        if ("team".equals(visibility)) {
+        if (visibility == Visibility.TEAM) {
             requirePublishRight(user, organizationId, teamId);
-        } else if ("organization".equals(visibility)) {
+        } else if (visibility == Visibility.ORGANIZATION) {
             requirePublishRight(user, organizationId, null);
         } else {
             organizationId = null;
@@ -109,12 +105,12 @@ public class GroupService {
         entity.setOrganizationId(organizationId);
         entity.setOwnerTeamId(teamId);
         entity.setVisibility(visibility);
-        entity.setStatus("active");
+        entity.setStatus(GroupStatus.active);
         entity.setMemberIds(members);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         groups.save(entity);
-        audit.record(user, "group.created", "group", entity.getId(), "success",
+        audit.record(user, "group.created", "group", entity.getId(), AuditOutcome.success,
             Map.of("slug", entity.getSlug(), "members", members.length));
         return toResponse(user, entity);
     }
@@ -133,7 +129,7 @@ public class GroupService {
         }
         entity.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         groups.save(entity);
-        audit.record(user, "group.updated", "group", entity.getId(), "success",
+        audit.record(user, "group.updated", "group", entity.getId(), AuditOutcome.success,
             Map.of("slug", entity.getSlug()));
         return toResponse(user, entity);
     }
@@ -147,10 +143,10 @@ public class GroupService {
     @Transactional
     public void archive(CurrentUser user, UUID id) {
         GroupEntity entity = requireOwned(user, id);
-        entity.setStatus("archived");
+        entity.setStatus(GroupStatus.archived);
         entity.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         groups.save(entity);
-        audit.record(user, "group.archived", "group", entity.getId(), "success",
+        audit.record(user, "group.archived", "group", entity.getId(), AuditOutcome.success,
             Map.of("slug", entity.getSlug()));
     }
 
@@ -177,16 +173,16 @@ public class GroupService {
 
     /** 可见性判定，与 Skill 同一套口径。 */
     private boolean canView(CurrentUser user, GroupEntity entity) {
-        if ("public".equals(entity.getVisibility())) {
+        if (entity.getVisibility() == Visibility.PUBLIC) {
             return true;
         }
         if (user.id().equals(entity.getOwnerUserId())) {
             return true;
         }
-        if ("organization".equals(entity.getVisibility())) {
+        if (entity.getVisibility() == Visibility.ORGANIZATION) {
             return !auth.effectiveRole(user.id(), entity.getOrganizationId(), null).isEmpty();
         }
-        if ("team".equals(entity.getVisibility())) {
+        if (entity.getVisibility() == Visibility.TEAM) {
             String role = auth.effectiveRole(user.id(), entity.getOrganizationId(),
                 entity.getOwnerTeamId());
             return !role.isEmpty();
@@ -200,10 +196,6 @@ public class GroupService {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "团队集合要指定组织");
         }
         auth.requirePermission(user, Permission.GROUP_PUBLISH, organizationId, teamId);
-    }
-
-    private static String requireSupportedVisibility(String visibility) {
-        return visibility == null ? "" : visibility.trim();
     }
 
     /**
@@ -251,7 +243,7 @@ public class GroupService {
     private Set<UUID> installedSkillIds(CurrentUser user) {
         Set<UUID> ids = new LinkedHashSet<>();
         for (var row : installations.findByUserIdOrderByLastUpdatedAtDesc(user.id())) {
-            if ("active".equals(row.getStatus())) {
+            if (row.getStatus() == InstallationStatus.active) {
                 ids.add(row.getSkillId());
             }
         }

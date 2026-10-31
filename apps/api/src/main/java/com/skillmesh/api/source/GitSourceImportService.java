@@ -1,10 +1,13 @@
 package com.skillmesh.api.source;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.scan.SkillFrontmatter;
+import com.skillmesh.api.skill.LicenseStatus;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.skill.SlugRules;
 import com.skillmesh.api.skill.SourceEntity;
@@ -82,7 +85,7 @@ public class GitSourceImportService {
                 new SkillSourceInput("git", providerOf(req.repositoryUrl()),
                     req.repositoryUrl(), req.path(),
                     sources.refType(checkout.root(), req.ref()), req.ref(),
-                    checkout.commit(), null, "detected")));
+                    checkout.commit(), null, LicenseStatus.detected)));
 
             SourceEntity source = sourceRepository
                 .findBySkillIdOrderByCreatedAtDesc(created.id()).get(0);
@@ -92,7 +95,8 @@ public class GitSourceImportService {
                 "从 Git 导入：" + req.repositoryUrl() + "@"
                     + shortCommit(checkout.commit()));
 
-            audit.record(user, "skill.import_from_git", "skill", created.id(), "success",
+            audit.record(user, "skill.import_from_git", "skill", created.id(),
+                AuditOutcome.success,
                 Map.of("slug", created.slug(), "version", published.version(),
                     "commit", published.commit(), "status", published.status()));
 
@@ -118,6 +122,12 @@ public class GitSourceImportService {
      */
     public ImportFromGitBatchResponse importBatch(CurrentUser user,
                                                    ImportFromGitBatchRequest req) {
+        // 批量导入建不出团队或组织可见的 Skill：请求里没有组织与团队这两个字段。
+        // 以前是请求上的 @Pattern 挡着的，现在可见性是枚举，闸门挪到这里。
+        if (req.visibility() != Visibility.PRIVATE && req.visibility() != Visibility.PUBLIC) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "批量导入的可见性只能是 private 或 public");
+        }
         List<ImportFromGitBatchResponse.Imported> imported = new ArrayList<>();
         List<ImportFromGitBatchResponse.Failed> failed = new ArrayList<>();
         try (SourceService.Checkout checkout =
@@ -162,7 +172,7 @@ public class GitSourceImportService {
             new SkillSourceInput("git", providerOf(req.repositoryUrl()),
                 req.repositoryUrl(), path,
                 sources.refType(checkout.root(), req.ref()), req.ref(),
-                checkout.commit(), null, "detected")));
+                checkout.commit(), null, LicenseStatus.detected)));
 
         SourceEntity source = sourceRepository
             .findBySkillIdOrderByCreatedAtDesc(created.id()).get(0);
@@ -171,7 +181,8 @@ public class GitSourceImportService {
             source.getId(), checkout.commit(), skillDir, "1.0.0",
             "从 Git 导入：" + req.repositoryUrl() + "@" + shortCommit(checkout.commit()));
 
-        audit.record(user, "skill.import_from_git", "skill", created.id(), "success",
+        audit.record(user, "skill.import_from_git", "skill", created.id(),
+            AuditOutcome.success,
             Map.of("slug", created.slug(), "version", published.version(),
                 "commit", published.commit(), "status", published.status()));
 

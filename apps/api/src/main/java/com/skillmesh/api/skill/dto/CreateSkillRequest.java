@@ -1,5 +1,6 @@
 package com.skillmesh.api.skill.dto;
 
+import com.skillmesh.api.common.Visibility;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -14,7 +15,7 @@ public record CreateSkillRequest(
         @NotBlank @Pattern(regexp = "^[a-z0-9][a-z0-9-]{1,63}$") String slug,
         @NotBlank @Size(max = 120) String name,
         @NotNull @Size(max = 4000) String description,
-        @NotNull String visibility,
+        @NotNull Visibility visibility,
         UUID organization_id,
         UUID owner_team_id,
         @Size(max = 30) List<@Size(max = 64) String> tags,

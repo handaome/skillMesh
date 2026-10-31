@@ -1,6 +1,7 @@
 package com.skillmesh.api.version.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.version.VersionStatus;
 
 /**
  * 编辑的结果：新版本的信息与它的状态。
@@ -13,4 +14,4 @@ public record EditFileResponse(
         String version,
         @JsonProperty("file_count") int fileCount,
         String sha256,
-        String status) {}
+        VersionStatus status) {}

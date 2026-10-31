@@ -47,7 +47,7 @@ public class AuditService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(CurrentUser actor, String action, String targetType, Object targetId,
-                       String outcome, Map<String, Object> details) {
+                       AuditOutcome outcome, Map<String, Object> details) {
         write(actor, action, targetType, targetId, outcome, details, null);
     }
 
@@ -59,7 +59,7 @@ public class AuditService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(CurrentUser actor, String action, String targetType, Object targetId,
-                       String outcome, Map<String, Object> details, UUID deviceId) {
+                       AuditOutcome outcome, Map<String, Object> details, UUID deviceId) {
         write(actor, action, targetType, targetId, outcome, details, deviceId);
     }
 
@@ -71,7 +71,7 @@ public class AuditService {
      * 所以落库这一步必须由带注解的入口直接调用。
      */
     private void write(CurrentUser actor, String action, String targetType, Object targetId,
-                       String outcome, Map<String, Object> details, UUID deviceId) {
+                       AuditOutcome outcome, Map<String, Object> details, UUID deviceId) {
         try {
             AuditEventEntity event = new AuditEventEntity();
             event.setOccurredAt(OffsetDateTime.now(ZoneOffset.UTC));
@@ -124,19 +124,22 @@ public class AuditService {
     /**
      * 取真实来源 IP。
      *
-     * 前面挂了反向代理时，remoteAddr 是代理的地址——X-Forwarded-For 里
-     * 才是原 client。取第一个（最靠客户端的那个）。
+     * 用 {@code getRemoteAddr()} 而不是自己读 {@code X-Forwarded-For}：
+     * 前面挂了反向代理时，Spring 的 forwarded-header 处理（{@code server.forward-headers-strategy}）
+     * 已经把 remoteAddr 换成客户端的地址了。手写一遍解析，
+     * 迟早跟框架那套对不上——两处各取一个值，审计记的 IP 与限流分桶的 IP 就不是一个了。
+     *
+     * 要信这个头得自己配（{@code server.forward-headers-strategy}，默认 {@code framework}），
+     * 并且保证前面那层反代会把这个头覆盖掉而不是追加——追加的话客户端能自己伪造来源 IP。
+     * 应用直接暴露在公网上时配 {@code none}。
      */
     private static String clientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            String first = forwarded.split(",")[0].trim();
-            if (!first.isEmpty()) {
-                return first.length() > 64 ? first.substring(0, 64) : first;
-            }
-        }
         String remote = request.getRemoteAddr();
-        return remote == null || remote.isBlank() ? null : remote;
+        if (remote == null || remote.isBlank()) {
+            return null;
+        }
+        // 列是 varchar(64)：超了 INSERT 就失败，而这一整条审计会跟着丢。
+        return remote.length() > 64 ? remote.substring(0, 64) : remote;
     }
 
     @Transactional(readOnly = true)

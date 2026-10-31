@@ -1,9 +1,11 @@
 package com.skillmesh.api.install;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.EnumParams;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.Redact;
 import com.skillmesh.api.skill.SkillService;
@@ -42,8 +44,6 @@ public class InstallationController {
 
     private static final List<String> SCOPES = List.of("user", "project", "custom");
     private static final List<String> POLICIES = List.of("manual", "notify", "auto_safe");
-    private static final List<String> STATUSES =
-        List.of("active", "missing", "conflict", "uninstalled", "blocked");
 
     private final InstallationRepository installations;
     private final SkillService skillService;
@@ -88,7 +88,7 @@ public class InstallationController {
         entity.setInstalledCommit(req.installed_commit());
         entity.setInstalledSha256(blankToNull(req.installed_sha256()));
         entity.setUpdatePolicy(req.update_policy() == null ? "notify" : req.update_policy());
-        entity.setStatus(req.status() == null ? "active" : req.status());
+        entity.setStatus(req.status() == null ? InstallationStatus.active : req.status());
         entity.setLocalModified(req.local_modified() != null && req.local_modified());
         if (isNew) {
             entity.setInstalledAt(now);
@@ -100,7 +100,7 @@ public class InstallationController {
         // 流水里不记本机绝对路径：审计台是按 Skill 可见的，
         // 谁看得见这个 Skill 就看得见这条流水——路径只留在安装登记表里（只有本人可见）。
         audit.record(user, isNew ? "installation.register" : "installation.refresh",
-            "skill", req.skill_id(), "success",
+            "skill", req.skill_id(), AuditOutcome.success,
             Map.of("agent", req.agent() == null ? "" : req.agent(), "version",
                 req.installed_version() == null ? "" : req.installed_version()),
             entity.getDeviceId());
@@ -112,9 +112,12 @@ public class InstallationController {
     public List<Map<String, Object>> list(@AuthenticationPrincipal Jwt jwt,
                                           @RequestParam(required = false) String status) {
         CurrentUser user = currentUserService.current(jwt);
-        List<InstallationEntity> rows = status == null || status.isBlank()
+        InstallationStatus filter = status == null || status.isBlank()
+            ? null
+            : EnumParams.require(InstallationStatus.class, status, "status");
+        List<InstallationEntity> rows = filter == null
             ? installations.findByUserIdOrderByLastUpdatedAtDesc(user.id())
-            : installations.findByUserIdAndStatusOrderByLastUpdatedAtDesc(user.id(), status);
+            : installations.findByUserIdAndStatusOrderByLastUpdatedAtDesc(user.id(), filter);
         return rows.stream().map(InstallationController::toResponse).toList();
     }
 
@@ -129,7 +132,6 @@ public class InstallationController {
             entity.setUpdatePolicy(req.update_policy());
         }
         if (req.status() != null) {
-            requireOneOf("status", req.status(), STATUSES);
             entity.setStatus(req.status());
         }
         if (req.local_modified() != null) {
@@ -144,7 +146,7 @@ public class InstallationController {
         // 不跟着更新的话它永远停在登记时的那一刻。
         entity.setLastCheckedAt(now);
         installations.save(entity);
-        audit.record(user, "installation.update", "skill", entity.getSkillId(), "success",
+        audit.record(user, "installation.update", "skill", entity.getSkillId(), AuditOutcome.success,
             Map.of("installation_id", entity.getId().toString(),
                 "status", entity.getStatus(), "policy", entity.getUpdatePolicy()),
             entity.getDeviceId());
@@ -159,7 +161,7 @@ public class InstallationController {
         installations.delete(entity);
         // 记录已经被删了，完整路径不会留在安装登记表里，流水里留一份脱敏的当线索。
         // 流水是按 Skill 可见的，写全路径等于把本机目录布局摊给团队管理员。
-        audit.record(user, "installation.unregister", "skill", entity.getSkillId(), "success",
+        audit.record(user, "installation.unregister", "skill", entity.getSkillId(), AuditOutcome.success,
             Map.of("target_path", Redact.path(entity.getTargetPath())), entity.getDeviceId());
         return ResponseEntity.noContent().build();
     }
@@ -239,11 +241,11 @@ public class InstallationController {
         String installed_sha256,
         @Pattern(regexp = "manual|notify|auto_safe") String update_policy,
         Boolean local_modified,
-        @Pattern(regexp = "active|missing|conflict|uninstalled|blocked") String status) {}
+        InstallationStatus status) {}
 
     public record UpdateInstallationRequest(
         @Pattern(regexp = "manual|notify|auto_safe") String update_policy,
-        @Pattern(regexp = "active|missing|conflict|uninstalled|blocked") String status,
+        InstallationStatus status,
         Boolean local_modified,
         String installed_version) {}
 }

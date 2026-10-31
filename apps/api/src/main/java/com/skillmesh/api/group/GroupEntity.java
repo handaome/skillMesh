@@ -1,7 +1,11 @@
 package com.skillmesh.api.group;
 
+import com.skillmesh.api.common.Visibility;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -40,11 +44,13 @@ public class GroupEntity {
     @Column(name = "owner_team_id")
     private UUID ownerTeamId;
 
+    @Convert(converter = Visibility.DbConverter.class)
     @Column(nullable = false)
-    private String visibility;
+    private Visibility visibility;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private GroupStatus status;
 
     @JdbcTypeCode(SqlTypes.ARRAY)
     @Column(name = "member_ids", columnDefinition = "uuid[]", nullable = false)
@@ -112,19 +118,19 @@ public class GroupEntity {
         this.ownerTeamId = ownerTeamId;
     }
 
-    public String getVisibility() {
+    public Visibility getVisibility() {
         return visibility;
     }
 
-    public void setVisibility(String visibility) {
+    public void setVisibility(Visibility visibility) {
         this.visibility = visibility;
     }
 
-    public String getStatus() {
+    public GroupStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(GroupStatus status) {
         this.status = status;
     }
 

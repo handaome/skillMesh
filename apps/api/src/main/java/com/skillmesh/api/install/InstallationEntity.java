@@ -2,6 +2,8 @@ package com.skillmesh.api.install;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -57,8 +59,9 @@ public class InstallationEntity {
     @Column(name = "local_modified", nullable = false)
     private boolean localModified;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private InstallationStatus status;
 
     @Column(name = "installed_at", nullable = false)
     private OffsetDateTime installedAt;
@@ -181,11 +184,11 @@ public class InstallationEntity {
         this.localModified = localModified;
     }
 
-    public String getStatus() {
+    public InstallationStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(InstallationStatus status) {
         this.status = status;
     }
 

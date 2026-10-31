@@ -15,6 +15,7 @@ import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.SkillVersionService;
 import com.skillmesh.api.version.VersionNumberGenerator;
 import com.skillmesh.api.version.VersionOrder;
+import com.skillmesh.api.version.VersionStatus;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -125,5 +126,5 @@ public class GitArtifactPublisher {
 
     /** 发布结果。status 是版本的最终状态。 */
     public record Published(String version, String commit, String sha256, int fileCount,
-                             String status) {}
+                             VersionStatus status) {}
 }

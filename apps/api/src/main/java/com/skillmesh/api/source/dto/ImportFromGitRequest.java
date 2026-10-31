@@ -1,6 +1,7 @@
 package com.skillmesh.api.source.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.common.Visibility;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -17,5 +18,5 @@ public record ImportFromGitRequest(
         @NotBlank @Pattern(regexp = "^[a-z0-9][a-z0-9-]{1,63}$") String slug,
         @NotBlank @Size(max = 120) String name,
         @NotNull @Size(max = 4000) String description,
-        @NotBlank String visibility,
+        @NotNull Visibility visibility,
         @Size(max = 30) List<@Size(max = 64) String> tags) {}

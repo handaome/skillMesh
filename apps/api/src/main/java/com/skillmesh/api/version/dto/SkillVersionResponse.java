@@ -1,6 +1,8 @@
 package com.skillmesh.api.version.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.scan.ScanStatus;
+import com.skillmesh.api.version.VersionStatus;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -11,7 +13,7 @@ public record SkillVersionResponse(
         @JsonProperty("skill_id") UUID skillId,
         String version,
         String channel,
-        String status,
+        VersionStatus status,
         @JsonProperty("source_commit") String sourceCommit,
         ArtifactSummary artifact,
         List<ManifestEntry> manifest,
@@ -37,7 +39,7 @@ public record SkillVersionResponse(
     public record ScanSummary(
             @JsonProperty("scanner_name") String scannerName,
             @JsonProperty("scanner_version") String scannerVersion,
-            String status,
+            ScanStatus status,
             String summary,
             @JsonProperty("completed_at") OffsetDateTime completedAt,
             List<Finding> findings) {

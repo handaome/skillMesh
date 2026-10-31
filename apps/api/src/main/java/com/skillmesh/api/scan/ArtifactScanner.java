@@ -109,13 +109,13 @@ public class ArtifactScanner {
         long duration = System.currentTimeMillis() - started;
 
         if (outcome.error() != null) {
-            return new ScanResult("error", findings, outcome.error(), duration);
+            return new ScanResult(ScanStatus.error, findings, outcome.error(), duration);
         }
         if (outcome.specViolation() != null) {
             findings.add(new ScanResult.Finding("SKILL.md", 0, RULE_SPEC, outcome.specViolation()));
         }
         if (duration > timeoutMs) {
-            return new ScanResult("error", findings,
+            return new ScanResult(ScanStatus.error, findings,
                 "扫描超过 " + timeoutMs + "ms，按未完成处理", duration);
         }
         boolean blocking = false;
@@ -128,9 +128,9 @@ public class ArtifactScanner {
                 .append(' ').append(finding.rule()).append('\n');
         }
         if (findings.isEmpty()) {
-            return new ScanResult("passed", findings, "未发现问题", duration);
+            return new ScanResult(ScanStatus.passed, findings, "未发现问题", duration);
         }
-        return new ScanResult(blocking ? "failed" : "warning", findings,
+        return new ScanResult(blocking ? ScanStatus.failed : ScanStatus.warning, findings,
             summary.toString().trim(), duration);
     }
 

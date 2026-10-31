@@ -64,7 +64,7 @@ public class AuditController {
             String action,
             @JsonProperty("target_type") String targetType,
             @JsonProperty("target_id") String targetId,
-            String outcome,
+            AuditOutcome outcome,
             Map<String, Object> details) {
 
         static EventResponse of(AuditEventEntity event) {

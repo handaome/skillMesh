@@ -2,6 +2,8 @@ package com.skillmesh.api.org;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -26,8 +28,9 @@ public class TeamEntity {
 
     private String description;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private TeamStatus status;
 
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
@@ -75,11 +78,11 @@ public class TeamEntity {
         this.description = description;
     }
 
-    public String getStatus() {
+    public TeamStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(TeamStatus status) {
         this.status = status;
     }
 

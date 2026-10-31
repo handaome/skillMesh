@@ -2,6 +2,7 @@ package com.skillmesh.api.version.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.version.VersionStatus;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
@@ -10,7 +11,7 @@ import java.util.UUID;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CreateVersionResponse(
         @JsonProperty("version_id") UUID versionId,
-        String status,
+        VersionStatus status,
         UploadTarget upload,
         @JsonProperty("artifact_id") UUID artifactId) {
 

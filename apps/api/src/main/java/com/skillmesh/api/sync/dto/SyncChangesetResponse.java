@@ -1,6 +1,7 @@
 package com.skillmesh.api.sync.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.sync.ChangesetStatus;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -9,7 +10,7 @@ import java.util.UUID;
 public record SyncChangesetResponse(
         @JsonProperty("changeset_id") UUID changesetId,
         @JsonProperty("skill_id") UUID skillId,
-        String status,
+        ChangesetStatus status,
         @JsonProperty("cloud_hash") String cloudHash,
         String message,
         List<Conflict> conflicts,

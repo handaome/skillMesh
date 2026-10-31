@@ -1,6 +1,7 @@
 package com.skillmesh.api.source.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.version.VersionStatus;
 
 /** 从 Git 来源更新出来的版本。 */
 public record SourceUpdateResultResponse(
@@ -9,4 +10,4 @@ public record SourceUpdateResultResponse(
         String sha256,
         @JsonProperty("file_count") int fileCount,
         /** 版本的最终状态：published / pending_review / quarantined。 */
-        String status) {}
+        VersionStatus status) {}

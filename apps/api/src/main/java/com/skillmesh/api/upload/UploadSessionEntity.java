@@ -2,6 +2,8 @@ package com.skillmesh.api.upload;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -51,8 +53,9 @@ public class UploadSessionEntity {
     @Column(name = "temporary_storage_key", nullable = false, unique = true)
     private String temporaryStorageKey;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private UploadStatus status;
 
     @Column(name = "expires_at", nullable = false)
     private OffsetDateTime expiresAt;
@@ -149,11 +152,11 @@ public class UploadSessionEntity {
         this.temporaryStorageKey = temporaryStorageKey;
     }
 
-    public String getStatus() {
+    public UploadStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(UploadStatus status) {
         this.status = status;
     }
 

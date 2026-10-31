@@ -1,10 +1,13 @@
 package com.skillmesh.api.org;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.UserEntity;
 import com.skillmesh.api.auth.UserRepository;
+import com.skillmesh.api.auth.UserStatus;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.common.EnumParams;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.org.dto.MemberResponse;
 import com.skillmesh.api.org.dto.OrgMembershipResponse;
@@ -32,7 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class OrgService {
 
     /** 接口能设的账号状态。库里还允许 pending，那一档没有对应的操作。 */
-    private static final List<String> ALLOWED_STATUSES = List.of("active", "disabled");
+    private static final Set<UserStatus> ALLOWED_STATUSES =
+        Set.of(UserStatus.active, UserStatus.disabled);
 
     private final OrgRepository organizations;
     private final TeamRepository teams;
@@ -64,7 +68,7 @@ public class OrgService {
         org.setId(UUID.randomUUID());
         org.setSlug(slug);
         org.setName(name);
-        org.setStatus("active");
+        org.setStatus(OrganizationStatus.active);
         org.setPolicyJson(Map.of());
         org.setCreatedBy(user.id());
         org.setCreatedAt(now);
@@ -77,7 +81,7 @@ public class OrgService {
         owner.setJoinedAt(now);
         orgMembers.save(owner);
 
-        audit.record(user, "organization.create", "organization", org.getId(), "success",
+        audit.record(user, "organization.create", "organization", org.getId(), AuditOutcome.success,
             Map.of("slug", slug));
         return org;
     }
@@ -96,11 +100,12 @@ public class OrgService {
         team.setSlug(slug);
         team.setName(name);
         team.setDescription(description);
-        team.setStatus("active");
+        team.setStatus(TeamStatus.active);
         team.setCreatedAt(now);
         team.setUpdatedAt(now);
         teams.save(team);
-        audit.record(user, "team.create", "team", team.getId(), "success", Map.of("slug", slug));
+        audit.record(user, "team.create", "team", team.getId(), AuditOutcome.success,
+            Map.of("slug", slug));
         return team;
     }
 
@@ -150,7 +155,7 @@ public class OrgService {
             membership.setRole(role);
         }
         teamMembers.save(membership);
-        audit.record(actor, "team.membership.grant", "team", teamId, "success",
+        audit.record(actor, "team.membership.grant", "team", teamId, AuditOutcome.success,
             Map.of("user_id", memberId.toString(), "role", role));
     }
 
@@ -221,7 +226,7 @@ public class OrgService {
         }
         orgMembers.save(membership);
         audit.record(actor, "organization.membership.grant", "organization", organizationId,
-            "success", Map.of("user_id", memberId.toString(), "role", role));
+            AuditOutcome.success, Map.of("user_id", memberId.toString(), "role", role));
     }
 
     /** 同 upsertOrgMember：只升不降，调用方自己保证 actor 有资格。 */
@@ -240,7 +245,7 @@ public class OrgService {
         }
         teamMembers.save(membership);
         audit.record(actor, "team.membership.grant", "team", teamId,
-            "success", Map.of("user_id", memberId.toString(), "role", role));
+            AuditOutcome.success, Map.of("user_id", memberId.toString(), "role", role));
     }
 
     /** 组织成员列表，带上人的显示名。 */
@@ -292,7 +297,7 @@ public class OrgService {
         membership.setRole(role);
         orgMembers.save(membership);
         audit.record(actor, "organization.membership.update", "organization", organizationId,
-            "success", Map.of("user_id", memberId.toString(), "role", role));
+            AuditOutcome.success, Map.of("user_id", memberId.toString(), "role", role));
     }
 
     /**
@@ -324,18 +329,22 @@ public class OrgService {
      * （owner 是组织的最后一道保险，禁掉他就没人能任命下一个了）。
      */
     private void updateMemberStatus(CurrentUser actor, UUID organizationId, UUID memberId,
-                                    String status) {
+                                    String rawStatus) {
         // 锁先拿：owner 的判定要跟并发的角色变更串起来。
         lockOrgForRoleChange(organizationId);
         requireOrgAdmin(actor, organizationId);
-        if (!ALLOWED_STATUSES.contains(status)) {
+        // 可用值只列这个端点真能接受的那两档：枚举里还有 pending，
+        // 但那是注册流程自己写的，这个端点不接——照着提示填 pending 只会再被拒一次。
+        UserStatus status = EnumParams.parse(UserStatus.class, rawStatus);
+        if (status == null || !ALLOWED_STATUSES.contains(status)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "账号状态只能是 " + String.join(" / ", ALLOWED_STATUSES));
+                "status 的取值不对：" + rawStatus + "（可用：" + String.join(" / ",
+                    ALLOWED_STATUSES.stream().map(UserStatus::name).sorted().toList()) + "）");
         }
         MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
         MembershipEntities.OrgMembership membership = orgMembers.findById(key)
             .orElseThrow(() -> ApiException.notFound("成员"));
-        if ("disabled".equals(status)) {
+        if (status == UserStatus.disabled) {
             if (actor.id().equals(memberId)) {
                 throw new ApiException(403, ErrorCodes.FORBIDDEN, "不能禁用自己的账号");
             }
@@ -349,7 +358,7 @@ public class OrgService {
         user.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         users.save(user);
         audit.record(actor, "organization.membership.status", "organization", organizationId,
-            "success", Map.of("user_id", memberId.toString(), "status", status));
+            AuditOutcome.success, Map.of("user_id", memberId.toString(), "status", status));
     }
 
     /** 改团队角色。 */
@@ -363,7 +372,7 @@ public class OrgService {
         membership.setRole(role);
         teamMembers.save(membership);
         audit.record(actor, "team.membership.update", "team", teamId,
-            "success", Map.of("user_id", memberId.toString(), "role", role));
+            AuditOutcome.success, Map.of("user_id", memberId.toString(), "role", role));
     }
 
     /** 移出团队。不动组织成员身份——两套身份是独立的。 */
@@ -376,7 +385,7 @@ public class OrgService {
         }
         teamMembers.deleteById(key);
         audit.record(actor, "team.membership.remove", "team", teamId,
-            "success", Map.of("user_id", memberId.toString()));
+            AuditOutcome.success, Map.of("user_id", memberId.toString()));
     }
 
     /** 这个团队是不是这个组织的？换个组织 id 就能看别人团队成员，那不行。 */
@@ -403,7 +412,7 @@ public class OrgService {
         String displayName = userId.toString();
         String email = null;
         String subject = null;
-        String status = null;
+        UserStatus status = null;
         if (user != null) {
             displayName = user.getDisplayName();
             email = user.getEmail();

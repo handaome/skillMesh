@@ -1,5 +1,6 @@
 package com.skillmesh.api.review.dto;
 
+import com.skillmesh.api.version.VersionStatus;
 import java.util.UUID;
 
 /**
@@ -24,7 +25,7 @@ public record PendingReviewItem(
     String submitted_at,
     ReviewScanSummary scan,
     ReviewSourceSummary source,
-    String status,
+    VersionStatus status,
     /** 我能不能做审核动作（放行或驳回）。 */
     boolean can_decide,
     /** 我能不能放行。自己发布的版本不能自己放行，驳回可以。 */

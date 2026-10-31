@@ -6,6 +6,7 @@ import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.review.ReviewService;
 import com.skillmesh.api.audit.AuditService;
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.auth.CurrentUser;
@@ -18,6 +19,7 @@ import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.PublishedDigest;
 import com.skillmesh.api.version.VersionOrder;
+import com.skillmesh.api.version.VersionStatus;
 import com.skillmesh.api.version.dto.UploadSession;
 import java.io.IOException;
 import java.io.InputStream;
@@ -111,13 +113,13 @@ public class UploadService {
         if (!session.getActorUserId().equals(user.id())) {
             throw ApiException.notFound("上传会话");
         }
-        if (!"created".equals(session.getStatus())) {
+        if (session.getStatus() != UploadStatus.created) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "上传会话状态为 " + session.getStatus() + "，不能重复上传");
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         if (session.getExpiresAt().isBefore(now)) {
-            session.setStatus("expired");
+            session.setStatus(UploadStatus.expired);
             session.setErrorCode("UPLOAD_EXPIRED");
             uploads.save(session);
             throw new ApiException(410, ErrorCodes.ARTIFACT_MISSING, "上传会话已过期，请重新上传");
@@ -137,7 +139,7 @@ public class UploadService {
         storage.putStream(session.getTemporaryStorageKey(), in, size,
             contentType == null || contentType.isBlank()
                 ? "application/octet-stream" : contentType);
-        session.setStatus("uploaded");
+        session.setStatus(UploadStatus.uploaded);
         uploads.save(session);
     }
 
@@ -148,13 +150,14 @@ public class UploadService {
         if (!session.getActorUserId().equals(user.id())) {
             throw ApiException.notFound("上传会话");
         }
-        if (!"created".equals(session.getStatus()) && !"uploaded".equals(session.getStatus())) {
+        if (session.getStatus() != UploadStatus.created
+            && session.getStatus() != UploadStatus.uploaded) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "上传会话已结束，状态为 " + session.getStatus());
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         if (session.getExpiresAt().isBefore(now)) {
-            session.setStatus("expired");
+            session.setStatus(UploadStatus.expired);
             session.setErrorCode("UPLOAD_EXPIRED");
             uploads.save(session);
             throw new ApiException(410, ErrorCodes.ARTIFACT_MISSING, "上传会话已过期，请重新上传");
@@ -180,8 +183,8 @@ public class UploadService {
             .orElseThrow(() -> ApiException.notFound("版本"));
         // 撤回不可逆：撤回了的版本不能再被上传会话转成已发布或待审。
         // 撤回与收尾锁同一行，两个动作不会交错。
-        if ("revoked".equals(version.getStatus()) || "yanked".equals(version.getStatus())) {
-            session.setStatus("failed");
+        if (version.getStatus() == VersionStatus.revoked || version.getStatus() == VersionStatus.yanked) {
+            session.setStatus(UploadStatus.failed);
             session.setErrorCode(ErrorCodes.VERSION_CONFLICT);
             uploads.save(session);
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
@@ -191,7 +194,7 @@ public class UploadService {
         // 建版本那一刻查过一次，但那个窗口没被覆盖——这次转正会把
         // 那份改动静默盖掉。这里再对一次，对不上就让客户端重新对账。
         requireBaseRevision(version);
-        session.setStatus("verifying");
+        session.setStatus(UploadStatus.verifying);
         uploads.save(session);
 
         ArtifactService.Promoted promoted;
@@ -214,7 +217,7 @@ public class UploadService {
             // 审核面板列的文件，都是包里真实的那份。
             version.setManifestJson(manifest);
         } catch (ApiException e) {
-            session.setStatus("failed");
+            session.setStatus(UploadStatus.failed);
             session.setErrorCode(e.code());
             session.setVerifiedAt(now);
             uploads.save(session);
@@ -233,18 +236,19 @@ public class UploadService {
         // 扫描命中阻断规则 -> quarantined（隔离，不是普通的拒绝）：
         // 「内容里有真凭据」与「审核者觉得不合适」是两回事，流水要能分开看
         // （设计文档 §10.1：扫描失败或审核拒绝进入 rejected/quarantined）。
-        version.setStatus(scan.blocked() ? "quarantined" : needsReview ? "pending_review" : "published");
-        if ("published".equals(version.getStatus())) {
+        version.setStatus(scan.blocked() ? VersionStatus.quarantined
+            : needsReview ? VersionStatus.pending_review : VersionStatus.published);
+        if (version.getStatus() == VersionStatus.published) {
             version.setPublishedBy(user.id());
             version.setPublishedAt(now);
         }
-        if ("pending_review".equals(version.getStatus())) {
+        if (version.getStatus() == VersionStatus.pending_review) {
             // 队列里的 submitted_at 是进队列这一刻，不是建版本那一刻。
             version.setSubmittedAt(now);
         }
         versions.save(version);
 
-        if ("published".equals(version.getStatus())) {
+        if (version.getStatus() == VersionStatus.published) {
             // 锁住这一行再改 latest_version：不锁的话两个并发发布会各读各的，
             // 后写的把先写的顶掉，latest 就退回了旧版本。
             advanceLatestVersion(version.getSkillId(), version.getVersion(), now);
@@ -254,27 +258,27 @@ public class UploadService {
         }
 
         String action = switch (version.getStatus()) {
-            case "rejected" -> "skill.publish_rejected";
-            case "quarantined" -> "skill.publish_quarantined";
-            case "pending_review" -> "skill.submit_for_review";
+            case rejected -> "skill.publish_rejected";
+            case quarantined -> "skill.publish_quarantined";
+            case pending_review -> "skill.submit_for_review";
             default -> "skill.publish";
         };
         audit.record(user, action, "skill", version.getSkillId(),
-            "rejected".equals(version.getStatus()) || "quarantined".equals(version.getStatus())
-                ? "failure" : "success",
+            version.getStatus() == VersionStatus.rejected || version.getStatus() == VersionStatus.quarantined
+                ? AuditOutcome.failure : AuditOutcome.success,
             Map.of("version", version.getVersion(), "sha256", promoted.sha256(),
                 "scan_status", scan.status(),
                 // 声明的清单跟真包对不上：收下了，但记一笔——发布方说的不算数。
                 "manifest_mismatch", !manifestMatches));
 
-        session.setStatus("completed");
+        session.setStatus(UploadStatus.completed);
         session.setVerifiedAt(now);
         session.setUploadedAt(now);
         uploads.save(session);
 
         // 版本状态一并带回去：会话的 status 只说「上传完了没有」，
         // 客户端要判断的是这版被服务端怎么处理了（扫描拦下 / 待审 / 已发布）。
-        return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
+        return new UploadSession(session.getId(), session.getPurpose(), UploadStatus.completed, null,
             session.getExpiresAt(), promoted.sha256(), null, version.getStatus());
     }
 
@@ -342,7 +346,7 @@ public class UploadService {
 
     /** 同步文件上传的收尾：校验字节数与摘要，通过就等着 commit。 */
     private UploadSession completeSyncFile(UploadSessionEntity session, OffsetDateTime now) {
-        session.setStatus("verifying");
+        session.setStatus(UploadStatus.verifying);
         uploads.save(session);
         try {
             byte[] data = storage.get(session.getTemporaryStorageKey()).readAllBytes();
@@ -362,18 +366,18 @@ public class UploadService {
                     "文件摘要与声明不一致：声明 " + session.getExpectedSha256()
                         + "，实际 " + actual);
             }
-            session.setStatus("completed");
+            session.setStatus(UploadStatus.completed);
             session.setVerifiedAt(now);
             uploads.save(session);
-            return new UploadSession(session.getId(), session.getPurpose(), "completed", null,
+            return new UploadSession(session.getId(), session.getPurpose(), UploadStatus.completed, null,
                 session.getExpiresAt(), actual, session.getRelativePath(), null);
         } catch (ApiException e) {
-            session.setStatus("failed");
+            session.setStatus(UploadStatus.failed);
             session.setErrorCode(e.code());
             uploads.save(session);
             throw e;
         } catch (java.io.IOException e) {
-            session.setStatus("failed");
+            session.setStatus(UploadStatus.failed);
             session.setErrorCode(ErrorCodes.ARTIFACT_MISSING);
             uploads.save(session);
             throw new ApiException(502, ErrorCodes.ARTIFACT_MISSING,

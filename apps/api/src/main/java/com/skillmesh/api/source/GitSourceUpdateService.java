@@ -1,5 +1,6 @@
 package com.skillmesh.api.source;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
@@ -91,7 +92,8 @@ public class GitSourceUpdateService {
             source.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
             sourceRepository.save(source);
 
-            audit.record(user, "skill.update_from_git", "skill", skillId, "success",
+            audit.record(user, "skill.update_from_git", "skill", skillId,
+                AuditOutcome.success,
                 Map.of("version", published.version(), "commit", published.commit(),
                     "sha256", published.sha256(), "status", published.status()));
 

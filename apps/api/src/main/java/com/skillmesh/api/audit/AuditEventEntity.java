@@ -2,6 +2,8 @@ package com.skillmesh.api.audit;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -36,8 +38,9 @@ public class AuditEventEntity {
     @Column(name = "target_id")
     private String targetId;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String outcome;
+    private AuditOutcome outcome;
 
     @Column(name = "request_id")
     private String requestId;
@@ -111,11 +114,11 @@ public class AuditEventEntity {
         this.targetId = targetId;
     }
 
-    public String getOutcome() {
+    public AuditOutcome getOutcome() {
         return outcome;
     }
 
-    public void setOutcome(String outcome) {
+    public void setOutcome(AuditOutcome outcome) {
         this.outcome = outcome;
     }
 

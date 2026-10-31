@@ -2,6 +2,8 @@ package com.skillmesh.api.version;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.EnumType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -43,8 +45,9 @@ public class SkillVersionEntity {
     @Column(name = "manifest_json", columnDefinition = "jsonb", nullable = false)
     private List<Map<String, Object>> manifestJson;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private VersionStatus status;
 
     @Column(name = "created_by")
     private UUID createdBy;
@@ -150,11 +153,11 @@ public class SkillVersionEntity {
         this.manifestJson = manifestJson;
     }
 
-    public String getStatus() {
+    public VersionStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(VersionStatus status) {
         this.status = status;
     }
 

@@ -47,7 +47,7 @@ public class UserAdminController {
 
     @PatchMapping("/{id}/status")
     public UserAccount setStatus(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
-                                  @RequestBody UserStatusRequest request) {
+                                  @Valid @RequestBody UserStatusRequest request) {
         return users.setStatus(currentUserService.current(jwt), id, request.status());
     }
 }

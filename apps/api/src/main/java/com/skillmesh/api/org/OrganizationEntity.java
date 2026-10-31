@@ -2,6 +2,8 @@ package com.skillmesh.api.org;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -23,8 +25,9 @@ public class OrganizationEntity {
     @Column(nullable = false)
     private String name;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private OrganizationStatus status;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "policy_json", columnDefinition = "jsonb", nullable = false)
@@ -63,11 +66,11 @@ public class OrganizationEntity {
         this.name = name;
     }
 
-    public String getStatus() {
+    public OrganizationStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(OrganizationStatus status) {
         this.status = status;
     }
 

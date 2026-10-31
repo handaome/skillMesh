@@ -7,7 +7,7 @@ import java.util.UUID;
  *
  * role 是站内角色：admin 是站点管理员，user 是普通账号。
  */
-public record CurrentUser(UUID id, String subject, String displayName, String email, String status,
+public record CurrentUser(UUID id, String subject, String displayName, String email, UserStatus status,
                           String role) {
 
     /** 站内管理员：能建号、看账号列表。 */

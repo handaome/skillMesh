@@ -1,5 +1,6 @@
 package com.skillmesh.api.invite.dto;
 
+import com.skillmesh.api.invite.InvitationStatus;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -10,6 +11,6 @@ public record InvitationSummary(
     String team_name,
     String org_role,
     String team_role,
-    String status,
+    InvitationStatus status,
     OffsetDateTime expires_at,
     OffsetDateTime created_at) {}

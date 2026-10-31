@@ -1,10 +1,13 @@
 package com.skillmesh.api.skill;
 
 import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.common.EnumParams;
+import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.Permission;
@@ -25,7 +28,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -149,14 +151,14 @@ public class SkillService {
         entity.setOrganizationId(req.organization_id());
         entity.setOwnerTeamId(req.owner_team_id());
         entity.setVisibility(req.visibility());
-        entity.setStatus("active");
+        entity.setStatus(SkillStatus.active);
         entity.setTags(req.tags() == null ? new String[0] : req.tags().toArray(new String[0]));
         entity.setMetadataJson(req.metadata() == null ? Map.of() : req.metadata());
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         SkillEntity saved = skills.save(entity);
         SourceEntity recorded = recordSource(user, saved, req.source());
-        audit.record(user, "skill.created", "skill", saved.getId(), "success",
+        audit.record(user, "skill.created", "skill", saved.getId(), AuditOutcome.success,
             Map.of("slug", saved.getSlug(), "visibility", saved.getVisibility()));
         return toResponse(saved, toSummary(recorded));
     }
@@ -177,7 +179,7 @@ public class SkillService {
         if (source == null) {
             row.setSourceType("local_import");
             row.setProvider("local");
-            row.setLicenseStatus("unknown");
+            row.setLicenseStatus(LicenseStatus.unknown);
             sources.save(row);
             return row;
         }
@@ -189,7 +191,7 @@ public class SkillService {
         row.setRefValue(source.refValue());
         row.setResolvedCommit(source.resolvedCommit());
         row.setLicenseExpression(source.licenseExpression());
-        row.setLicenseStatus(source.licenseStatus() == null ? "unknown" : source.licenseStatus());
+        row.setLicenseStatus(source.licenseStatus() == null ? LicenseStatus.unknown : source.licenseStatus());
         sources.save(row);
         return row;
     }
@@ -223,7 +225,7 @@ public class SkillService {
         }
         entity.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         SkillEntity saved = skills.save(entity);
-        audit.record(user, "skill.updated", "skill", saved.getId(), "success",
+        audit.record(user, "skill.updated", "skill", saved.getId(), AuditOutcome.success,
             Map.of("fields", String.join(",", changed), "slug", saved.getSlug()));
         return toResponse(saved, sourceSummary(saved.getId()));
     }
@@ -259,16 +261,16 @@ public class SkillService {
     private void doArchive(CurrentUser user, UUID id) {
         SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
         requireArchiveRight(user, entity);
-        if (!SkillStatus.ACTIVE.equals(entity.getStatus())) {
+        if (entity.getStatus() != SkillStatus.active) {
             // 已经删过了：不给第二次删除留入口，也别把归档当成功返回
             throw ApiException.notFound("Skill");
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        entity.setStatus(SkillStatus.ARCHIVED);
+        entity.setStatus(SkillStatus.archived);
         entity.setArchivedAt(now);
         entity.setUpdatedAt(now);
         skills.save(entity);
-        audit.record(user, "skill.archived", "skill", entity.getId(), "success",
+        audit.record(user, "skill.archived", "skill", entity.getId(), AuditOutcome.success,
             Map.of("slug", entity.getSlug()));
     }
 
@@ -282,10 +284,10 @@ public class SkillService {
     public SkillResponse restore(CurrentUser user, UUID id) {
         SkillEntity entity = skills.findById(id).orElseThrow(() -> ApiException.notFound("Skill"));
         requireArchiveRight(user, entity);
-        if (SkillStatus.ACTIVE.equals(entity.getStatus())) {
+        if (entity.getStatus() == SkillStatus.active) {
             return toResponse(entity, sourceSummary(entity.getId()));
         }
-        if (!SkillStatus.ARCHIVED.equals(entity.getStatus())) {
+        if (entity.getStatus() != SkillStatus.archived) {
             throw ApiException.notFound("Skill");
         }
         if (slugTaken(entity.getOrganizationId(), entity.getOwnerUserId(),
@@ -294,11 +296,11 @@ public class SkillService {
                 "slug 已被占用，先处理掉同名的 Skill: " + entity.getSlug());
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        entity.setStatus(SkillStatus.ACTIVE);
+        entity.setStatus(SkillStatus.active);
         entity.setArchivedAt(null);
         entity.setUpdatedAt(now);
         skills.save(entity);
-        audit.record(user, "skill.restored", "skill", entity.getId(), "success",
+        audit.record(user, "skill.restored", "skill", entity.getId(), AuditOutcome.success,
             Map.of("slug", entity.getSlug()));
         return toResponse(entity, sourceSummary(entity.getId()));
     }
@@ -335,8 +337,8 @@ public class SkillService {
      * 两件事的判定口径一样，所以只判一次——分开写迟早改一处漏一处。
      */
     private void requireOwnerOrPublisher(CurrentUser user, SkillEntity entity, String deniedMessage) {
-        if ("team".equals(entity.getVisibility())
-            || "organization".equals(entity.getVisibility())) {
+        Visibility visibility = entity.getVisibility();
+        if (visibility == Visibility.TEAM || visibility == Visibility.ORGANIZATION) {
             requireOrgPublisher(user, entity.getOrganizationId());
             return;
         }
@@ -354,9 +356,9 @@ public class SkillService {
      */
     private boolean slugTaken(UUID organizationId, UUID ownerUserId, String slug, UUID excludeId) {
         if (organizationId == null) {
-            return skills.existsInPersonalSpace(ownerUserId, slug, SkillStatus.ACTIVE, excludeId);
+            return skills.existsInPersonalSpace(ownerUserId, slug, SkillStatus.active, excludeId);
         }
-        return skills.existsInOrganization(organizationId, slug, SkillStatus.ACTIVE, excludeId);
+        return skills.existsInOrganization(organizationId, slug, SkillStatus.active, excludeId);
     }
 
     /**
@@ -379,9 +381,13 @@ public class SkillService {
                             boolean untagged, boolean mine, Integer limit, String cursor) {
         int size = limit == null ? DEFAULT_LIMIT : Math.clamp(limit, 1, MAX_LIMIT);
         CursorCodec.Cursor decoded = decodeCursor(cursor);
+        // 原生 SQL 的状态参数保持 String：枚举直接绑进去会被按序号绑定，绑的是 1、2。
+        String visibilityFilter = visibility == null || visibility.isBlank()
+            ? null
+            : EnumParams.require(Visibility.class, visibility, "visibility").value();
         // 团队/组织可见的 Skill：可见性条件交给 SQL 过滤，
         // 别把不该看到的查出来再在内存里筛——那等于没权限控制。
-        List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibility, tag,
+        List<SkillEntity> rows = skills.search(user.id(), normalize(q), visibilityFilter, tag,
             untagged, mine, decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
         CursorPage<SkillEntity> page = CursorPage.of(rows, size, SkillService::nextCursorOf);
         // 来源一次查完：列表页要显示每个 Skill 的仓库地址，
@@ -461,18 +467,19 @@ public class SkillService {
      * 却在审核队列里看得见并能批准它，「能批不能看」说不通。
      */
     public boolean canView(CurrentUser user, SkillEntity entity) {
-        if ("public".equals(entity.getVisibility())
+        Visibility visibility = entity.getVisibility();
+        if (visibility == Visibility.PUBLIC
             || user.id().equals(entity.getOwnerUserId())) {
             return true;
         }
-        if (entity.getOrganizationId() == null) {
+        if (entity.getOrganizationId() == null || visibility == null) {
             return false;
         }
-        return switch (entity.getVisibility()) {
-            case "team" -> (entity.getOwnerTeamId() != null
+        return switch (visibility) {
+            case TEAM -> (entity.getOwnerTeamId() != null
                     && orgs.isTeamMember(entity.getOwnerTeamId(), user.id()))
                 || isOrgAdmin(entity.getOrganizationId(), user.id());
-            case "organization" -> orgs.isOrgMember(entity.getOrganizationId(), user.id());
+            case ORGANIZATION -> orgs.isOrgMember(entity.getOrganizationId(), user.id());
             default -> false;
         };
     }
@@ -521,12 +528,13 @@ public class SkillService {
      * 直接打 API 也得有服务端这道闸。
      */
     private void requireVisibilitySupported(CurrentUser user, CreateSkillRequest req) {
-        String visibility = req.visibility();
-        if (!Set.of("private", "public", "team", "organization").contains(visibility)) {
+        Visibility visibility = req.visibility();
+        if (visibility == null) {
+            // 枚举反序列化认不出来的取值 Jackson 已经挡了（400），走到这里只能是没给。
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "可见性只能是 private / public / team / organization");
+                "可见性不能为空：private / public / team / organization");
         }
-        if ("private".equals(visibility) || "public".equals(visibility)) {
+        if (visibility == Visibility.PRIVATE || visibility == Visibility.PUBLIC) {
             // private/public 不属于任何组织或团队：带着 organization_id 建出来的
             // Skill 会落进审核队列（队列按 organization_id is not null 过滤），
             // 私有内容就混进组织的审核页里了。
@@ -538,12 +546,12 @@ public class SkillService {
         }
         if (req.organization_id() == null) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                visibility + " 可见必须指定 organization_id");
+                visibility.value() + " 可见必须指定 organization_id");
         }
         if (!orgs.isOrgMember(req.organization_id(), user.id())) {
             throw new ApiException(403, ErrorCodes.FORBIDDEN, "你不是该组织的成员");
         }
-        if ("team".equals(visibility)) {
+        if (visibility == Visibility.TEAM) {
             if (req.owner_team_id() == null) {
                 throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                     "team 可见必须指定 owner_team_id");

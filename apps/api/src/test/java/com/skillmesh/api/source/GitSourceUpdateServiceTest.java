@@ -8,12 +8,17 @@ import com.skillmesh.api.artifact.ArtifactRepository;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.UserEntity;
 import com.skillmesh.api.auth.UserRepository;
+import com.skillmesh.api.auth.UserStatus;
+import com.skillmesh.api.common.Visibility;
+import com.skillmesh.api.skill.LicenseStatus;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
+import com.skillmesh.api.skill.SkillStatus;
 import com.skillmesh.api.skill.SourceEntity;
 import com.skillmesh.api.skill.SourceRepository;
 import com.skillmesh.api.source.dto.SourceUpdateResultResponse;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionStatus;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -121,10 +126,10 @@ class GitSourceUpdateServiceTest {
         assertThat(result.version()).isEqualTo("1.0.0");
         assertThat(result.sourceCommit()).isEqualTo(COMMIT);
         // 私有的 Skill 是属主自己的，不用过审。
-        assertThat(result.status()).isEqualTo("published");
+        assertThat(result.status()).isEqualTo(VersionStatus.published);
 
         var version = versions.findBySkillIdOrderByCreatedAtDesc(skillId).get(0);
-        assertThat(version.getStatus()).isEqualTo("published");
+        assertThat(version.getStatus()).isEqualTo(VersionStatus.published);
         assertThat(version.getSourceCommit()).isEqualTo(COMMIT);
         // 版本行记着这次是从哪个来源来的。
         assertThat(version.getSourceId()).isEqualTo(sourceId);
@@ -145,11 +150,12 @@ class GitSourceUpdateServiceTest {
         user.setOidcIssuer("https://probe.local");
         user.setOidcSubject("probe-" + id);
         user.setDisplayName("探针属主");
-        user.setStatus("active");
+        user.setStatus(UserStatus.active);
         user.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         user.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         users.saveAndFlush(user);
-        return new CurrentUser(id, user.getOidcSubject(), user.getDisplayName(), null, "active", "user");
+        return new CurrentUser(id, user.getOidcSubject(), user.getDisplayName(), null,
+            UserStatus.active, "user");
     }
 
     private UUID newSkill() {
@@ -159,8 +165,8 @@ class GitSourceUpdateServiceTest {
         entity.setName("探针技能");
         entity.setDescription("测试用");
         entity.setOwnerUserId(owner.id());
-        entity.setVisibility("private");
-        entity.setStatus("active");
+        entity.setVisibility(Visibility.PRIVATE);
+        entity.setStatus(SkillStatus.active);
         entity.setTags(new String[0]);
         entity.setMetadataJson(Map.of());
         entity.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
@@ -178,7 +184,7 @@ class GitSourceUpdateServiceTest {
         source.setRefType("branch");
         source.setRefValue("main");
         source.setResolvedCommit("0000000000000000000000000000000000000000");
-        source.setLicenseStatus("unknown");
+        source.setLicenseStatus(LicenseStatus.unknown);
         source.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         source.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         sourceRepository.saveAndFlush(source);

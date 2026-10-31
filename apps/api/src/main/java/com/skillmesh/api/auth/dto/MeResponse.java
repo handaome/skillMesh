@@ -1,6 +1,7 @@
 package com.skillmesh.api.auth.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillmesh.api.auth.UserStatus;
 import com.skillmesh.api.org.dto.OrgMembershipResponse;
 import java.util.List;
 import java.util.UUID;
@@ -17,7 +18,7 @@ public record MeResponse(User user, List<OrgMembershipResponse> organizations) {
     public record User(UUID id,
                        @JsonProperty("display_name") String displayName,
                        String email,
-                       String status,
+                       UserStatus status,
                        String subject,
                        /** 站内角色：admin 或 user。网页端据此决定要不要显示账号管理入口。 */
                        String role) {}

@@ -2,6 +2,8 @@ package com.skillmesh.api.skill;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -40,8 +42,9 @@ public class SourceEntity {
     @Column(name = "license_expression")
     private String licenseExpression;
 
+    @Enumerated(EnumType.STRING)
     @Column(name = "license_status", nullable = false)
-    private String licenseStatus;
+    private LicenseStatus licenseStatus;
 
     @Column(name = "credential_ref")
     private String credentialRef;
@@ -138,11 +141,11 @@ public class SourceEntity {
         this.licenseExpression = licenseExpression;
     }
 
-    public String getLicenseStatus() {
+    public LicenseStatus getLicenseStatus() {
         return licenseStatus;
     }
 
-    public void setLicenseStatus(String licenseStatus) {
+    public void setLicenseStatus(LicenseStatus licenseStatus) {
         this.licenseStatus = licenseStatus;
     }
 

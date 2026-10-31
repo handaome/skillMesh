@@ -8,6 +8,8 @@ import com.skillmesh.api.auth.UserRepository;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.common.EnumParams;
+import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.diff.ArtifactDiffService;
 import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.Permission;
@@ -24,6 +26,7 @@ import com.skillmesh.api.skill.SourceEntity;
 import com.skillmesh.api.skill.SourceRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
+import com.skillmesh.api.version.VersionStatus;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -85,10 +88,13 @@ public class ReviewQueueService {
     @Transactional(readOnly = true)
     public CursorPage<PendingReviewItem> pending(CurrentUser user, String status, Integer limit,
             String cursor) {
-        String wanted = status == null || status.isBlank() ? "pending_review" : status;
+        VersionStatus wanted = status == null || status.isBlank()
+            ? VersionStatus.pending_review
+            : EnumParams.require(VersionStatus.class, status, "status");
         int size = limit == null ? DEFAULT_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
         CursorCodec.Cursor3 decoded = CursorCodec.decode3OrEmpty(cursor);
-        List<SkillVersionEntity> rows = versions.findReviewable(user.id(), wanted, REVIEWER_ROLES,
+        // 原生 SQL 的参数是 String：枚举直接绑进去会被按序号绑定，绑的是 1、2。
+        List<SkillVersionEntity> rows = versions.findReviewable(user.id(), wanted.name(), REVIEWER_ROLES,
             decoded.time(), decoded.time2(), decoded.id(), PageRequest.of(0, size + 1));
         CursorPage<SkillVersionEntity> page = CursorPage.of(rows, size, ReviewQueueService::nextCursorOf);
         // 一页里的技能、扫描、来源、人各查一次：逐条查就是 4N 次往返，
@@ -144,7 +150,7 @@ public class ReviewQueueService {
         if (skill == null) {
             return false;
         }
-        UUID scopeTeamId = "team".equals(skill.getVisibility()) ? skill.getOwnerTeamId() : null;
+        UUID scopeTeamId = skill.getVisibility() == Visibility.TEAM ? skill.getOwnerTeamId() : null;
         return auth.hasPermission(user, Permission.SKILL_REVIEW, skill.getOrganizationId(),
             scopeTeamId);
     }
@@ -156,7 +162,7 @@ public class ReviewQueueService {
      * 服务端算好了给前端——前端自己推一遍规则，迟早与服务端不一致。
      */
     private boolean canDecide(CurrentUser user, SkillVersionEntity version, SkillEntity skill) {
-        return "pending_review".equals(version.getStatus())
+        return version.getStatus() == VersionStatus.pending_review
             && canReview(user, skill);
     }
 
@@ -229,8 +235,10 @@ public class ReviewQueueService {
 
     private ReviewScanSummary scanSummary(SkillVersionEntity version, Map<UUID, ScanEntity> scans) {
         ScanEntity scan = scans.get(version.getId());
+        // "unknown" 是「没扫过」的占位，不是扫描结论词表里的值——
+        // 所以这个字段留 String，不硬塞一个假的枚举常量。
         return scan == null ? new ReviewScanSummary("unknown", "未扫描")
-            : new ReviewScanSummary(scan.getStatus(), scan.getSummary());
+            : new ReviewScanSummary(scan.getStatus().name(), scan.getSummary());
     }
 
     private ReviewSourceSummary sourceSummary(SkillVersionEntity version,

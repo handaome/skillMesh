@@ -42,9 +42,9 @@ public class UserAdminService {
 
     /** 禁用或启用账号。禁用后登不进来，账号与数据都留着。 */
     @Transactional
-    public UserAccount setStatus(CurrentUser actor, UUID userId, String status) {
+    public UserAccount setStatus(CurrentUser actor, UUID userId, UserStatus status) {
         requireSiteAdmin(actor);
-        if (!"active".equals(status) && !"disabled".equals(status)) {
+        if (status != UserStatus.active && status != UserStatus.disabled) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "状态只能是 active 或 disabled");
         }
         // 不能改自己的状态：站点只剩一个管理员时，这一手等于把系统锁死。

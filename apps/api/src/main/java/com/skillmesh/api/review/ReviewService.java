@@ -1,27 +1,30 @@
 package com.skillmesh.api.review;
 
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.Permission;
 import com.skillmesh.api.recycle.RecycleService;
 import com.skillmesh.api.review.dto.BatchDecideRequest;
 import com.skillmesh.api.scan.ScanEntity;
 import com.skillmesh.api.scan.ScanRepository;
+import com.skillmesh.api.scan.ScanStatus;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.VersionOrder;
+import com.skillmesh.api.version.VersionStatus;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -107,8 +110,11 @@ public class ReviewService {
     /** 团队或组织可见的 Skill，发版要走审核。 */
     public boolean needsReview(UUID skillId) {
         SkillEntity skill = skills.findById(skillId).orElse(null);
-        return skill != null
-            && Set.of("team", "organization").contains(skill.getVisibility());
+        if (skill == null) {
+            return false;
+        }
+        Visibility visibility = skill.getVisibility();
+        return visibility == Visibility.TEAM || visibility == Visibility.ORGANIZATION;
     }
 
     /** 提交审核：把待审的版本重新排队。 */
@@ -121,11 +127,11 @@ public class ReviewService {
         // 手册教的「把组织角色提到 publisher」在服务端就不生效。
         requirePermission(user, skill, Permission.SKILL_PUBLISH, null);
         SkillVersionEntity entity = requireVersionForUpdate(skillId, version);
-        if ("published".equals(entity.getStatus())) {
+        if (entity.getStatus() == VersionStatus.published) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已发布，无需再提交审核");
         }
         // 撤回不可逆：撤回了的版本不能再送回审核队列。
-        if ("revoked".equals(entity.getStatus()) || "yanked".equals(entity.getStatus())) {
+        if (entity.getStatus() == VersionStatus.revoked || entity.getStatus() == VersionStatus.yanked) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT, "该版本已撤回，不能再送审");
         }
         // 送审前必须已经上传过制品、也被服务端扫过——否则这道扫描闸形同虚设。
@@ -133,16 +139,16 @@ public class ReviewService {
         // 送审是幂等的：已经在队列里就什么都不用做。
         // 送审不是审核结论，不占 skill_reviews 的名额（那是审核动作的）：
         // 占了名额，驳回之后提交人就再也送不回去，这一版就永久卡死了。
-        if (!"pending_review".equals(entity.getStatus())) {
-            entity.setStatus("pending_review");
+        if (entity.getStatus() != VersionStatus.pending_review) {
+            entity.setStatus(VersionStatus.pending_review);
             // 队列里的 submitted_at 是这次进队列的时间，不是建版本的时间。
             entity.setSubmittedAt(OffsetDateTime.now(ZoneOffset.UTC));
             versions.save(entity);
         }
-        audit.record(user, "version.submit", "skill", skillId, "success",
+        audit.record(user, "version.submit", "skill", skillId, AuditOutcome.success,
             Map.of("version", version, "comment", comment == null ? "" : comment));
         return Map.of(FIELD_SKILL_ID, skillId.toString(), FIELD_VERSION, version,
-            "status", "pending_review");
+            "status", VersionStatus.pending_review);
     }
 
     /** 审核通过并发布。 */
@@ -167,7 +173,7 @@ public class ReviewService {
         // 团队范围才看团队角色：组织范围的版本只有组织角色这一层
         // （团队治理文档「审核这一侧先看团队角色」那条）。
         requirePermission(user, skill, Permission.SKILL_REVIEW,
-            "team".equals(skill.getVisibility()) ? skill.getOwnerTeamId() : null);
+            skill.getVisibility() == Visibility.TEAM ? skill.getOwnerTeamId() : null);
         // 锁住版本行：审核决定要串行化。两个人同时点「通过」都读到 pending_review
         // 就会各写一条 approved；「通过」与「拒绝」交错还会把 published_by 写回 null。
         // 锁住之后后一个动作只能等前一个提交完，读到的已经是 published → 409。
@@ -175,7 +181,7 @@ public class ReviewService {
         // 与送审同一道前置：没上传制品、没被服务端扫过的版本不能过审。
         // 扫描结论是阻断的更不能放行——那就是服务端拦下来的东西。
         requireScannable(entity, !approved);
-        if (!"pending_review".equals(entity.getStatus())) {
+        if (entity.getStatus() != VersionStatus.pending_review) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "只有待审核的版本能过审，当前状态：" + entity.getStatus());
         }
@@ -184,7 +190,7 @@ public class ReviewService {
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         if (approved) {
-            entity.setStatus("published");
+            entity.setStatus(VersionStatus.published);
             entity.setPublishedBy(user.id());
             entity.setPublishedAt(now);
             // 锁住这一行再改 latest_version：并发过审时后写的会把先写的顶掉，
@@ -203,7 +209,7 @@ public class ReviewService {
             // 回收站在组织/团队场景下就永远是空的，删掉的文件再也找不回来。
             recycle.recordRemoved(skillId, entity.getVersion());
         } else {
-            entity.setStatus("rejected");
+            entity.setStatus(VersionStatus.rejected);
         }
         versions.save(entity);
         recordReview(user, skillId, entity, comment, approved);
@@ -235,8 +241,8 @@ public class ReviewService {
     }
 
     /** 扫描结论是不是阻断（skill_scans.status 的 failed / error）。 */
-    static boolean isBlocked(String scanStatus) {
-        return "failed".equals(scanStatus) || "error".equals(scanStatus);
+    static boolean isBlocked(ScanStatus scanStatus) {
+        return scanStatus == ScanStatus.failed || scanStatus == ScanStatus.error;
     }
 
     /**
@@ -259,12 +265,12 @@ public class ReviewService {
         row.setId(UUID.randomUUID());
         row.setSkillVersionId(version.getId());
         row.setReviewerId(user.id());
-        row.setDecision(approved ? "approved" : "rejected");
+        row.setDecision(approved ? ReviewDecision.approved : ReviewDecision.rejected);
         row.setComment(comment == null ? "" : comment);
         row.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         reviews.save(row);
         audit.record(user, approved ? "version.approve" : "version.reject", "skill", skillId,
-            "success", Map.of("version", version.getVersion(),
+            AuditOutcome.success, Map.of("version", version.getVersion(),
                 "comment", comment == null ? "" : comment));
     }
 

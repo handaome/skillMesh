@@ -24,7 +24,7 @@ public final class PublishedDigest {
      */
     public static String of(List<SkillVersionEntity> rows) {
         for (SkillVersionEntity version : rows) {
-            if (!"published".equals(version.getStatus())) {
+            if (version.getStatus() != VersionStatus.published) {
                 continue;
             }
             if (version.getArtifactId() == null) {

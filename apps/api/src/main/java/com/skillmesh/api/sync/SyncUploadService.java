@@ -5,6 +5,7 @@ import com.skillmesh.api.artifact.ArtifactEntity;
 import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.artifact.ArtifactStorage;
 import com.skillmesh.api.artifact.SigningService;
+import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
@@ -22,10 +23,12 @@ import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.upload.UploadSessionEntity;
 import com.skillmesh.api.upload.UploadSessionRepository;
+import com.skillmesh.api.upload.UploadStatus;
 import com.skillmesh.api.version.PublishedDigest;
 import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.VersionOrder;
+import com.skillmesh.api.version.VersionStatus;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.time.OffsetDateTime;
@@ -139,7 +142,7 @@ public class SyncUploadService {
             // 但内容要重新传一遍才作数。
             session.setExpectedSha256(file.sha256());
             session.setExpectedSizeBytes(file.sizeBytes());
-            session.setStatus("created");
+            session.setStatus(UploadStatus.created);
             session.setExpiresAt(now.plus(ArtifactService.UPLOAD_TTL));
             uploads.save(session);
 
@@ -148,7 +151,7 @@ public class SyncUploadService {
                 Map.of("content-type", file.contentType() == null ? "application/octet-stream"
                     : file.contentType())));
         }
-        changeset.setStatus("processing");
+        changeset.setStatus(ChangesetStatus.processing);
         changeset.setStartedAt(now);
         // 建变更集时就记了完成时间，现在开始处理了得清掉：
         // DDL 要求 completed_at >= started_at，留着会被约束挡下。
@@ -181,10 +184,10 @@ public class SyncUploadService {
         String cloud = cloudRevision(rows);
         if (expectedRevision != null && !expectedRevision.isBlank()
             && !expectedRevision.equals(cloud)) {
-            changeset.setStatus("conflict");
+            changeset.setStatus(ChangesetStatus.conflict);
             changesets.save(changeset);
             audit.record(user, "sync.commit_conflict", "skill", changeset.getSkillId(),
-                "denied", Map.of("expected", expectedRevision, "cloud", orEmpty(cloud)),
+                AuditOutcome.denied, Map.of("expected", expectedRevision, "cloud", orEmpty(cloud)),
                 changeset.getDeviceId());
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "云端已经变了（期望 " + ContentDigest.shortDigest(expectedRevision) + "，实际 "
@@ -201,7 +204,7 @@ public class SyncUploadService {
         String merged = ContentDigest.of(manifestJson(files));
         String declared = changeset.getTargetRevision();
         if (declared != null && !declared.isBlank() && !declared.equals(merged)) {
-            changeset.setStatus("conflict");
+            changeset.setStatus(ChangesetStatus.conflict);
             changesets.save(changeset);
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                 "这次同步的内容与本地声明的不一致（合出来 "
@@ -234,7 +237,7 @@ public class SyncUploadService {
         version.setChangelog("同步提交 " + changesetId);
         version.setManifestJson(manifestJson(files));
         version.setArtifactId(artifact.getId());
-        version.setStatus("draft");
+        version.setStatus(VersionStatus.draft);
         version.setCreatedBy(user.id());
         version.setCreatedAt(now);
         // 先落库：扫描行有指向 skill_versions 的外键。
@@ -247,8 +250,9 @@ public class SyncUploadService {
         boolean needsReview = review.needsReview(skill.getId());
         // 扫描命中阻断规则 -> quarantined（隔离），与审核拒绝的 rejected 分开
         // （设计文档 §10.1）。
-        version.setStatus(scan.blocked() ? "quarantined" : needsReview ? "pending_review" : "published");
-        if ("published".equals(version.getStatus())) {
+        version.setStatus(scan.blocked() ? VersionStatus.quarantined
+            : needsReview ? VersionStatus.pending_review : VersionStatus.published);
+        if (version.getStatus() == VersionStatus.published) {
             version.setPublishedBy(user.id());
             version.setPublishedAt(now);
             // latest_version 取版本号较大者：发一版旧的不能把 latest 顶回去。
@@ -258,29 +262,29 @@ public class SyncUploadService {
             skill.setUpdatedAt(now);
             skills.save(skill);
         }
-        if ("pending_review".equals(version.getStatus())) {
+        if (version.getStatus() == VersionStatus.pending_review) {
             // 队列里的 submitted_at 是进队列这一刻，不是建版本那一刻。
             version.setSubmittedAt(now);
         }
         versions.save(version);
 
-        if ("published".equals(version.getStatus())) {
+        if (version.getStatus() == VersionStatus.published) {
             // 同步提交也会让文件变少：少的那些进回收站（设计文档 §6.4）。
             recycle.recordRemoved(skill.getId(), version.getVersion());
         }
 
-        changeset.setStatus("completed");
+        changeset.setStatus(ChangesetStatus.completed);
         changeset.setTargetRevision(ContentDigest.of(manifestJson(files)));
         changeset.setCompletedAt(now);
         changesets.save(changeset);
 
-        audit.record(user, "sync.commit", "skill", skill.getId(), "success",
+        audit.record(user, "sync.commit", "skill", skill.getId(), AuditOutcome.success,
             Map.of("version", version.getVersion(), "files", String.valueOf(files.size()),
                 "status", version.getStatus(), "scan_status", scan.status()),
             changeset.getDeviceId());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("changeset_id", changesetId.toString());
-        result.put("status", "completed");
+        result.put("status", changeset.getStatus());
         result.put("version", version.getVersion());
         result.put("version_status", version.getStatus());
         result.put("sha256", sha256);
@@ -324,7 +328,7 @@ public class SyncUploadService {
     /** 基线版本：内容摘要与基线对得上、且有制品的那一版已发布版本。 */
     private SkillVersionEntity baselineVersion(List<SkillVersionEntity> rows, String base) {
         for (SkillVersionEntity row : rows) {
-            if (!"published".equals(row.getStatus()) || row.getArtifactId() == null) {
+            if (row.getStatus() != VersionStatus.published || row.getArtifactId() == null) {
                 continue;
             }
             if (row.getManifestJson() == null || row.getManifestJson().isEmpty()) {
@@ -404,7 +408,7 @@ public class SyncUploadService {
         for (UploadSessionEntity session :
                 uploads.findByChangesetIdAndPurposeOrderByRelativePathAsc(
                     changesetId, UploadSessionEntity.PURPOSE_SYNC_FILE)) {
-            if (!"completed".equals(session.getStatus())) {
+            if (session.getStatus() != UploadStatus.completed) {
                 throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
                     "还有文件没传完：" + session.getRelativePath());
             }

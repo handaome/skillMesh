@@ -37,7 +37,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
         + "and (:excludeId is null or s.id <> :excludeId)")
     boolean existsInPersonalSpace(@Param("owner") UUID owner,
                                   @Param("slug") String slug,
-                                  @Param("status") String status,
+                                  @Param("status") SkillStatus status,
                                   @Param("excludeId") UUID excludeId);
 
     /**
@@ -52,7 +52,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, UUID> {
         + "and (:excludeId is null or s.id <> :excludeId)")
     boolean existsInOrganization(@Param("organizationId") UUID organizationId,
                                  @Param("slug") String slug,
-                                 @Param("status") String status,
+                                 @Param("status") SkillStatus status,
                                  @Param("excludeId") UUID excludeId);
 
     /**

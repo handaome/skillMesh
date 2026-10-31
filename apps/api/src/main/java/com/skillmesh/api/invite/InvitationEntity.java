@@ -2,6 +2,8 @@ package com.skillmesh.api.invite;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.OffsetDateTime;
@@ -39,8 +41,9 @@ public class InvitationEntity {
     @Column(name = "token_hash", length = 64, nullable = false)
     private String tokenHash;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String status;
+    private InvitationStatus status;
 
     @Column(name = "invited_by")
     private UUID invitedBy;
@@ -108,11 +111,11 @@ public class InvitationEntity {
         this.tokenHash = tokenHash;
     }
 
-    public String getStatus() {
+    public InvitationStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(InvitationStatus status) {
         this.status = status;
     }
 
