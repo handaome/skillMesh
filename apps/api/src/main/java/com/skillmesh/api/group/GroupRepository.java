@@ -29,22 +29,31 @@ public interface GroupRepository extends JpaRepository<GroupEntity, UUID> {
         """, nativeQuery = true)
     Optional<GroupEntity> findActiveById(@Param("id") UUID id);
 
-    /** 个人空间里有没有这个 slug 的 active 集合。 */
+    /**
+     * 个人空间里有没有这个 slug 的 active 集合。
+     *
+     * excludeId 是要排除的那个：改可见性时排除自己，
+     * 否则它自己就把自己挡住了。
+     */
     @Query(value = """
         select case when count(g) > 0 then true else false end from skill_groups g
         where g.owner_user_id = :owner and g.organization_id is null
           and g.slug = :slug and g.status = """ + GroupStatus.ACTIVE_SQL + """
+          and (cast(:excludeId as uuid) is null or g.id <> cast(:excludeId as uuid))
         """, nativeQuery = true)
-    boolean existsPersonalSlug(@Param("owner") UUID owner, @Param("slug") String slug);
+    boolean existsPersonalSlug(@Param("owner") UUID owner, @Param("slug") String slug,
+                               @Param("excludeId") UUID excludeId);
 
-    /** 组织空间里有没有这个 slug 的 active 集合。 */
+    /** 组织空间里有没有这个 slug 的 active 集合。excludeId 的用处同上。 */
     @Query(value = """
         select case when count(g) > 0 then true else false end from skill_groups g
         where g.organization_id = :organizationId
           and g.slug = :slug and g.status = """ + GroupStatus.ACTIVE_SQL + """
+          and (cast(:excludeId as uuid) is null or g.id <> cast(:excludeId as uuid))
         """, nativeQuery = true)
     boolean existsOrganizationSlug(@Param("organizationId") UUID organizationId,
-                                   @Param("slug") String slug);
+                                   @Param("slug") String slug,
+                                   @Param("excludeId") UUID excludeId);
 
     /** 按 slug 取一个可见的集合：CLI 与网页端都按 slug 引用集合。 */
     @Query(value = """

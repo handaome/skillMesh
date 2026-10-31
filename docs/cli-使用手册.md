@@ -506,10 +506,18 @@ export SKILLMESH_TOKEN=<access-token>
 ./skillmesh.exe group list                       # 列出我可见的集合
 ./skillmesh.exe group show team-baseline        # 成员与我装了几个
 ./skillmesh.exe group create team-baseline     --name "团队基线" --skill dogfood --skill skill-creator
+./skillmesh.exe group update team-baseline     --name "团队基线 v2" --skill dogfood
+./skillmesh.exe group update team-baseline     --visibility organization --org <组织 id>
 ./skillmesh.exe group install team-baseline --agent claude-code   # 装齐
 ```
 
 - 成员用 `--skill` 指定，slug 或 id 都行；可重复。
+- `group update` 只改给了的字段，不给的保持原样；`--skill` 给了就是**整份替换**
+  （给空就是清空成员），`--description ""` 是清空说明。
+- 改可见性时归属跟着走：`private` / `public` 不挂任何组织，`organization` 要 `--org`，
+  `team` 要 `--org` 与 `--team`。往组织或团队上放要有那边的发布权（`GROUP_PUBLISH`），
+  收回来（改成 private/public）属主直接可以。
+- 集合的 slug 建好后不能改——改了别人手里的引用就断了。
 - 建集合与改成员走 CLI，网页端看集合与已装情况——跟发布走 CLI 是同一个道理。
 - 徽标只算「我装了几个」：本人可见的数据。团队级覆盖率（谁在哪台机器上装了多少）
   是另一种可见性，单独授权，不在这里混进来。

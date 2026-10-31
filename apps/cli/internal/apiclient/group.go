@@ -39,6 +39,17 @@ type GroupCreate struct {
 	SkillIDs       []string `json:"skill_ids,omitempty"`
 }
 
+// GroupUpdate 是改集合的请求体。字段为 nil 表示不改。
+type GroupUpdate struct {
+	Name           *string   `json:"name,omitempty"`
+	Description    *string   `json:"description,omitempty"`
+	Visibility     *string   `json:"visibility,omitempty"`
+	OrganizationID *string   `json:"organization_id,omitempty"`
+	TeamID         *string   `json:"team_id,omitempty"`
+	// SkillIDs 是指针：空数组要把成员清空，与「不给就不改」得区分开。
+	SkillIDs *[]string `json:"skill_ids,omitempty"`
+}
+
 // Groups 列出我可见的集合。
 func (c *Client) Groups(ctx context.Context) ([]Group, error) {
 	var out []Group
@@ -55,4 +66,10 @@ func (c *Client) GroupBySlug(ctx context.Context, slug string) (Group, error) {
 func (c *Client) CreateGroup(ctx context.Context, body GroupCreate) (Group, error) {
 	var out Group
 	return out, c.doWith(ctx, http.MethodPost, "/groups", nil, body, &out)
+}
+
+// UpdateGroup 改集合：名称、说明、可见性与成员。
+func (c *Client) UpdateGroup(ctx context.Context, id string, body GroupUpdate) (Group, error) {
+	var out Group
+	return out, c.doWith(ctx, http.MethodPatch, "/groups/"+url.PathEscape(id), nil, body, &out)
 }

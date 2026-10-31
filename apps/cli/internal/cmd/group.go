@@ -21,7 +21,8 @@ func newGroupCmd() *cobra.Command {
 		Long: "集合把「哪些 Skill 该一起用」记下来。\n" +
 			"建集合与改成员走 CLI，网页端看集合与一键装。",
 	}
-	cmd.AddCommand(newGroupListCmd(), newGroupShowCmd(), newGroupCreateCmd(), newGroupInstallCmd())
+	cmd.AddCommand(newGroupListCmd(), newGroupShowCmd(), newGroupCreateCmd(),
+		newGroupUpdateCmd(), newGroupInstallCmd())
 	return cmd
 }
 
@@ -143,6 +144,97 @@ func newGroupCreateCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&skillRefs, "skill", nil,
 		"成员 Skill（slug 或 id），可重复指定")
 	return cmd
+}
+
+// newGroupUpdateCmd 改集合：名称、说明、可见性与成员。
+//
+// 只改给了的字段，不给的保持原样。改可见性时归属跟着走：
+// private/public 不挂任何组织，organization 要 --org，team 要 --org 与 --team。
+func newGroupUpdateCmd() *cobra.Command {
+	cmd := supportsJSON(&cobra.Command{
+		Use:   "update <slug>",
+		Short: "改集合：名称、说明、可见性与成员",
+		Long: "只改给了的字段，不给的保持原样。\n" +
+			"改可见性时：private/public 不挂组织，organization 要 --org，team 要 --org 与 --team。\n" +
+			"往组织或团队上放要有那边的发布权，收回来不用。",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := newClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			body, err := groupUpdateBody(cmd, client)
+			if err != nil {
+				return err
+			}
+			group, err := client.GroupBySlug(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			updated, err := client.UpdateGroup(cmd.Context(), group.ID, body)
+			if err != nil {
+				return err
+			}
+			if jsonEnabled() {
+				return writeJSON(updated)
+			}
+			fmt.Printf("已改集合 %s（%s），可见性 %s，成员 %d 个\n",
+				updated.Name, updated.Slug, updated.Visibility, updated.MemberCount)
+			return nil
+		},
+	})
+	cmd.Flags().String("name", "", "集合名")
+	cmd.Flags().String("description", "", "说明（给空串就是清空）")
+	cmd.Flags().String("visibility", "", "private / public / team / organization")
+	cmd.Flags().String("org", "", "组织 id（team / organization 可见性时必填）")
+	cmd.Flags().String("team", "", "团队 id（team 可见性时必填）")
+	cmd.Flags().StringSlice("skill", nil,
+		"成员 Skill（slug 或 id），可重复指定；不给就不改成员")
+	return cmd
+}
+
+// groupUpdateBody 把改了哪些 flag 收成请求体。
+//
+// 只有显式给了的 flag 才进请求体：没给的字段留 nil，服务端当「不改」。
+// 给空串与不给不是一回事——清空说明、清空成员都靠空值传过去。
+func groupUpdateBody(cmd *cobra.Command, client *apiclient.Client) (apiclient.GroupUpdate, error) {
+	flags := cmd.Flags()
+	body := apiclient.GroupUpdate{}
+	for _, field := range []struct {
+		flag  string
+		apply func(string)
+	}{
+		{"name", func(v string) { body.Name = &v }},
+		{"description", func(v string) { body.Description = &v }},
+		{"visibility", func(v string) { body.Visibility = &v }},
+		{"org", func(v string) { body.OrganizationID = &v }},
+		{"team", func(v string) { body.TeamID = &v }},
+	} {
+		if !flags.Changed(field.flag) {
+			continue
+		}
+		value, err := flags.GetString(field.flag)
+		if err != nil {
+			return body, err
+		}
+		field.apply(value)
+	}
+	if flags.Changed("skill") {
+		refs, err := flags.GetStringSlice("skill")
+		if err != nil {
+			return body, err
+		}
+		members := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			id, err := resolveSkillID(cmd.Context(), client, ref)
+			if err != nil {
+				return body, err
+			}
+			members = append(members, id)
+		}
+		body.SkillIDs = &members
+	}
+	return body, nil
 }
 
 func newGroupInstallCmd() *cobra.Command {

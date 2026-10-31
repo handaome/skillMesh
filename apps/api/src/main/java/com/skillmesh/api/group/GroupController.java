@@ -3,6 +3,7 @@ package com.skillmesh.api.group;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.group.dto.GroupRequest;
 import com.skillmesh.api.group.dto.GroupResponse;
+import com.skillmesh.api.group.dto.UpdateGroupRequest;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.util.List;
@@ -63,11 +64,15 @@ public class GroupController {
         return groups.getBySlug(currentUserService.current(jwt), slug);
     }
 
-    /** 改名称、描述与成员。slug 与可见性改不了——改了会让别人手里的引用断掉。 */
+    /**
+     * 改名称、描述、成员与可见性。slug 改不了——改了会让别人手里的引用断掉。
+     *
+     * 可见性能改：往组织/团队上挂要有那个范围的发布权，收回来属主直接可以。
+     */
     @PatchMapping("/{groupId}")
     public GroupResponse update(@AuthenticationPrincipal Jwt jwt,
                                 @PathVariable UUID groupId,
-                                @Valid @RequestBody GroupRequest req) {
+                                @Valid @RequestBody UpdateGroupRequest req) {
         return groups.update(currentUserService.current(jwt), groupId, req);
     }
 

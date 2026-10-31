@@ -8,9 +8,11 @@ import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.group.dto.GroupRequest;
 import com.skillmesh.api.group.dto.GroupResponse;
+import com.skillmesh.api.group.dto.UpdateGroupRequest;
 import com.skillmesh.api.install.InstallationRepository;
 import com.skillmesh.api.install.InstallationStatus;
 import com.skillmesh.api.org.AuthorizationService;
+import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.Permission;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
@@ -42,16 +44,18 @@ public class GroupService {
     private final SkillService skillService;
     private final InstallationRepository installations;
     private final AuthorizationService auth;
+    private final OrgService orgs;
     private final AuditService audit;
 
     public GroupService(GroupRepository groups, SkillRepository skills, SkillService skillService,
                         InstallationRepository installations, AuthorizationService auth,
-                        AuditService audit) {
+                        OrgService orgs, AuditService audit) {
         this.groups = groups;
         this.skills = skills;
         this.skillService = skillService;
         this.installations = installations;
         this.auth = auth;
+        this.orgs = orgs;
         this.audit = audit;
     }
 
@@ -79,6 +83,7 @@ public class GroupService {
         UUID organizationId = req.organization_id();
         UUID teamId = req.team_id();
         if (visibility == Visibility.TEAM) {
+            requireTeamScope(organizationId, teamId);
             requirePublishRight(user, organizationId, teamId);
         } else if (visibility == Visibility.ORGANIZATION) {
             requirePublishRight(user, organizationId, null);
@@ -88,8 +93,8 @@ public class GroupService {
         }
         // 个人空间与组织空间各是一个命名空间，同一个 slug 不能各有一个。
         boolean taken = organizationId == null
-            ? groups.existsPersonalSlug(user.id(), req.slug())
-            : groups.existsOrganizationSlug(organizationId, req.slug());
+            ? groups.existsPersonalSlug(user.id(), req.slug(), null)
+            : groups.existsOrganizationSlug(organizationId, req.slug(), null);
         if (taken) {
             throw new ApiException(409, ErrorCodes.SLUG_TAKEN, "集合 slug 已被占用: " + req.slug());
         }
@@ -116,22 +121,102 @@ public class GroupService {
     }
 
     @Transactional
-    public GroupResponse update(CurrentUser user, UUID id, GroupRequest req) {
+    public GroupResponse update(CurrentUser user, UUID id, UpdateGroupRequest req) {
         GroupEntity entity = requireOwned(user, id);
+        // 改了哪些字段要留下：光记「改过」看不出改了什么。
+        List<String> changed = new ArrayList<>();
         if (req.name() != null && !req.name().isBlank()) {
             entity.setName(req.name());
+            changed.add("name");
         }
         if (req.description() != null) {
             entity.setDescription(req.description());
+            changed.add("description");
         }
         if (req.skill_ids() != null) {
             entity.setMemberIds(resolveMembers(user, req.skill_ids()));
+            changed.add("members");
+        }
+        if (req.visibility() != null) {
+            applyVisibility(user, entity, req);
+            changed.add("visibility");
         }
         entity.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
         groups.save(entity);
         audit.record(user, "group.updated", "group", entity.getId(), AuditOutcome.success,
-            Map.of("slug", entity.getSlug()));
+            Map.of("fields", String.join(",", changed), "slug", entity.getSlug()));
         return toResponse(user, entity);
+    }
+
+    /**
+     * 改可见性。
+     *
+     * 规则只有两条：
+     *   往组织/团队上挂 —— 要有那个范围的发布权（与建集合同一道闸：
+     *     能往组织里塞东西的人，才能把集合放出去）；
+     *   收回来（改成 private/public）—— 属主直接可以，可见范围只会变小。
+     *
+     * 归属跟着可见性走：private/public 不属于任何组织或团队；
+     * 组织可见要挂在某个组织，团队可见还得挂在该组织下的某个团队。
+     */
+    private void applyVisibility(CurrentUser user, GroupEntity entity, UpdateGroupRequest req) {
+        Visibility visibility = req.visibility();
+        UUID organizationId = req.organization_id();
+        UUID teamId = req.team_id();
+        if (visibility == Visibility.TEAM || visibility == Visibility.ORGANIZATION) {
+            if (organizationId == null) {
+                organizationId = entity.getOrganizationId();
+            }
+            if (visibility == Visibility.TEAM) {
+                if (teamId == null) {
+                    teamId = entity.getOwnerTeamId();
+                }
+                requireTeamScope(organizationId, teamId);
+            } else {
+                teamId = null;
+            }
+            requirePublishRight(user, organizationId,
+                visibility == Visibility.TEAM ? teamId : null);
+        } else {
+            organizationId = null;
+            teamId = null;
+        }
+        // 换命名空间：个人空间与组织空间各有一套 slug，进那边前先看有没有被占。
+        requireSlugFree(entity, organizationId);
+        entity.setVisibility(visibility);
+        entity.setOrganizationId(organizationId);
+        entity.setOwnerTeamId(teamId);
+    }
+
+    /** 团队可见的集合要挂在某个组织下的某个团队。 */
+    private void requireTeamScope(UUID organizationId, UUID teamId) {
+        if (organizationId == null) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "团队集合要指定组织");
+        }
+        if (teamId == null) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "团队集合要指定团队");
+        }
+        // 团队得挂在同一个组织下，否则「组织角色」与「团队角色」是两回事。
+        if (!orgs.teamInOrg(organizationId, teamId)) {
+            throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
+                "team_id 必须属于 organization_id");
+        }
+    }
+
+    /**
+     * 目标空间里有没有同名的 active 集合。
+     *
+     * 排除自己：只换可见性、slug 不变时，它自己就在目标空间里，
+     * 不排除就是拿自己把自己挡住。
+     */
+    private void requireSlugFree(GroupEntity entity, UUID organizationId) {
+        boolean taken = organizationId == null
+            ? groups.existsPersonalSlug(entity.getOwnerUserId(), entity.getSlug(), entity.getId())
+            : groups.existsOrganizationSlug(organizationId, entity.getSlug(), entity.getId());
+        if (taken) {
+            throw new ApiException(409, ErrorCodes.SLUG_TAKEN,
+                "slug 已被占用: " + entity.getSlug());
+        }
     }
 
     /**
