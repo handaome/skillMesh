@@ -8,6 +8,7 @@ RUN mvn -B -q package -DskipTests
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /build/target/skillmesh-api-*.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]

@@ -4,3 +4,7 @@
 # Windows 上 checkout 出来是 CRLF，容器里是 LF，换台机器就报
 # 「Migration checksum mismatch」。锁死行尾，别让行尾参与 checksum。
 *.sql text eol=lf
+
+# 许可证按官方原样存：Windows 的 autocrlf 会把它转成 CRLF，
+# 跟 apache.org 的原文一比就满屏差异（法律文本要逐字对得上）。
+LICENSE text eol=lf
