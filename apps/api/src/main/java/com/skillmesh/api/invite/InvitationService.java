@@ -11,6 +11,7 @@ import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.OrgRepository;
+import com.skillmesh.api.org.Role;
 import com.skillmesh.api.org.OrgService;
 import com.skillmesh.api.org.OrganizationEntity;
 import com.skillmesh.api.org.Permission;
@@ -74,21 +75,23 @@ public class InvitationService {
     /** 创建邀请。返回的 token 是明文，只此一次。 */
     @Transactional
     public Created create(CurrentUser actor, UUID organizationId, UUID teamId,
-                          String orgRole, String teamRole, String subject) {
+                          Role orgRole, Role teamRole, String subject) {
         auth.requireOrgPermission(actor, Permission.ORG_INVITE, organizationId);
-        String role = orDefault(orgRole, Roles.DEFAULT_ROLE);
+        Role role = orgRole == null ? Role.member : orgRole;
         if (!Roles.INVITABLE_ORG_ROLES.contains(role)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "owner 角色不能通过邀请授予，可授予的是 " + String.join(" / ", Roles.INVITABLE_ORG_RANK));
+                "owner 角色不能通过邀请授予，可授予的是 " + String.join(" / ",
+                    Roles.INVITABLE_ORG_RANK.stream().map(Role::name).toList()));
         }
-        // 团队角色在服务层也要校验：DTO 的 @Pattern 只管 HTTP 这一道，
-        // 别的调用方（内部调用、脚本）走不到那儿，脏值会撞 DDL 的 CHECK 变成 500。
-        String teamRoleValue = orDefault(teamRole, Roles.DEFAULT_ROLE);
+        // 团队角色在服务层也要校验：owner 那一档只在组织里有，
+        // 别的调用方（内部调用、脚本）走不到 DTO 那道，脏值会撞 DDL 的 CHECK 变成 500。
+        Role teamRoleValue = teamRole == null ? Role.member : teamRole;
         if (!Roles.TEAM_ROLES.contains(teamRoleValue)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "团队角色只能是 " + String.join(" / ", Roles.TEAM_RANK));
+                "团队角色只能是 " + String.join(" / ",
+                    Roles.TEAM_RANK.stream().map(Role::name).toList()));
         }
-        if (teamId == null && teamRole != null && !teamRole.isBlank()) {
+        if (teamId == null && teamRole != null) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "给了团队角色就必须给团队");
         }
         if (teamId != null) {
@@ -289,12 +292,12 @@ public class InvitationService {
      * （设计文档 §5.1：已是组织成员 → 200 直接返回当前角色）。
      */
     private Accepted toAccepted(InvitationEntity entity, UUID userId) {
-        String orgRole = auth.orgRole(userId, entity.getOrganizationId());
-        String teamRole = entity.getTeamId() == null ? null
+        Role orgRole = auth.orgRole(userId, entity.getOrganizationId());
+        Role teamRole = entity.getTeamId() == null ? null
             : auth.teamRole(userId, entity.getTeamId());
         return new Accepted(entity.getId(), entity.getOrganizationId(), entity.getTeamId(),
-            orgRole.isEmpty() ? entity.getOrgRole() : orgRole,
-            teamRole == null || teamRole.isEmpty() ? entity.getTeamRole() : teamRole);
+            orgRole == null ? entity.getOrgRole() : orgRole,
+            teamRole == null ? entity.getTeamRole() : teamRole);
     }
 
     private String newToken() {
@@ -303,12 +306,8 @@ public class InvitationService {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
-    private static String orDefault(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value;
-    }
-
     public record Created(UUID id, String token, InvitationEntity invitation) {}
 
     public record Accepted(UUID invitationId, UUID organizationId, UUID teamId,
-                           String orgRole, String teamRole) {}
+                           Role orgRole, Role teamRole) {}
 }

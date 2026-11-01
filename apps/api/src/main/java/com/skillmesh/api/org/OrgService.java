@@ -77,7 +77,7 @@ public class OrgService {
 
         MembershipEntities.OrgMembership owner = new MembershipEntities.OrgMembership();
         owner.setId(new MembershipEntities.OrgKey(org.getId(), user.id()));
-        owner.setRole(Roles.OWNER_ROLE);
+        owner.setRole(Role.owner);
         owner.setJoinedAt(now);
         orgMembers.save(owner);
 
@@ -117,7 +117,7 @@ public class OrgService {
      * 服务端仍然是最终裁决者，这份清单只决定界面长什么样。
      */
     public OrgPermissionsResponse permissionsOf(CurrentUser user, UUID organizationId) {
-        String role = auth.orgRole(user.id(), organizationId);
+        Role role = auth.orgRole(user.id(), organizationId);
         List<OrgPermissionsResponse.TeamPermissions> teamPermissions = teamsOf(organizationId)
             .stream()
             .map(team -> new OrgPermissionsResponse.TeamPermissions(
@@ -140,7 +140,7 @@ public class OrgService {
      * 要降级走 PATCH /teams/{teamId}/members/{userId} 那个显式端点。
      */
     @Transactional
-    public void addTeamMember(CurrentUser actor, UUID teamId, UUID memberId, String role) {
+    public void addTeamMember(CurrentUser actor, UUID teamId, UUID memberId, Role role) {
         // 组织 owner/admin 或团队 admin 都能加成员
         auth.requireTeamPermission(actor, Permission.TEAM_MANAGE_MEMBERS, teamId);
         requireRole(role, Roles.TEAM_ROLES);
@@ -211,7 +211,7 @@ public class OrgService {
      * 这里只挡了 owner 这一档（requireOwnerToGrantOwner），别的角色档位由调用方把关。
      */
     @Transactional
-    public void upsertOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
+    public void upsertOrgMember(CurrentUser actor, UUID organizationId, UUID memberId, Role role) {
         requireRole(role, Roles.ORG_ROLES);
         requireOwnerToGrantOwner(actor, organizationId, role);
         MembershipEntities.OrgKey key = new MembershipEntities.OrgKey(organizationId, memberId);
@@ -231,7 +231,7 @@ public class OrgService {
 
     /** 同 upsertOrgMember：只升不降，调用方自己保证 actor 有资格。 */
     @Transactional
-    public void upsertTeamMember(CurrentUser actor, UUID teamId, UUID memberId, String role) {
+    public void upsertTeamMember(CurrentUser actor, UUID teamId, UUID memberId, Role role) {
         requireRole(role, Roles.TEAM_ROLES);
         MembershipEntities.TeamKey key = new MembershipEntities.TeamKey(teamId, memberId);
         MembershipEntities.TeamMembership membership = teamMembers.findById(key).orElseGet(() -> {
@@ -279,7 +279,7 @@ public class OrgService {
      * 所以 owner 守卫得自己调一次，指望不上上游。
      */
     @Transactional
-    public void updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, String role) {
+    public void updateOrgRole(CurrentUser actor, UUID organizationId, UUID memberId, Role role) {
         // 锁必须先拿：owner 计数是「读-判-写」，不串行化就会竞态。
         lockOrgForRoleChange(organizationId);
         requireOrgAdmin(actor, organizationId);
@@ -308,7 +308,7 @@ public class OrgService {
      */
     @Transactional
     public void updateOrgMember(CurrentUser actor, UUID organizationId, UUID memberId,
-                                 String role, String status) {
+                                 Role role, String status) {
         if (role == null && status == null) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "角色与账号状态至少要改一项");
@@ -363,7 +363,7 @@ public class OrgService {
 
     /** 改团队角色。 */
     @Transactional
-    public void updateTeamRole(CurrentUser actor, UUID teamId, UUID memberId, String role) {
+    public void updateTeamRole(CurrentUser actor, UUID teamId, UUID memberId, Role role) {
         requireTeamAdmin(actor, teamId);
         requireRole(role, Roles.TEAM_ROLES);
         MembershipEntities.TeamKey key = new MembershipEntities.TeamKey(teamId, memberId);
@@ -407,7 +407,7 @@ public class OrgService {
 
     // ponytail: users 一次查齐（见 usersById）——逐个查就是 N+1，
     // 一个组织几十个成员就是几十次往返，本机到远程库一次几十毫秒，这个页面直接卡住。
-    private MemberResponse toMember(UserEntity user, UUID userId, String role,
+    private MemberResponse toMember(UserEntity user, UUID userId, Role role,
                                      OffsetDateTime joinedAt) {
         String displayName = userId.toString();
         String email = null;
@@ -451,10 +451,11 @@ public class OrgService {
         return out;
     }
 
-    private void requireRole(String role, Set<String> allowed) {
+    private void requireRole(Role role, Set<Role> allowed) {
         if (role == null || !allowed.contains(role)) {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
-                "角色只能是 " + String.join(" / ", allowed));
+                "角色只能是 " + String.join(" / ",
+                    allowed.stream().map(Role::name).sorted().toList()));
         }
     }
 
@@ -464,7 +465,7 @@ public class OrgService {
      *
      * 包内可见：同包的改角色入口（updateOrgRole）要自己调这道守卫。
      */
-    void requireOwnerToGrantOwner(CurrentUser actor, UUID organizationId, String role) {
+    void requireOwnerToGrantOwner(CurrentUser actor, UUID organizationId, Role role) {
         if (!hasRole(Roles.ORG_OWNER_ROLES, role)) {
             return;
         }
@@ -480,7 +481,7 @@ public class OrgService {
      * 这里再查一遍只会拿到可能过期的值。
      */
     private void requireOwnerChangeAllowed(CurrentUser actor, UUID organizationId,
-                                           String currentRole, String newRole) {
+                                           Role currentRole, Role newRole) {
         boolean touchesOwnership = hasRole(Roles.ORG_OWNER_ROLES, currentRole)
             || hasRole(Roles.ORG_OWNER_ROLES, newRole);
         if (!touchesOwnership) {
@@ -502,7 +503,7 @@ public class OrgService {
     }
 
     /** 档位判断——Set.of 的 contains(null) 会抛 NPE，而角色可能为空。 */
-    private static boolean hasRole(Set<String> roles, String role) {
+    private static boolean hasRole(Set<Role> roles, Role role) {
         return role != null && roles.contains(role);
     }
 

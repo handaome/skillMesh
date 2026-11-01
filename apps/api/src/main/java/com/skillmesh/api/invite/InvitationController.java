@@ -8,6 +8,7 @@ import com.skillmesh.api.invite.dto.CreateInvitationRequest;
 import com.skillmesh.api.invite.dto.InvitationResponse;
 import com.skillmesh.api.invite.dto.InvitationSummary;
 import com.skillmesh.api.org.OrganizationEntity;
+import com.skillmesh.api.org.Role;
 import com.skillmesh.api.org.TeamEntity;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -48,7 +49,7 @@ public class InvitationController {
         // 这里不能填 "member"：给了团队角色就必须给团队，否则 controller 的默认值
         // 会撞上自己刚加的规则。
         CreateInvitationRequest body = req == null
-            ? new CreateInvitationRequest(null, "member", null, null) : req;
+            ? new CreateInvitationRequest(null, Role.member, null, null) : req;
         InvitationService.Created created = invitations.create(user, organizationId,
             body.team_id(), body.org_role(), body.team_role(), body.subject());
         InvitationEntity entity = created.invitation();

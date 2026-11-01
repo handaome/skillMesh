@@ -45,24 +45,24 @@ public class AuthorizationService {
 
     // ——— 角色解析 ———
 
-    /** 这个人在这个组织的组织角色；不是成员就是空串。 */
-    public String orgRole(UUID userId, UUID organizationId) {
+    /** 这个人在这个组织的组织角色；不是成员就是 null。 */
+    public Role orgRole(UUID userId, UUID organizationId) {
         if (organizationId == null) {
-            return "";
+            return null;
         }
         return orgMembers.findById(new MembershipEntities.OrgKey(organizationId, userId))
             .map(MembershipEntities.OrgMembership::getRole)
-            .orElse("");
+            .orElse(null);
     }
 
-    /** 这个人在这个团队的角色；不是成员就是空串。 */
-    public String teamRole(UUID userId, UUID teamId) {
+    /** 这个人在这个团队的角色；不是成员就是 null。 */
+    public Role teamRole(UUID userId, UUID teamId) {
         if (teamId == null) {
-            return "";
+            return null;
         }
         return teamMembers.findById(new MembershipEntities.TeamKey(teamId, userId))
             .map(MembershipEntities.TeamMembership::getRole)
-            .orElse("");
+            .orElse(null);
     }
 
     /**
@@ -71,10 +71,10 @@ public class AuthorizationService {
      * 同一个人可能两个身份都有，取更近的那个。互斥而非并集——
      * 团队角色优先是有意的，见类注释。
      */
-    public String effectiveRole(UUID userId, UUID organizationId, UUID teamId) {
+    public Role effectiveRole(UUID userId, UUID organizationId, UUID teamId) {
         if (teamId != null) {
-            String teamRole = teamRole(userId, teamId);
-            if (!teamRole.isEmpty()) {
+            Role teamRole = teamRole(userId, teamId);
+            if (teamRole != null) {
                 return teamRole;
             }
         }
@@ -94,8 +94,8 @@ public class AuthorizationService {
     /** 范围权限：团队成员行优先，没有团队成员行才回落组织角色。审核权看这个。 */
     public Set<Permission> scopePermissionSet(UUID userId, UUID organizationId, UUID teamId) {
         if (teamId != null) {
-            String role = teamRole(userId, teamId);
-            if (!role.isEmpty()) {
+            Role role = teamRole(userId, teamId);
+            if (role != null) {
                 return RolePermissions.teamPermissions(role);
             }
         }
@@ -176,9 +176,9 @@ public class AuthorizationService {
     /** 团队域权限不足就拒。团队不存在按 404 报——与其它资源同一口径。 */
     public void requireTeamPermission(CurrentUser user, Permission permission, UUID teamId) {
         TeamEntity team = teams.findById(teamId).orElseThrow(() -> ApiException.notFound("团队"));
-        String role = teamRole(user.id(), teamId);
+        Role role = teamRole(user.id(), teamId);
         if (!hasTeamPermission(user, permission, teamId)) {
-            throw denied(permission, role.isEmpty() ? orgRole(user.id(), team.getOrganizationId()) : role);
+            throw denied(permission, role == null ? orgRole(user.id(), team.getOrganizationId()) : role);
         }
     }
 
@@ -197,8 +197,8 @@ public class AuthorizationService {
     }
 
     /** 拒绝时的提示：说清缺哪个权限、当前是什么角色。 */
-    private ApiException denied(Permission permission, String role) {
+    private ApiException denied(Permission permission, Role role) {
         return ApiException.forbidden("缺少权限：" + permission.label()
-            + "（当前角色：" + (role == null || role.isEmpty() ? "无" : role) + "）");
+            + "（当前角色：" + (role == null ? "无" : role.name()) + "）");
     }
 }

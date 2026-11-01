@@ -20,12 +20,12 @@ import java.util.Set;
 public final class RolePermissions {
 
     /** 组织角色 → 权限。 */
-    private static final Map<String, Set<Permission>> ORG = Map.of(
+    private static final Map<Role, Set<Permission>> ORG = Map.of(
         // owner 拥有一切：授予/转移 owner 是他独有的权限，其余一律向下继承。
-        Roles.OWNER_ROLE, EnumSet.allOf(Permission.class),
+        Role.owner, EnumSet.allOf(Permission.class),
         // admin 能管成员、邀请、建团队、管任意团队的成员；
         // 但给不了 owner 也不动 owner——那两档是 owner 独有的。
-        Roles.ADMIN_ROLE, EnumSet.of(
+        Role.admin, EnumSet.of(
             Permission.ORG_VIEW_MEMBERS,
             Permission.ORG_INVITE,
             Permission.ORG_MANAGE_MEMBERS,
@@ -36,51 +36,51 @@ public final class RolePermissions {
             Permission.SKILL_REVIEW,
             Permission.GROUP_PUBLISH),
         // publisher 能发布，reviewer 能审核——这两个是分开的两件事。
-        Roles.PUBLISHER_ROLE, EnumSet.of(
+        Role.publisher, EnumSet.of(
             Permission.ORG_VIEW_MEMBERS,
             Permission.TEAM_VIEW_MEMBERS,
             Permission.SKILL_PUBLISH,
             Permission.SKILL_REVIEW,
             Permission.GROUP_PUBLISH),
-        "reviewer", EnumSet.of(
+        Role.reviewer, EnumSet.of(
             Permission.ORG_VIEW_MEMBERS,
             Permission.TEAM_VIEW_MEMBERS,
             Permission.SKILL_REVIEW),
-        Roles.DEFAULT_ROLE, EnumSet.of(
+        Role.member, EnumSet.of(
             Permission.ORG_VIEW_MEMBERS,
             Permission.TEAM_VIEW_MEMBERS),
-        "viewer", EnumSet.of(
+        Role.viewer, EnumSet.of(
             Permission.ORG_VIEW_MEMBERS,
             Permission.TEAM_VIEW_MEMBERS));
 
     /** 团队角色 → 权限。团队里没有 owner 这一档。 */
-    private static final Map<String, Set<Permission>> TEAM = Map.of(
-        "admin", EnumSet.of(
+    private static final Map<Role, Set<Permission>> TEAM = Map.of(
+        Role.admin, EnumSet.of(
             Permission.TEAM_VIEW_MEMBERS,
             Permission.TEAM_MANAGE_MEMBERS,
             Permission.SKILL_REVIEW,
             Permission.GROUP_PUBLISH),
-        "publisher", EnumSet.of(
+        Role.publisher, EnumSet.of(
             Permission.TEAM_VIEW_MEMBERS,
             Permission.SKILL_REVIEW,
             Permission.GROUP_PUBLISH),
-        "reviewer", EnumSet.of(
+        Role.reviewer, EnumSet.of(
             Permission.TEAM_VIEW_MEMBERS,
             Permission.SKILL_REVIEW),
-        Roles.DEFAULT_ROLE, EnumSet.of(Permission.TEAM_VIEW_MEMBERS),
-        "viewer", EnumSet.of(Permission.TEAM_VIEW_MEMBERS));
+        Role.member, EnumSet.of(Permission.TEAM_VIEW_MEMBERS),
+        Role.viewer, EnumSet.of(Permission.TEAM_VIEW_MEMBERS));
 
     /**
      * 某档组织角色拥有的权限。角色不认识（不是词表里的）就是没有权限。
      *
      * 传 null 是安全的：词表里查不到就返回空集，不会 NPE。
      */
-    public static Set<Permission> orgPermissions(String role) {
+    public static Set<Permission> orgPermissions(Role role) {
         return role == null ? Set.of() : ORG.getOrDefault(role, Set.of());
     }
 
     /** 某档团队角色拥有的权限。 */
-    public static Set<Permission> teamPermissions(String role) {
+    public static Set<Permission> teamPermissions(Role role) {
         return role == null ? Set.of() : TEAM.getOrDefault(role, Set.of());
     }
 
@@ -91,7 +91,7 @@ public final class RolePermissions {
      * （成员行已经比目标档位高时保持不变，免得把 owner 降成 member）。
      * 能不能做某件事，认 {@link Permission}，别用这个。
      */
-    public static boolean atLeast(String actual, String required) {
+    public static boolean atLeast(Role actual, Role required) {
         if (actual == null || required == null) {
             return false;
         }

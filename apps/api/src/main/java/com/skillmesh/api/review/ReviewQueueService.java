@@ -13,6 +13,7 @@ import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.diff.ArtifactDiffService;
 import com.skillmesh.api.org.AuthorizationService;
 import com.skillmesh.api.org.Permission;
+import com.skillmesh.api.org.Role;
 import com.skillmesh.api.org.Roles;
 import com.skillmesh.api.review.dto.PendingReviewItem;
 import com.skillmesh.api.review.dto.ReviewDetailResponse;
@@ -55,7 +56,8 @@ public class ReviewQueueService {
      * 角色等级比较（roleAtLeast）在 Java 侧，SQL 只判「属于这一档」。
      */
     private static final String REVIEWER_ROLES = String.join(",",
-        Roles.ORG_RANK.subList(0, Roles.ORG_RANK.indexOf("reviewer") + 1));
+        Roles.ORG_RANK.subList(0, Roles.ORG_RANK.indexOf(Role.reviewer) + 1)
+            .stream().map(Role::name).toList());
 
     /** 队列一页的默认条数与上限。 */
     private static final int DEFAULT_PAGE_SIZE = 50;

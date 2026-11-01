@@ -1,5 +1,6 @@
 package com.skillmesh.api.invite;
 
+import com.skillmesh.api.org.Role;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -29,11 +30,14 @@ public class InvitationEntity {
     @Column(name = "team_id")
     private UUID teamId;
 
+    // 角色存的是词表里的那一档（org.Role），值就是小写字面量——数据库里的内容不变。
+    @Enumerated(EnumType.STRING)
     @Column(name = "org_role", nullable = false)
-    private String orgRole;
+    private Role orgRole;
 
+    @Enumerated(EnumType.STRING)
     @Column(name = "team_role", nullable = false)
-    private String teamRole;
+    private Role teamRole;
 
     // DDL 里是 char(64)（bpchar），Hibernate 按 Java 类型会期望 varchar，
     // 显式指定 CHAR 才过得了 schema 校验。
@@ -87,19 +91,19 @@ public class InvitationEntity {
         this.teamId = teamId;
     }
 
-    public String getOrgRole() {
+    public Role getOrgRole() {
         return orgRole;
     }
 
-    public void setOrgRole(String orgRole) {
+    public void setOrgRole(Role orgRole) {
         this.orgRole = orgRole;
     }
 
-    public String getTeamRole() {
+    public Role getTeamRole() {
         return teamRole;
     }
 
-    public void setTeamRole(String teamRole) {
+    public void setTeamRole(Role teamRole) {
         this.teamRole = teamRole;
     }
 

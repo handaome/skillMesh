@@ -1,5 +1,6 @@
 package com.skillmesh.api.org.dto;
 
+import com.skillmesh.api.org.Role;
 import java.util.List;
 
 /**
@@ -14,7 +15,7 @@ import java.util.List;
  */
 public record OrgPermissionsResponse(
     String organization_id,
-    String role,
+    Role role,
     List<String> organization_permissions,
     List<TeamPermissions> teams) {
 

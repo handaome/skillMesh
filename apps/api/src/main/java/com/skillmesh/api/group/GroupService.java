@@ -265,12 +265,11 @@ public class GroupService {
             return true;
         }
         if (entity.getVisibility() == Visibility.ORGANIZATION) {
-            return !auth.effectiveRole(user.id(), entity.getOrganizationId(), null).isEmpty();
+            return auth.effectiveRole(user.id(), entity.getOrganizationId(), null) != null;
         }
         if (entity.getVisibility() == Visibility.TEAM) {
-            String role = auth.effectiveRole(user.id(), entity.getOrganizationId(),
-                entity.getOwnerTeamId());
-            return !role.isEmpty();
+            return auth.effectiveRole(user.id(), entity.getOrganizationId(),
+                entity.getOwnerTeamId()) != null;
         }
         return false;
     }

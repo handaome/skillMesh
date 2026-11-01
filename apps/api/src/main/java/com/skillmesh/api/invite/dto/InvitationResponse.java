@@ -1,5 +1,6 @@
 package com.skillmesh.api.invite.dto;
 
+import com.skillmesh.api.org.Role;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -10,8 +11,8 @@ public record InvitationResponse(
     String organization_name,
     String team_slug,
     String team_name,
-    String org_role,
-    String team_role,
+    Role org_role,
+    Role team_role,
     OffsetDateTime expires_at,
     String invite_url,
     String token) {}

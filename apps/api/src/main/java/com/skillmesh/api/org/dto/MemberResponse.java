@@ -1,6 +1,7 @@
 package com.skillmesh.api.org.dto;
 
 import com.skillmesh.api.auth.UserStatus;
+import com.skillmesh.api.org.Role;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -17,7 +18,7 @@ public record MemberResponse(
     UUID user_id,
     String display_name,
     String email,
-    String role,
+    Role role,
     OffsetDateTime joined_at,
     String subject,
     UserStatus status) {}

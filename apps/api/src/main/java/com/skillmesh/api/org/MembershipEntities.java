@@ -2,6 +2,8 @@ package com.skillmesh.api.org;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Embeddable;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
@@ -26,8 +28,10 @@ final class MembershipEntities {
         @EmbeddedId
         private OrgKey id;
 
+        // 角色存的是词表里的那一档（org.Role），值就是小写字面量——数据库里的内容不变。
+        @Enumerated(EnumType.STRING)
         @Column(nullable = false)
-        private String role;
+        private Role role;
 
         @Column(name = "joined_at", nullable = false)
         private OffsetDateTime joinedAt;
@@ -40,11 +44,11 @@ final class MembershipEntities {
             this.id = id;
         }
 
-        public String getRole() {
+        public Role getRole() {
             return role;
         }
 
-        public void setRole(String role) {
+        public void setRole(Role role) {
             this.role = role;
         }
 
@@ -65,8 +69,10 @@ final class MembershipEntities {
         @EmbeddedId
         private TeamKey id;
 
+        // 角色存的是词表里的那一档（org.Role），值就是小写字面量——数据库里的内容不变。
+        @Enumerated(EnumType.STRING)
         @Column(nullable = false)
-        private String role;
+        private Role role;
 
         @Column(name = "joined_at", nullable = false)
         private OffsetDateTime joinedAt;
@@ -79,11 +85,11 @@ final class MembershipEntities {
             this.id = id;
         }
 
-        public String getRole() {
+        public Role getRole() {
             return role;
         }
 
-        public void setRole(String role) {
+        public void setRole(Role role) {
             this.role = role;
         }
 

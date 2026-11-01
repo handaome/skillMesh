@@ -9,6 +9,7 @@ import com.skillmesh.api.group.GroupStatus;
 import com.skillmesh.api.install.InstallationStatus;
 import com.skillmesh.api.invite.InvitationStatus;
 import com.skillmesh.api.org.OrganizationStatus;
+import com.skillmesh.api.org.Role;
 import com.skillmesh.api.org.TeamStatus;
 import com.skillmesh.api.review.ReviewDecision;
 import com.skillmesh.api.scan.ScanStatus;
@@ -33,6 +34,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
@@ -48,8 +50,19 @@ import org.junit.jupiter.api.Test;
  */
 class StatusVocabularyTest {
 
-    /** 一列状态与它对应的枚举。 */
-    private record Bound(String table, String column, Class<?> type) {}
+    /**
+     * 一列状态与它对应的枚举。
+     *
+     * filter 是「这一列不收哪些取值」：团队与邀请里没有 owner 那一档，
+     * 但枚举里有——枚举是全集，约束是子集。
+     */
+    private record Bound(String table, String column, Class<?> type,
+                         java.util.function.Predicate<String> filter) {
+
+        private Bound(String table, String column, Class<?> type) {
+            this(table, column, type, null);
+        }
+    }
 
     private static final List<Bound> BOUND = List.of(
         new Bound("users", "status", UserStatus.class),
@@ -69,7 +82,12 @@ class StatusVocabularyTest {
         new Bound("sync_changesets", "status", ChangesetStatus.class),
         new Bound("sync_conflicts", "status", ConflictStatus.class),
         new Bound("upload_sessions", "status", UploadStatus.class),
-        new Bound("audit_events", "outcome", AuditOutcome.class));
+        new Bound("audit_events", "outcome", AuditOutcome.class),
+        // 角色词表：枚举是全集，团队与邀请的约束是子集（没有 owner）。
+        new Bound("organization_memberships", "role", Role.class),
+        new Bound("team_memberships", "role", Role.class, v -> !Role.owner.name().equals(v)),
+        new Bound("org_invitations", "org_role", Role.class, v -> !Role.owner.name().equals(v)),
+        new Bound("org_invitations", "team_role", Role.class, v -> !Role.owner.name().equals(v)));
 
     @Test
     void 枚举的取值与数据库的约束一致() {
@@ -79,7 +97,11 @@ class StatusVocabularyTest {
             assertThat(expected)
                 .as("迁移文件里找不到 %s.%s 的 CHECK 约束", bound.table(), bound.column())
                 .isNotNull();
-            assertThat(values(bound.type()))
+            Set<String> actual = values(bound.type());
+            if (bound.filter() != null) {
+                actual = actual.stream().filter(bound.filter()).collect(Collectors.toSet());
+            }
+            assertThat(actual)
                 .as("%s.%s 的枚举取值与数据库约束对不上", bound.table(), bound.column())
                 .containsExactlyInAnyOrderElementsOf(expected);
         }
