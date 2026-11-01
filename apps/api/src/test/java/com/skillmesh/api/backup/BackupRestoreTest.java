@@ -8,6 +8,7 @@ import com.skillmesh.api.backup.BackupService.Manifest;
 import com.skillmesh.api.backup.BackupService.TableBackup;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Statement;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -16,6 +17,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
@@ -31,7 +33,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @SpringBootTest
 class BackupRestoreTest {
 
-    private static final String PROBE = "probe_backup_restore";
+    /** 探针 schema 的前缀。每次跑用新名字（见 probe）。 */
+    private static final String PROBE_PREFIX = "probe_backup_restore_";
 
     @Autowired
     private BackupService backups;
@@ -44,16 +47,20 @@ class BackupRestoreTest {
 
     @Test
     void 导出的备份能恢复回一个空库() throws Exception {
+        // 每次跑用一个新的探针 schema：上一次跑崩了会留下「idle in transaction」
+        // 的僵尸连接攥着老 schema 的锁，老名字就永远等不到锁（测试会挂死）。
+        String probe = PROBE_PREFIX + Long.toString(System.currentTimeMillis(), 36);
         Path dir = Files.createTempDirectory("skillmesh-backup-");
         try {
-            jdbc.execute("drop schema if exists " + PROBE + " cascade");
-            jdbc.execute("create schema " + PROBE);
-            Manifest manifest = backups.export(dir);
+            ddl("create schema " + probe);
+            // 只导数据库部分：对象那步要把桶里的东西全捞一遍，
+            // 那是共享环境，不该由一个测试去动（桶不可达时还会一直重试）。
+            Manifest manifest = backups.exportDatabase(dir);
             assertThat(manifest.tables()).isNotEmpty();
 
             // 探针表：照着 public 的结构复制一份空的。
             for (TableBackup table : manifest.tables()) {
-                jdbc.execute("create table " + PROBE + "." + table.table()
+                ddl("create table " + probe + "." + table.table()
                     + " (like public." + table.table() + " including all)");
             }
             // 自增列的默认值指向 public 的序列：留着的话恢复会把那条序列拨动，
@@ -61,33 +68,53 @@ class BackupRestoreTest {
             jdbc.query("select table_name, column_name from information_schema.columns "
                 + "where table_schema = ? and column_default like 'nextval%'",
                 rs -> {
-                    jdbc.execute("alter table " + PROBE + "." + rs.getString(1)
+                    jdbc.execute("alter table " + probe + "." + rs.getString(1)
                         + " alter column " + rs.getString(2) + " drop default");
-                }, PROBE);
+                }, probe);
 
             // 只恢复数据库部分：对象那步会把桶里的对象重写一遍，
             // 那是共享环境，不该由一个测试去动。
-            RestoreResult result = restores.restoreDatabase(dir, PROBE);
+            RestoreResult result = restores.restoreDatabase(dir, probe);
 
             assertThat(result.rows()).isPositive();
             // 逐张表对账：恢复进去的行数要与备份清单一致。
             for (TableBackup table : manifest.tables()) {
                 Integer count = jdbc.queryForObject(
-                    "select count(*) from " + PROBE + "." + table.table(), Integer.class);
+                    "select count(*) from " + probe + "." + table.table(), Integer.class);
                 assertThat(count)
                     .as("表 %s 的行数", table.table())
                     .isEqualTo((int) table.rows());
             }
             // 内容也要对得上，不只是行数。制品表最实在：一行一个摘要。
             List<String> restored = jdbc.queryForList(
-                "select sha256 from " + PROBE + ".artifacts order by sha256", String.class);
+                "select sha256 from " + probe + ".artifacts order by sha256", String.class);
             List<String> original = jdbc.queryForList(
                 "select sha256 from public.artifacts order by sha256", String.class);
             assertThat(restored).isEqualTo(original);
         } finally {
-            jdbc.execute("drop schema if exists " + PROBE + " cascade");
+            ddl("drop schema if exists " + probe + " cascade");
             deleteTree(dir);
         }
+    }
+
+    /**
+     * 跑一条 DDL。
+     *
+     * 等锁有上限：上一次跑崩了留下的僵尸连接攥着锁，没有上限的话这里会一直等，
+     * 整个测试套件跟着挂住——挂死比失败难查得多。
+     */
+    private void ddl(String sql) {
+        jdbc.execute((ConnectionCallback<Void>) connection -> {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("set lock_timeout = '5s'");
+                try {
+                    statement.execute(sql);
+                } finally {
+                    statement.execute("set lock_timeout = 0");
+                }
+            }
+            return null;
+        });
     }
 
     /**

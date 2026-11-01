@@ -7,6 +7,7 @@ import com.skillmesh.api.backup.BackupService.TableBackup;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -47,6 +48,14 @@ import org.springframework.stereotype.Service;
 public class BackupRestoreService {
 
     private static final Logger log = LoggerFactory.getLogger(BackupRestoreService.class);
+
+    /**
+     * 一批插多少行。
+     *
+     * 逐行发的话每行一次往返，库里几万行就是几十分钟——备份恢复是最容易
+     * 被人盯着等的事，慢到看不出进度最难受。批大了语句也长，一批几千行正好。
+     */
+    private static final int MAX_BATCH_ROWS = 500;
 
     private final JdbcTemplate jdbc;
     private final MinioClient minio;
@@ -113,6 +122,9 @@ public class BackupRestoreService {
                 // 可延后检查的约束（skills.latest_version → skill_versions）
                 // 留到提交时再查：插 skills 时 skill_versions 还没插。
                 statement.execute("set constraints all deferred");
+                // 等锁有上限：目标库上别人开着事务时，恢复会一直等下去，
+                // 备份任务就这么挂住。宁可报错重来，也不要无限期地等。
+                statement.execute("set lock_timeout = '60s'");
             }
             try {
                 for (String table : order) {
@@ -139,33 +151,32 @@ public class BackupRestoreService {
     }
 
     /** 插一张表：逐行读 NDJSON，按列的类型转型后插回去。 */
-    private int insertTable(Connection connection, Path target, String schema, String table,
+    int insertTable(Connection connection, Path target, String schema, String table,
                             TableBackup backup, Map<String, String> castTypes) throws Exception {
 
         Path file = target.resolve(backup.file());
-        List<String> columns = new ArrayList<>();
-        String sql = null;
         int rows = 0;
         // 逐行读，不整个读进堆：一张大表的 NDJSON 能有几百兆。
         try (BufferedReader reader = Files.newBufferedReader(file,
                 java.nio.charset.StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.isBlank()) {
-                    continue;
-                }
-                @SuppressWarnings("unchecked")
-                Map<String, Object> row = json.readValue(line, LinkedHashMap.class);
-                List<String> rowColumns = new ArrayList<>(row.keySet());
-                if (sql == null) {
-                    columns = rowColumns;
-                    sql = insertSql(schema, table, columns, castTypes);
-                } else if (!columns.equals(rowColumns)) {
-                    // 每行的列不一样：按位置填参数就会把值填到别的列上。
-                    throw new IllegalStateException("备份文件 " + backup.file()
-                        + " 里各行的列不一致，拒绝恢复");
-                }
-                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            String line = nextRow(reader);
+            if (line == null) {
+                return 0;
+            }
+            List<String> columns = new ArrayList<>(rowOf(line).keySet());
+            String sql = insertSql(schema, table, columns, castTypes);
+            // 批大小按列数算：一条语句的参数个数有上限（PostgreSQL 65535）。
+            int batchSize = Math.max(1,
+                Math.min(MAX_BATCH_ROWS, 60000 / Math.max(1, columns.size())));
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                int pending = 0;
+                while (line != null) {
+                    Map<String, Object> row = rowOf(line);
+                    if (!columns.equals(new ArrayList<>(row.keySet()))) {
+                        // 每行的列不一样：按位置填参数就会把值填到别的列上。
+                        throw new IllegalStateException("备份文件 " + backup.file()
+                            + " 里各行的列不一致，拒绝恢复");
+                    }
                     for (int i = 0; i < columns.size(); i++) {
                         String column = columns.get(i);
                         String value = restoreValue(row.get(column), castTypes.get(column));
@@ -175,12 +186,38 @@ public class BackupRestoreService {
                             statement.setString(i + 1, value);
                         }
                     }
-                    statement.executeUpdate();
+                    statement.addBatch();
+                    pending++;
+                    rows++;
+                    if (pending >= batchSize) {
+                        statement.executeBatch();
+                        pending = 0;
+                    }
+                    line = nextRow(reader);
                 }
-                rows++;
+                if (pending > 0) {
+                    statement.executeBatch();
+                }
             }
         }
         return rows;
+    }
+
+    /** 下一条非空行。到底了返回 null。 */
+    private String nextRow(BufferedReader reader) throws IOException {
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (!line.isBlank()) {
+                return line;
+            }
+        }
+        return null;
+    }
+
+    /** 一行 NDJSON。 */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> rowOf(String line) throws IOException {
+        return json.readValue(line, LinkedHashMap.class);
     }
 
     /** 拼 INSERT：每个占位符带上目标列的类型，驱动不用猜。 */

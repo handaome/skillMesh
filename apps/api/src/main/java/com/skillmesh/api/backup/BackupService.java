@@ -62,18 +62,48 @@ public class BackupService {
 
     /** 导出一份备份，返回清单。 */
     public Manifest export(Path target) throws Exception {
-        Path dbDir = target.resolve("db");
         Path objectsDir = target.resolve("objects");
-        Files.createDirectories(dbDir);
         Files.createDirectories(objectsDir);
 
+        List<TableBackup> tables = dumpTables(target.resolve("db"));
+        List<ObjectBackup> objects = dumpObjects(objectsDir);
+
+        Manifest manifest = new Manifest(
+            OffsetDateTime.now(ZoneOffset.UTC).toString(), bucket, tables, objects);
+        writeManifest(target, manifest);
+        log.info("备份完成：{} 张表，{} 个对象 -> {}", tables.size(), objects.size(), target);
+        return manifest;
+    }
+
+    /**
+     * 只导出数据库部分：对象存储连不上时也能跑。
+     *
+     * 与 {@link #export} 的差别只有对象那一半——「把数据导出来」这件事
+     * 不该因为桶不可用就做不了。恢复侧本来就有对应的 restoreDatabase。
+     */
+    public Manifest exportDatabase(Path target) throws Exception {
+        List<TableBackup> tables = dumpTables(target.resolve("db"));
+        Manifest manifest = new Manifest(
+            OffsetDateTime.now(ZoneOffset.UTC).toString(), bucket, tables, List.of());
+        writeManifest(target, manifest);
+        log.info("数据库部分备份完成：{} 张表 -> {}", tables.size(), target);
+        return manifest;
+    }
+
+    /** 把每张表流式导成 NDJSON。 */
+    private List<TableBackup> dumpTables(Path dbDir) throws IOException {
+        Files.createDirectories(dbDir);
         List<TableBackup> tables = new ArrayList<>();
         for (String table : listTables()) {
             Path file = dbDir.resolve(table + ".ndjson");
             long rows = dumpTable(table, file);
             tables.add(new TableBackup(table, "db/" + table + ".ndjson", rows, sha256(file)));
         }
+        return tables;
+    }
 
+    /** 把桶里的对象搬到本地目录。 */
+    private List<ObjectBackup> dumpObjects(Path objectsDir) throws Exception {
         List<ObjectBackup> objects = new ArrayList<>();
         Iterable<Result<Item>> listed = minio.listObjects(ListObjectsArgs.builder()
             .bucket(bucket).recursive(true).build());
@@ -95,13 +125,13 @@ public class BackupService {
             objects.add(new ObjectBackup(item.objectName(), "objects/" + item.objectName(),
                 item.size(), sha256(file)));
         }
+        return objects;
+    }
 
-        Manifest manifest = new Manifest(
-            OffsetDateTime.now(ZoneOffset.UTC).toString(), bucket, tables, objects);
+    /** 写清单。 */
+    private void writeManifest(Path target, Manifest manifest) throws IOException {
         Files.write(target.resolve("manifest.json"),
             json.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifest));
-        log.info("备份完成：{} 张表，{} 个对象 -> {}", tables.size(), objects.size(), target);
-        return manifest;
     }
 
     /**
