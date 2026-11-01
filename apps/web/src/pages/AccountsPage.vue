@@ -182,7 +182,6 @@ onMounted(() => {
           <tr>
             <th>账号</th>
             <th>显示名</th>
-            <th>角色</th>
             <th>状态</th>
             <th class="sm-num">创建时间</th>
             <th></th>
@@ -204,7 +203,6 @@ onMounted(() => {
               </div>
             </td>
             <td class="sm-muted sm-cell-sub">{{ account.display_name ?? '—' }}</td>
-            <td class="sm-muted">{{ account.role }}</td>
             <td>
               <span
                 class="sm-pill"
