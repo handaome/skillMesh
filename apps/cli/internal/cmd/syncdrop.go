@@ -61,15 +61,16 @@ func propagateLocalDeletes(ctx context.Context, client *apiclient.Client,
 	}
 	// 目录临时不可用时，扫不到东西不等于用户删了它：
 	// 这种根下面的删除不往云端传（设计文档 §3.6）。
+	// 用户确认过（--force-delete）就照传。
 	blind := blindRoots(*state, roots)
 	var results []syncResult
 	dropping := map[string]bool{}
 	archived := map[string]bool{}
 	for _, entry := range candidates {
-		if rootBlind(entry, roots, blind) {
+		if !options.ForceDelete && rootBlind(entry, roots, blind) {
 			results = append(results, syncResult{Name: entry.Name, Path: entry.Path,
 				Outcome: PendingDelete,
-				Detail:  "本地目录看起来整个没了（可能临时不可用），没往云端传删除；确认要删用 skillmesh cloud delete"})
+				Detail:  "本地目录看起来整个没了（可能临时不可用），没往云端传删除；确认目录真被清空了用 --force-delete --propagate-delete，或用 skillmesh cloud delete"})
 			continue
 		}
 		if archived[entry.SkillID] {
@@ -213,7 +214,7 @@ func removalCandidates(state syncstate.State, scanned []SyncTarget, roots []scan
 		if sameNameOtherCopy(entry, scanned) {
 			continue
 		}
-		if !entryRemoved(entry, roots) {
+		if !entryRemoved(entry, roots, options.ForceDelete) {
 			continue
 		}
 		candidates = append(candidates, entry)
@@ -260,7 +261,10 @@ func (p presentSet) hasID(id string) bool {
 //
 // 老基线没记路径时重新扫一遍这个 Agent 的目录；路径不在扫描范围内
 // （改了 Agent 目录、删了自定义目录）也不算删除——扫不到不等于用户删了它。
-func entryRemoved(entry syncstate.Entry, roots []scanRoot) bool {
+//
+// force 是用户确认过「目录真的被清空了」：那时扫描根整个没了也算删除，
+// 不然整目录删掉这件事永远传不上去。
+func entryRemoved(entry syncstate.Entry, roots []scanRoot, force bool) bool {
 	path := entry.Path
 	if path == "" {
 		dir, err := agent.Dir(Cfg, entry.Agent, "user", "")
@@ -268,13 +272,14 @@ func entryRemoved(entry syncstate.Entry, roots []scanRoot) bool {
 			return false // 这个 Agent 现在不扫了：不算删除
 		}
 		if _, err := os.Stat(dir); err != nil {
-			return false // 扫描根整个没了：多半是路径变了，不是用户删的
+			// 扫描根整个没了：多半是路径变了，不是用户删的。
+			return force
 		}
 		path = localSkillPath(entry)
 		if path != "" {
 			return false // 还在
 		}
-	} else if !inScope(path, roots) {
+	} else if !inScope(path, roots, force) {
 		return false
 	}
 	_, err := os.Stat(path)
@@ -308,7 +313,17 @@ func sameNameOtherCopy(entry syncstate.Entry, scanned []SyncTarget) bool {
 // 范围变了（改了 Agent 目录、删了自定义目录）时不能把「扫不到了」当成
 // 「用户删掉了」——配置一改就清空云端，代价太大。
 // 扫描根整个没了（网盘没挂上、目录被搬走）同样不算删除。
-func inScope(path string, roots []scanRoot) bool {
+//
+// force 是用户确认过「目录真的被清空了」：那时连扫描根整个没了都算范围内。
+func inScope(path string, roots []scanRoot, force bool) bool {
+	if force {
+		for _, root := range roots {
+			if pathWithin(root.dir, path) {
+				return true
+			}
+		}
+		return false
+	}
 	_, ok := rootOf(path, roots)
 	return ok
 }

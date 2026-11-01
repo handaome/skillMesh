@@ -72,6 +72,11 @@ type SyncOptions struct {
 	// 这里传的是这个 Skill 本身没了。默认不开——目录扫不到可能只是
 	// 路径变了、网盘没挂上，扫不到不等于用户删了它。
 	PropagateDelete bool
+	// ForceDelete 确认「本地目录是真的被清空了」，不是临时不可用。
+	//
+	// 目录扫不到东西时，默认不往云端传删除：网盘掉了、目录被搬走，
+	// 一次就能把整个目录的 Skill 从云端清掉。用户确认过就照传。
+	ForceDelete bool
 	// CloudDeletionsKnown 是本次同步探测到的服务端状态，不是命令行参数：
 	// 成功拿到了云端的已删除清单没有。拿不到就不能上传——不知道云端删了什么，
 	// 上传会把删掉的 Skill 复活（云端查不到 → 判定为「该上传」）。
@@ -171,6 +176,8 @@ func newSyncCmd() *cobra.Command {
 		"确认把本地删掉的文件也同步到云端（删除传播需要显式确认）")
 	cmd.Flags().BoolVar(&options.PropagateDelete, "propagate-delete", false,
 		"本地删掉的整个 Skill 也从云端删掉（软删除，回收期内可还原）")
+	cmd.Flags().BoolVar(&options.ForceDelete, "force-delete", false,
+		"确认本地目录是真的被清空了：整目录的删除也照传云端（配合 --propagate-delete）")
 	cmd.Flags().BoolVar(&options.NoShare, "no-share", false,
 		"不把技能统一到共享目录（默认统一到 sync.shared_dir）")
 	return supportsDryRun(cmd)
@@ -205,6 +212,10 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	// 删除传播默认关着：命令行 --propagate-delete 或配置 sync.propagate_delete 才开。
 	if !options.PropagateDelete {
 		options.PropagateDelete = Cfg.Sync.PropagateDelete
+	}
+	if options.ForceDelete && !options.PropagateDelete {
+		return nil, syncqueue.Queue{}, fmt.Errorf(
+			"--force-delete 要配合 --propagate-delete：它只放宽「目录看不清就不删」这道判断")
 	}
 	scanned, err := SyncTargets(options)
 	if err != nil {
@@ -911,6 +922,12 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target SyncT
 		BaseHash: target.BaseHash, SkillID: target.SkillID,
 		BaseFiles: target.BaseFiles, BaseSnapshot: target.BaseSnapshot}
 
+	// --dry-run 的承诺是「什么都不改」：处理冲突会真上传、真下载，
+	// 还会改本地文件（合并写回、覆盖前备份）。演练时只说会怎么做。
+	if options.DryRun {
+		return dryRunConflict(target, options), entry, nil
+	}
+
 	switch options.Resolve {
 	case "keep-local":
 		result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
@@ -984,6 +1001,31 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target SyncT
 		// 真的合不了才落到「冲突副本，等人来定」。
 		return mergeAndUpload(ctx, client, target, local, localHash, skill, options, false)
 	}
+}
+
+// dryRunConflict 演练时的冲突处理：只说清会怎么做，什么都不动。
+//
+// 不给 --resolve 时仍然算冲突：两边都改过这件事不会因为是演练就消失，
+// 退出码也得让脚本知道这轮同步没收敛。
+func dryRunConflict(target SyncTarget, options SyncOptions) syncResult {
+	if options.Resolve == "" {
+		return syncResult{Name: target.Name, Path: target.Path, Outcome: Conflicted,
+			Detail: "演练：两边都改过，正式跑会先按文件合并；合不了就要 --resolve 定夺"}
+	}
+	var detail string
+	switch options.Resolve {
+	case "keep-local":
+		detail = "演练：保留本地，正式跑会传一份新版本上去"
+	case "keep-cloud":
+		detail = "演练：保留云端，正式跑会拉取云端那份覆盖本地"
+	case "keep-both":
+		detail = "演练：保留本地并备份，正式跑会传一份新版本上去"
+	case "keep-merged":
+		detail = "演练：按文件合并后上传"
+	default:
+		detail = "演练：按 --resolve " + options.Resolve + " 处理"
+	}
+	return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped, Detail: detail}
 }
 
 // mergeAndUpload 按文件合并一次，合并好了就上传。
