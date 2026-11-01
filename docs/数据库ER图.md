@@ -1,6 +1,6 @@
 # 数据库 ER 图
 
-SkillMesh 的数据库是 PostgreSQL 18，20 张表。表结构只有一份权威定义 —— Flyway 迁移
+SkillMesh 的数据库是 PostgreSQL 18，22 张表。表结构只有一份权威定义 —— Flyway 迁移
 [`apps/api/src/main/resources/db/migrations/V1__init.sql`](../apps/api/src/main/resources/db/migrations/V1__init.sql)；
 本文是它的图形化视图，**改了迁移脚本就得同步改这里**。
 
@@ -193,6 +193,20 @@ erDiagram
         timestamptz created_at
         timestamptz expires_at
     }
+    skill_groups {
+        uuid id PK
+        text slug
+        text name
+        text description
+        uuid owner_user_id FK
+        uuid organization_id FK
+        uuid owner_team_id FK
+        text visibility "private|team|organization|public"
+        text status "active|archived"
+        uuid_array member_ids "集合里的 Skill id"
+        timestamptz created_at
+        timestamptz updated_at
+    }
 
     skills ||--o{ skill_sources : "来源"
     skills ||--o{ skill_versions : "版本"
@@ -201,6 +215,9 @@ erDiagram
     artifacts ||--o{ skill_versions : "制品"
     skill_versions ||--o{ skill_scans : "扫描"
     skill_versions ||--o{ skill_reviews : "审核"
+    users ||--o{ skill_groups : "建的集合"
+    organizations ||--o{ skill_groups : "组织里的集合"
+    teams ||--o{ skill_groups : "团队里的集合"
 ```
 
 要点：
@@ -213,6 +230,8 @@ erDiagram
 - **没有单独的权限表**：谁能看、谁能装、谁能发，由 Skill 的归属与 `visibility`，
   加上 `organization_memberships` / `team_memberships` 里的角色推导出来。
 - `skill_recycle_files` 只存元数据：文件内容还在旧版本的制品里，恢复时从那里取字节重打一版。
+- **`skill_groups`（技能集合）不是连接表**：成员是 `member_ids` 这个 uuid[]，没有行级外键。
+  集合里的人删了 Skill，集合里那一条不会自动消失——读的时候要自己滤掉已经不存在的 id。
 
 ## 三、设备、安装与同步
 
@@ -414,6 +433,7 @@ flowchart LR
         V[skill_versions]
         A[artifacts]
         R[skill_recycle_files]
+        G[skill_groups]
     end
     subgraph 同步与安装
         D[devices]
@@ -435,6 +455,9 @@ flowchart LR
     U --> S
     O --> S
     T --> S
+    U --> G
+    O --> G
+    T --> G
     S --> V
     V --> A
     S --> R
