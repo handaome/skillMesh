@@ -375,6 +375,30 @@ erDiagram
 - `target_type` + `target_id` 是多态引用，指向任意业务对象，**没有外键**（审计表不能因为业务对象被删就跟着删）。
 - `actor_user_id` / `organization_id` / `device_id` 都是 `ON DELETE SET NULL` —— 人或设备注销了，审计流水还在。
 
+## 五、幂等键
+
+客户端重试写请求时带的那个键。记一次「这个键做过什么」，重试就不会重复建资源。
+
+```mermaid
+erDiagram
+    idempotency_keys {
+        uuid user_id PK,FK
+        text scope PK "方法 + 路径"
+        text idem_key PK "客户端给的键"
+        text request_digest "请求体摘要"
+        jsonb response_body "上次的响应；为空表示还没做完"
+        timestamptz created_at
+    }
+
+    users ||--o{ idempotency_keys : "谁的键"
+```
+
+要点：
+
+- 主键是 `(user_id, scope, idem_key)` —— 同一个键在不同用户、不同接口之间不通用。
+- `request_digest` 用来认出「同一个键配了不同的请求体」，这种情况要报冲突，不能照做。
+- `response_body` 为空 = 认领了还没做完；上一次失败时这一行会被删掉，重试才能重来。
+
 ## 关系总览
 
 ```mermaid
@@ -401,6 +425,9 @@ flowchart LR
     subgraph 审计
         AE[audit_events]
     end
+    subgraph 幂等
+        IK[idempotency_keys]
+    end
 
     U --> O
     U --> T
@@ -423,6 +450,7 @@ flowchart LR
     U --> AE
     O --> AE
     D --> AE
+    U --> IK
 ```
 
 ## 维护
