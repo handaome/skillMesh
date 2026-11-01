@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, OrgPermissions, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill, ImportedBatch } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, OrgPermissions, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill, ImportedBatch, Installation, InstallationPatch, Device } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -612,4 +612,82 @@ export function updateUserStatus(
 ): Promise<UserAccount> {
   return request<UserAccount>(
     `/users/${encodeURIComponent(userId)}/status`, 'PATCH', { status })
+}
+
+/**
+ * 我名下的安装实例：我在哪些机器上装了什么、装的是哪一版。
+ *
+ * 服务端只返回当前用户自己的记录，一页给全（不分页）。
+ * status 可以按状态筛（active / missing / conflict / uninstalled / blocked）。
+ */
+export function listInstallations(status?: string): Promise<Installation[]> {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  const query = params.toString()
+  return request<Installation[]>(`/installations${query ? `?${query}` : ''}`, 'GET')
+}
+
+/**
+ * 登记一条安装实例。
+ *
+ * 同一台机器同一个目录装同一个 Skill 只有一条：重复登记等于更新那条记录，
+ * 所以 device_id 与 target_path 必填——少了判重就靠不住了。
+ */
+export function registerInstallation(body: {
+  skill_id: string
+  device_id: string
+  agent: string
+  install_scope: 'user' | 'project' | 'custom'
+  target_path: string
+  installed_version?: string
+  update_policy?: 'manual' | 'notify' | 'auto_safe'
+}): Promise<Installation> {
+  return request<Installation>('/installations', 'POST', body)
+}
+
+/**
+ * 改一条安装记录的策略或状态。
+ *
+ * 服务端只改给了值的字段：巡检回写状态时不能顺手把策略清掉。
+ */
+export function updateInstallation(
+  id: string,
+  body: InstallationPatch,
+): Promise<Installation> {
+  return request<Installation>(`/installations/${id}`, 'PATCH', body)
+}
+
+/**
+ * 注销一条安装登记。
+ *
+ * 删的是登记本身：本机的文件不动（删文件是本机的事），但云端不再记得
+ * 这台机器上装过它——不可逆，要回来得重新登记。
+ */
+export function unregisterInstallation(id: string): Promise<void> {
+  return request<void>(`/installations/${id}`, 'DELETE')
+}
+
+/**
+ * 注册一台设备。
+ *
+ * 同一个 device_key 重复注册返回同一台设备（不制造幽灵设备）。
+ * 注意：设备名与平台只在第一次登记时定下，之后再注册不会改名。
+ */
+export function registerDevice(body: {
+  device_key: string
+  display_name?: string
+  platform?: string
+  cli_version?: string
+}): Promise<Device> {
+  return request<Device>('/devices', 'POST', body)
+}
+
+/**
+ * 撤销设备身份。
+ *
+ * 撤销后这台设备不能再向服务端登记或同步（CLI 要重新登录）。
+ * 已经登记的安装实例留着——那是历史事实，不因为设备没了就消失。
+ */
+export function revokeDevice(id: string): Promise<void> {
+  return request<void>(`/devices/${id}`, 'DELETE')
 }

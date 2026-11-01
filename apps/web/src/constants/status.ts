@@ -56,3 +56,39 @@ export const FILE_BROWSER_STATUS_TEXT: Record<string, string> = {
   rejected: '被服务端的制品扫描拦下',
   quarantined: '被服务端的制品扫描隔离',
 }
+
+/**
+ * 安装实例的状态。
+ *
+ * 与服务端的 InstallationStatus 枚举一一对应（active / missing /
+ * conflict / uninstalled / blocked）。
+ */
+export const INSTALLATION_STATUS_TEXT: Record<string, string> = {
+  active: '已装',
+  missing: '文件缺失',
+  conflict: '与云端不一致',
+  uninstalled: '已卸载',
+  blocked: '被策略挡住',
+}
+
+/**
+ * 更新策略。
+ *
+ * 与服务端的取值一致（manual / notify / auto_safe）。
+ */
+export const UPDATE_POLICY_TEXT: Record<string, string> = {
+  manual: '手动更新',
+  notify: '只提醒',
+  auto_safe: '自动更新（仅安全更新）',
+}
+
+/**
+ * 安装作用域。
+ *
+ * 与服务端的取值一致（user / project / custom）。
+ */
+export const INSTALL_SCOPE_TEXT: Record<string, string> = {
+  user: '用户级',
+  project: '项目级',
+  custom: '自定义',
+}

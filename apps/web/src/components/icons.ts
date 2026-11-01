@@ -20,6 +20,7 @@ export type IconName =
   | 'chevron-right'
   | 'chevron-down'
   | 'account'
+  | 'device'
 
 /** 每条 path 的 d，渲染成 <path>。 */
 export const PATHS: Record<IconName, string[]> = {
@@ -51,4 +52,6 @@ export const PATHS: Record<IconName, string[]> = {
   upload: ['M8 11V3.2M4.8 6.4L8 3.2l3.2 3.2M3 12.2h10'],
   'chevron-right': ['M6.5 3.5L11 8l-4.5 4.5'],
   'chevron-down': ['M3.5 6.5L8 11l4.5-4.5'],
+  // 设备：一台显示器。跟「账号」的人形不是一回事——管的是机器，不是人。
+  device: ['M2.2 3.4h11.6v7.2H2.2z', 'M8 10.6v2.6M5.4 13.6h5.2'],
 }

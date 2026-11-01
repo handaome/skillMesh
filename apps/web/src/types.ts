@@ -473,6 +473,66 @@ export interface RecycleFile {
   expires_at: string
 }
 
+/**
+ * 安装实例：某个 Skill 装在哪台机器的哪个目录。
+ *
+ * 与服务端 installations 表一一对应。字段名保持 snake_case。
+ */
+export interface Installation {
+  id: string
+  skill_id: string
+  /** 装在哪台设备上。设备本身在 devices 表里，这里只存 id。 */
+  device_id: string
+  /** Agent 名字（claude-code 之类）。服务端不限定取值。 */
+  agent: string
+  /** user / project / custom。 */
+  install_scope: 'user' | 'project' | 'custom'
+  /** 本机安装路径。 */
+  target_path: string
+  installed_version: string
+  installed_sha256: string
+  /** manual / notify / auto_safe。 */
+  update_policy: 'manual' | 'notify' | 'auto_safe'
+  /** 本机那份文件被人改过。 */
+  local_modified: boolean
+  /** active / missing / conflict / uninstalled / blocked。 */
+  status: 'active' | 'missing' | 'conflict' | 'uninstalled' | 'blocked'
+  installed_at: string
+  last_updated_at: string
+  /** 最近什么时候巡检过这台机器上的磁盘。 */
+  last_checked_at: string
+}
+
+/**
+ * 改安装记录时能改的字段。
+ *
+ * 服务端只改给了值的字段：巡检回写状态时不能顺手把策略清掉。
+ */
+export type InstallationPatch = {
+  update_policy?: Installation['update_policy']
+  status?: Installation['status']
+  local_modified?: boolean
+  installed_version?: string
+}
+
+/**
+ * 一台机器上的一个 CLI 实例。
+ *
+ * 服务端只有注册与撤销两个端点，没有「列出我的设备」——
+ * 页面上看到的设备来自安装记录里引用的 id，或本页刚注册的那台。
+ */
+export interface Device {
+  id: string
+  /** 客户端生成的稳定标识。 */
+  device_key: string
+  display_name: string
+  platform: string
+  cli_version: string
+  /** 最近什么时候见过这台设备。 */
+  last_seen_at: string
+  revoked: boolean
+}
+
 /** 账号。username 为空的是外部 IdP 账号，只能禁用，不能改密码。 */
 export interface UserAccount {
   id: string

@@ -100,6 +100,8 @@
 .sm-scope-select { width: 200px; max-width: 100%; }
 /* 表格里的角色选择器：跟着内容宽度 */
 .sm-role-select { width: 140px; }
+/* 行内的小选择器：更新策略、安装状态这类。跟着内容宽度，别占满一行。 */
+.sm-mini-select { width: 132px; }
 
 /* ---------- 单选与复选 ---------- */
 .sm-check {

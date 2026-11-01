@@ -27,6 +27,7 @@ const NAV = [
   { to: '/reviews', label: '审核', icon: 'review' as const },
   { to: '/groups', label: '集合', icon: 'layers' as const },
   { to: '/audit', label: '审计', icon: 'audit' as const },
+  { to: '/installations', label: '安装与设备', icon: 'device' as const },
   { to: '/accounts', label: '账号', icon: 'account' as const, adminOnly: true },
 ]
 
