@@ -17,8 +17,11 @@ type Skill struct {
 	OwnerTeamID    string   `json:"owner_team_id"`
 	Tags           []string `json:"tags"`
 	LatestVersion  *string  `json:"latest_version"`
-	CreatedAt      string   `json:"created_at"`
-	UpdatedAt      string   `json:"updated_at"`
+	// Source 是来源摘要：Git 来源的 Skill 带仓库地址。
+	// 搜索结果里就带着它——服务端一次查完，不是一个一个查（列表页要显示来源）。
+	Source    *SkillSource `json:"source"`
+	CreatedAt string       `json:"created_at"`
+	UpdatedAt string       `json:"updated_at"`
 }
 
 // SkillSource 是随创建请求带上的来源信息（设计文档 §7.1）。

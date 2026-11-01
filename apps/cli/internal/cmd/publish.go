@@ -30,7 +30,7 @@ func newPublishCmd() *cobra.Command {
 	var (
 		version, visibility, channel, slug, name, description string
 		orgSlug, teamSlug                                     string
-		all, skipSecretScan                                   bool
+		all, skipSecretScan, submitReview                     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "publish <path>",
@@ -56,6 +56,9 @@ func newPublishCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if globalDryRun && submitReview {
+				notice("演练：发布后会把这一版送进审核队列\n")
+			}
 			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
@@ -75,6 +78,7 @@ func newPublishCmd() *cobra.Command {
 				SkipSecretScan:      skipSecretScan,
 				Scope:               scope,
 				RequestedVisibility: requested,
+				SubmitReview:        submitReview,
 			}
 			published, Failed := 0, 0
 			for _, target := range targets {
@@ -110,6 +114,8 @@ func newPublishCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "发布目录树里的全部 Skill")
 	cmd.Flags().BoolVar(&skipSecretScan, "skip-secret-scan", false,
 		"跳过密钥扫描（确认命中是占位符时再用）")
+	cmd.Flags().BoolVar(&submitReview, "submit-review", false,
+		"发布后把这一版送进审核队列（个人私有草稿按策略免审核）")
 	return supportsDryRun(cmd)
 }
 
@@ -130,6 +136,8 @@ type PublishOptions struct {
 	// ExpectedBaseRevision 是「本次决策依据的云端已发布版本内容摘要」。
 	// 只有同步上传才带：普通 publish 不带（服务端也就不校验基线）。
 	ExpectedBaseRevision string
+	// SubmitReview 是发布后把这一版送进审核队列（设计文档 §3.8 第 6 步）。
+	SubmitReview bool
 }
 
 // VisibilityFor 定出这次发布的可见性。
@@ -323,25 +331,49 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 				"服务端扫的是上传的真包，本地扫描没看到的文件也会被算进去——清掉包里的密钥再重发",
 			version, session.VersionStatus)
 	case "pending_review":
-		return publishResult{
+		result := publishResult{
 			Action:    "已提交审核",
 			Name:      displayName,
 			SkillID:   skill.ID,
 			Version:   version,
 			SizeBytes: artifact.SizeBytes,
-		}, nil
+		}
+		if options.SubmitReview {
+			// 已经在队列里了：送审是幂等的，再调一次只是确认。
+			submitForReview(ctx, client, skill.ID, version)
+		}
+		return result, nil
 	case "published":
-		return publishResult{
+		result := publishResult{
 			Action:    "已发布",
 			Name:      displayName,
 			SkillID:   skill.ID,
 			Version:   version,
 			SizeBytes: artifact.SizeBytes,
-		}, nil
+		}
+		if options.SubmitReview {
+			// 这一版已经直接发布了：个人与公开的 Skill 扫描通过即发布，
+			// 送审接口会拒（如实说清楚，别让人以为已经送审了）。
+			submitForReview(ctx, client, skill.ID, version)
+		}
+		return result, nil
 	default:
 		return publishResult{}, fmt.Errorf(
 			"服务端没有返回版本状态（拿到 %q），无法确认这次发布的结果", session.VersionStatus)
 	}
+}
+
+// submitForReview 把这一版送进审核队列。
+//
+// 服务端在上传完成时就按可见性决定了要不要送审：个人与公开直接发布，
+// 团队与组织进待审队列。所以个人版本走到这里会被拒（409）——
+// 把服务端的话原样说出来，比假装送审了强。
+func submitForReview(ctx context.Context, client *apiclient.Client, skillID, version string) {
+	if _, err := client.ReviewVersion(ctx, skillID, version, "submit", ""); err != nil {
+		notice("%s@%s 没能送审：%v\n", skillID, version, err)
+		return
+	}
+	notice("%s@%s 已转入审核\n", skillID, version)
 }
 
 // warnSkippedLinks 提示这次打包跳过了哪些指向包外的链接。

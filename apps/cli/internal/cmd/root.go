@@ -89,7 +89,7 @@ func newRootCmd() *cobra.Command {
 	root.Version = cliVersion
 
 	root.AddCommand(
-		newLoginCmd(), newLogoutCmd(),
+		newLoginCmd(), newLogoutCmd(), newRegisterCmd(),
 		newSearchCmd(), newInfoCmd(),
 		newSourceCmd(), NewAddCmd(), newInstallCmd(), newPublishCmd(),
 		newReviewCmd(),
@@ -98,7 +98,7 @@ func newRootCmd() *cobra.Command {
 		newDoctorCmd(), NewUpdateCmd(), newTrashCmd(),
 		newLogsCmd(), newSelfInstallCmd(),
 		newWatchCmd(), newShareCmd(),
-		newFixSkillCmd(),
+		newFixSkillCmd(), newStatusCmd(), newLockCmd(),
 	)
 	hideAdvancedCommands(root)
 	return root

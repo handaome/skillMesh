@@ -132,6 +132,31 @@ func (c *Client) CommitChangeset(ctx context.Context, changesetID,
 	return out, nil
 }
 
+// GetChangeset 取一个变更集。--conflict <id> 要靠它知道这是哪个 Skill 的冲突。
+func (c *Client) GetChangeset(ctx context.Context, changesetID string) (SyncChangesetResponse, error) {
+	var out SyncChangesetResponse
+	path := "/sync/changesets/" + url.PathEscape(changesetID)
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return SyncChangesetResponse{}, err
+	}
+	return out, nil
+}
+
+// ResolveChangeset 告诉服务端这个变更集的冲突怎么处理了。
+//
+// resolution 取 keep-local / keep-cloud / keep-both；服务端据此把冲突标记成
+// 已解决（只改记录状态，真正覆盖的是客户端自己的文件）。
+func (c *Client) ResolveChangeset(ctx context.Context, changesetID, resolution string) (SyncChangesetResponse, error) {
+	var out SyncChangesetResponse
+	query := url.Values{}
+	query.Set("resolution", resolution)
+	path := "/sync/changesets/" + url.PathEscape(changesetID) + "/resolve"
+	if err := c.doWith(ctx, http.MethodPost, path, query, nil, &out); err != nil {
+		return SyncChangesetResponse{}, err
+	}
+	return out, nil
+}
+
 // MachineKey 生成本机稳定标识：主机名 + 用户名 + 操作系统。
 // 用这三个拼而不是随机 ID——随机 ID 存丢了就得重新注册，旧的同步基线会全断。
 func MachineKey() string {

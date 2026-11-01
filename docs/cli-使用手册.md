@@ -432,6 +432,13 @@ export SKILLMESH_TOKEN=<access-token>
 
 `--locked` 会校验远端解析结果与 `skillmesh.lock.yaml` 是否一致，不一致直接失败，防止构建环境静默漂移。
 
+远端前进了而锁文件不动，`--locked` 就会拿旧 commit 当准。用 `lock refresh` 把锁文件
+对齐远端——它只重新解析来源、更新锁文件里记的 commit，**不安装也不下载**：
+
+```bash
+./skillmesh.exe lock refresh
+```
+
 ## 从 Git 仓库装一个 Skill：两步
 
 ### 第一步 `source resolve` —— 先看一眼仓库里有什么
@@ -851,6 +858,20 @@ cp apps/cli/skills/manage-skills/SKILL.md ~/.claude/skills/manage-skills/SKILL.m
 **里面已经脱敏**：家目录换成 `~`，令牌、邮箱、带凭据的 URL 全部遮蔽，
 日志逐行再脱敏一遍（脱敏功能上线前写的历史日志没有脱敏过）。
 诊断包是要往外发的，别把原始文件直接贴出来。
+
+### 现在是什么状况
+
+```bash
+./skillmesh.exe status                # 登录、服务端、监听、装了几个、待同步几个
+./skillmesh.exe status --skill java-service-debug   # 单个 Skill 的来路
+./skillmesh.exe status --sync-queue  # 只看同步队列
+```
+
+`status` 只读：不下载、不改任何文件。它和 `doctor` 的分工是——
+`status` 说「现在是什么状况」，`doctor` 说「哪里坏了、为什么」。
+
+「已登录」「连上了但取不到身份」是两回事：前者该重新登录，后者该看网络，
+`status` 分开报，不混成一句「未登录」。
 
 ### 环境检查与配置
 

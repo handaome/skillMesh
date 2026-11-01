@@ -11,7 +11,7 @@ import (
 )
 
 func newSourceCmd() *cobra.Command {
-	var ref string
+	var ref, path string
 	source := &cobra.Command{
 		Use:   "source",
 		Short: "来源解析",
@@ -36,7 +36,9 @@ func newSourceCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			candidates, err := skillscan.Candidates(root, true)
+			// 指定了子目录就只看那一个：整个仓库扫一遍再筛，
+			// 会把别的目录也报出来——用户要的就是这一个。
+			candidates, err := resolveCandidates(root, path)
 			if err != nil {
 				return err
 			}
@@ -58,6 +60,26 @@ func newSourceCmd() *cobra.Command {
 		},
 	}
 	resolve.Flags().StringVar(&ref, "ref", "", "分支、标签或 commit")
+	resolve.Flags().StringVar(&path, "path", "", "只看仓库里的这个子目录")
 	source.AddCommand(resolve)
 	return source
+}
+
+// resolveCandidates 找出候选 Skill 目录。
+//
+// 指定子目录时只认那一个：它得存在、还得含 SKILL.md——
+// 「这个路径下没有 Skill」要说清，不能悄悄给一份全仓库的清单。
+func resolveCandidates(root, path string) ([]skillscan.Candidate, error) {
+	if path == "" {
+		return skillscan.Candidates(root, true)
+	}
+	dir := filepath.Join(root, filepath.FromSlash(path))
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("子目录不存在: %s", path)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
+		return nil, fmt.Errorf("子目录 %s 下没有 SKILL.md，不是一个 Skill 目录", path)
+	}
+	return []skillscan.Candidate{{Dir: dir, Name: filepath.Base(dir)}}, nil
 }

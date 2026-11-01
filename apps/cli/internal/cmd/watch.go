@@ -504,7 +504,8 @@ func applyAutoSafeUpdates(ctx context.Context) error {
 	if len(selected) == 0 {
 		return nil
 	}
-	return applyUpdates(ctx, projectRoot, &lock, selected, false)
+	// 后台自动更新不碰本地改动：没有人在旁边确认，留一份补丁也没人看。
+	return applyUpdates(ctx, projectRoot, &lock, selected, false, false)
 }
 
 // countByPolicy 数一数有多少个来源声明了某个更新策略。

@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
+	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 	"github.com/handaome/skillmesh/apps/cli/internal/trash"
 	"github.com/spf13/cobra"
@@ -108,6 +111,12 @@ func checkUpdates(ctx context.Context, lock lockfile.Lock, skipManual bool) ([]U
 		if skill.Repository == "" {
 			continue
 		}
+		// 固定到 commit 的来源不跟随分支：它只在显式指定目标时才动
+		// （设计文档 §3.7「固定到 commit/tag 的来源不会静默跟随分支」）。
+		// 顺带躲开了一个坑：ls-remote 按 ref 名匹配，commit sha 匹配不到。
+		if skill.RefType == "commit" {
+			continue
+		}
 		if skipManual && policyOf(lock, skill.Name) == "manual" {
 			continue
 		}
@@ -142,13 +151,34 @@ func checkUpdates(ctx context.Context, lock lockfile.Lock, skipManual bool) ([]U
 	return updates, nil
 }
 
+// updatePolicies 是 --policy 允许的取值（设计文档 §3.7）。
+//
+// auto_safe 是 auto-safe 的下划线写法：配置里的 sync.default_update_policy
+// 用的是下划线，命令行两种都收。
+var updatePolicies = []string{"manual", "notify", "auto-safe", "auto_safe"}
+
 func NewUpdateCmd() *cobra.Command {
-	var checkOnly, all, auto bool
+	var checkOnly, all, auto, saveLocalChanges bool
+	var toVersion, toCommit, policy, skillName string
 	cmd := &cobra.Command{
 		Use:   "update [skill-name]",
 		Short: "检查或应用更新",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if toVersion != "" && toCommit != "" {
+				return fmt.Errorf("--to 与 --to-commit 互斥：一次只指定一个目标")
+			}
+			if policy != "" && !contains(updatePolicies, policy) {
+				return fmt.Errorf("--policy 只能是 %s，收到 %q",
+					strings.Join(updatePolicies, " / "), policy)
+			}
+			if skillName != "" && len(args) > 0 {
+				return fmt.Errorf("--skill 与位置参数只能给一个")
+			}
+			name := skillName
+			if name == "" && len(args) == 1 {
+				name = args[0]
+			}
 			projectRoot := projectRootDir()
 			lock, err := lockfile.Load(projectRoot)
 			if err != nil {
@@ -157,12 +187,18 @@ func NewUpdateCmd() *cobra.Command {
 			// 指定名字时只查它一个，但保存时仍用完整的锁文件：
 			// 把 lock 换成单条会让其余条目在 Save 时消失（设计文档 §9.1）。
 			check := lock
-			if len(args) == 1 {
-				skill, ok := lock.Find(args[0])
+			if name != "" {
+				skill, ok := lock.Find(name)
 				if !ok {
-					return fmt.Errorf("锁文件中没有 %s", args[0])
+					return fmt.Errorf("锁文件中没有 %s", name)
 				}
 				check = lockfile.Lock{Version: lock.Version, Skills: []lockfile.LockedSkill{skill}}
+			}
+
+			// 明确指定目标：不查远端，直接装到那个目标（设计文档 §3.7）。
+			if toVersion != "" || toCommit != "" {
+				return updateToTarget(cmd.Context(), projectRoot, &lock, check,
+					toVersion, toCommit, saveLocalChanges)
 			}
 
 			updates, err := CheckUpdates(cmd.Context(), check)
@@ -185,14 +221,27 @@ func NewUpdateCmd() *cobra.Command {
 
 			// 不给名字也不给 --all：只报；除非这些来源的策略是 auto_safe，
 			// 那就该在确认没本地改动后自动更新（设计文档 §7.2）。
-			targeted := auto || all || len(args) > 0
+			targeted := auto || all || name != ""
+			switch policy {
+			case "auto-safe", "auto_safe":
+				// 这次就按「无本地改动才升级」的策略来（设计文档 §3.7）。
+				targeted = true
+			case "manual":
+				// manual 不执行自动升级：只报。
+				fmt.Println("策略是 manual：不自动升级。")
+				return nil
+			case "notify":
+				// notify 也只提示——表已经打出来了，不动手。
+				fmt.Println("策略是 notify：只提示，不自动升级。")
+				return nil
+			}
 			if !targeted {
 				fmt.Println("加 --all 应用全部更新，或指定 skill 名称只更新它。")
 				return nil
 			}
 			// 只给了 --auto 时，只动 auto_safe 的来源；手动指定的名字/--all 照旧全量
 			selected := updates
-			if auto {
+			if auto && policy == "" {
 				selected = FilterAutoSafe(lock, updates)
 				if len(selected) == 0 {
 					fmt.Println("没有标记 auto_safe 的来源，跳过。")
@@ -200,7 +249,7 @@ func NewUpdateCmd() *cobra.Command {
 				}
 			}
 			if err := applyUpdates(cmd.Context(), projectRoot, &lock, selected,
-				globalDryRun || checkOnly); err != nil {
+				globalDryRun || checkOnly, saveLocalChanges); err != nil {
 				return err
 			}
 			if globalDryRun || checkOnly {
@@ -212,14 +261,106 @@ func NewUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "只检查不应用")
 	cmd.Flags().BoolVar(&auto, "auto", false, "只应用标记了 auto_safe 且本地无改动的来源")
 	cmd.Flags().BoolVar(&all, "all", false, "应用全部更新")
+	cmd.Flags().StringVar(&skillName, "skill", "", "只更新这一个 Skill")
+	cmd.Flags().StringVar(&toVersion, "to", "", "更新到这个版本（Git 来源就是标签或分支）")
+	cmd.Flags().StringVar(&toCommit, "to-commit", "", "更新到这个 commit")
+	cmd.Flags().StringVar(&policy, "policy", "",
+		"这次的更新策略：manual（只报）/ notify（只提示）/ auto-safe（无本地改动才升级）")
+	cmd.Flags().BoolVar(&saveLocalChanges, "save-local-changes", false,
+		"本地有改动时先把差异存成补丁，再继续更新")
 	return supportsDryRun(cmd)
+}
+
+// updateToTarget 把选中的来源更新到指定的目标。
+//
+// --to 给的是版本或 ref（Git 来源就是标签），--to-commit 给的是 commit。
+// 两者互斥（设计文档 §3.7）。
+//
+// 注册中心来源不用这条路：回滚到指定版本是 install <名字> --version <版本>
+// （设计文档 §3.7「回滚到旧版本」）。
+func updateToTarget(ctx context.Context, projectRoot string, lock *lockfile.Lock,
+	selected lockfile.Lock, toVersion, toCommit string, saveLocalChanges bool) error {
+
+	for _, skill := range selected.Skills {
+		if skill.Repository == "" {
+			return fmt.Errorf(
+				"%s 不是 Git 来源：更新到指定版本请用 skillmesh install %s --version %s",
+				skill.Name, skill.Name, orDash(toVersion))
+		}
+		commit := toCommit
+		ref := skill.Ref
+		if commit == "" {
+			resolved, err := LsRemote(ctx, skill.Repository, toVersion)
+			if err != nil {
+				return fmt.Errorf("解析 %s 的 %s 失败: %w", skill.Repository, toVersion, err)
+			}
+			commit = resolved
+			ref = toVersion
+		}
+		update := UpdateInfo{
+			Name:          skill.Name,
+			Repository:    skill.Repository,
+			Path:          skill.Path,
+			Ref:           ref,
+			Scope:         skill.Scope,
+			InstalledHash: skill.InstalledHash,
+			SkillID:       skill.SourceID,
+			Agents:        skill.Agents,
+			LocalCommit:   skill.ResolvedCommit,
+			RemoteCommit:  commit,
+			UpdatePolicy:  skill.UpdatePolicy,
+			Provider:      skill.Provider,
+			TargetPaths:   skill.TargetPaths,
+		}
+		work, err := os.MkdirTemp("", "skillmesh-update-*")
+		if err != nil {
+			return err
+		}
+		root := filepath.Join(work, "repo")
+		cloned, err := gitx.Clone(ctx, skill.Repository, commit, root)
+		if err != nil {
+			os.RemoveAll(work)
+			return err
+		}
+		modified, err := locallyModified(projectRoot, update)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "检查 %s 的本地改动失败: %v\n", update.Name, err)
+			os.RemoveAll(work)
+			continue
+		}
+		if modified {
+			if !saveLocalChanges {
+				fmt.Printf("跳过 %s —— 本地有改动，保留本地版本\n", update.Name)
+				recordUpdateConflict(update)
+				os.RemoveAll(work)
+				continue
+			}
+			patch, err := saveLocalPatch(projectRoot, root, update)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "保存 %s 的本地改动失败: %v\n", update.Name, err)
+				os.RemoveAll(work)
+				continue
+			}
+			fmt.Printf("本地改动已存成补丁 %s\n", patch)
+		}
+		err = ApplyOne(ctx, root, projectRoot, lock, update, cloned)
+		os.RemoveAll(work)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "更新 %s 失败: %v\n", update.Name, err)
+			continue
+		}
+	}
+	return lock.Save(projectRoot)
 }
 
 // applyUpdates 按仓库分组应用更新：同一个仓库只 clone 一次，
 // 再从同一份检出里取各个 Skill 的子目录。装几十个 Skill 的仓库时
 // 这是数量级的差别。
+//
+// saveLocalChanges 为真时，本地有改动先把差异存成补丁再更新；
+// 否则保留本地版本不动（设计文档 §3.7）。
 func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock,
-	updates []UpdateInfo, dryRun bool) error {
+	updates []UpdateInfo, dryRun, saveLocalChanges bool) error {
 	groups := map[string][]UpdateInfo{}
 	var order []string
 	for _, update := range updates {
@@ -248,9 +389,19 @@ func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock,
 				continue
 			}
 			if modified {
-				// 本地有未提交修改：保留本地版本，不覆盖（设计文档 §3.3、§6.3）。
-				fmt.Printf("跳过 %s —— 本地有改动，保留本地版本\n", update.Name)
-				continue
+				if !saveLocalChanges {
+					// 本地有未提交修改：保留本地版本，不覆盖（设计文档 §3.3、§6.3）。
+					fmt.Printf("跳过 %s —— 本地有改动，保留本地版本\n", update.Name)
+					recordUpdateConflict(update)
+					continue
+				}
+				// 改动留一份补丁，更新照做：改没了还能照着补丁贴回去。
+				patch, err := saveLocalPatch(projectRoot, root, update)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "保存 %s 的本地改动失败: %v\n", update.Name, err)
+					continue
+				}
+				fmt.Printf("本地改动已存成补丁 %s\n", patch)
 			}
 			if dryRun {
 				previewUpdate(root, projectRoot, update)
@@ -263,6 +414,81 @@ func applyUpdates(ctx context.Context, projectRoot string, lock *lockfile.Lock,
 		os.RemoveAll(work)
 	}
 	return nil
+}
+
+// recordUpdateConflict 记下「这次更新因为本地有改动没做」。
+//
+// 更新跳过时只往终端打一行字，终端一滚就没了：过两天用户问
+// 「这个 Skill 怎么没更新上去」，没有任何地方查得到。
+// 写进本机操作日志，skillmesh logs 能看到这条冲突
+// （设计文档 §4.5「基础冲突记录」）。
+func recordUpdateConflict(update UpdateInfo) {
+	opLog().Record(oplog.ActionUpdateConflict, update.Name,
+		fmt.Sprintf("本地有改动，保留本地版本未更新（本地 %s → 远端 %s）",
+			short(update.LocalCommit), short(update.RemoteCommit)),
+		map[string]string{
+			"repository":    update.Repository,
+			"local_commit":  update.LocalCommit,
+			"remote_commit": update.RemoteCommit,
+		})
+}
+
+// saveLocalPatch 把「本地这份」与「新版本」的差异写成补丁文件，返回文件路径。
+//
+// 更新会把本机目录整个换掉，本地改动就此消失。补丁留一份，
+// 用户照着它能把改动重新贴回去（设计文档 §3.7「--save-local-changes」）。
+//
+// 补丁放在配置目录的 patches 下：放项目里会混进提交，放 Agent 目录里
+// 会被打包上传。
+func saveLocalPatch(projectRoot, newRoot string, update UpdateInfo) (string, error) {
+	local, err := installedDir(projectRoot, update)
+	if err != nil {
+		return "", err
+	}
+	remote := filepath.Join(newRoot, filepath.FromSlash(update.Path))
+	changes, err := DiffTrees(local, remote)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, change := range changes {
+		oldText, oldErr := readTextFile(filepath.Join(local, filepath.FromSlash(change.Path)))
+		newText, newErr := readTextFile(filepath.Join(remote, filepath.FromSlash(change.Path)))
+		if oldErr != nil || newErr != nil {
+			continue // 二进制文件写不了补丁，跳过
+		}
+		diff := UnifiedDiff(change.Path, oldText, newText)
+		if diff == "" {
+			continue
+		}
+		b.WriteString(diff)
+	}
+	if b.Len() == 0 {
+		return "", fmt.Errorf("没有可保存的差异")
+	}
+	dir := filepath.Join(Cfg.ConfigDir, "patches")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%s.patch",
+		update.Name, time.Now().Format("20060102-150405")))
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// readTextFile 读一个文本文件。读不了（二进制、不是文件）就报错——
+// 二进制文件写出来的补丁是乱码，不如不写。
+func readTextFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if skillscan.IsBinaryContent(data) {
+		return "", fmt.Errorf("%s 是二进制文件", path)
+	}
+	return string(data), nil
 }
 
 // installedDir 定位某个 Skill 现在装在本机的哪个目录。

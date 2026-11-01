@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
@@ -12,6 +13,7 @@ import (
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
 	"github.com/handaome/skillmesh/apps/cli/internal/redact"
+	"github.com/handaome/skillmesh/apps/cli/internal/syncstate"
 	"github.com/handaome/skillmesh/apps/cli/internal/trash"
 	"github.com/spf13/cobra"
 )
@@ -54,13 +56,21 @@ func targetPathOf(agentName string, entry lockfile.LockedSkill, projectRoot stri
 type listEntry struct {
 	Skill   string `json:"skill"`
 	Agent   string `json:"agent"`
+	Source  string `json:"source"`
 	Version string `json:"version"`
+	// Latest 是远端的新 commit，只在 --outdated 时有值。
+	Latest  string `json:"latest,omitempty"`
 	Path    string `json:"path"`
 	Managed bool   `json:"managed"`
 }
 
+// listSources 是 list --source 允许的取值。
+var listSources = []string{"git", "cloud", "local"}
+
 func newListCmd() *cobra.Command {
-	return supportsJSON(&cobra.Command{
+	var source string
+	var outdated bool
+	cmd := supportsJSON(&cobra.Command{
 		Use:   "list",
 		Short: "列出本项目已登记的本地安装",
 		Long: "列出本项目锁文件里登记的本地安装。\n" +
@@ -68,6 +78,10 @@ func newListCmd() *cobra.Command {
 			"发布到云端的 Skill 用 skillmesh search 查。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if source != "" && !contains(listSources, source) {
+				return fmt.Errorf("--source 只能是 %s，收到 %q",
+					strings.Join(listSources, " / "), source)
+			}
 			client, err := newClient(cmd.Context())
 			if err != nil {
 				return err
@@ -77,7 +91,19 @@ func newListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entries := listEntries(lock, projectRoot)
+			// --outdated：查一遍远端 ref，只留下有新版的那些。
+			// 查的是 git ls-remote，不下载内容（设计文档 §3.7）。
+			latest := map[string]string{}
+			if outdated {
+				updates, err := CheckUpdates(cmd.Context(), lock)
+				if err != nil {
+					return err
+				}
+				for _, update := range updates {
+					latest[update.Name] = update.RemoteCommit
+				}
+			}
+			entries := listEntries(lock, projectRoot, source, latest)
 			if jsonEnabled() {
 				if err := writeJSON(map[string]any{"items": entries}); err != nil {
 					return err
@@ -86,26 +112,45 @@ func newListCmd() *cobra.Command {
 				return nil
 			}
 			if len(entries) == 0 {
+				if outdated {
+					fmt.Println("没有可更新的 Skill。")
+					return nil
+				}
 				fmt.Println("本项目尚未登记任何本地安装。")
 				fmt.Println("已发布到云端的 Skill 用 skillmesh search 查。")
 				return nil
 			}
-			if err := printListTable(entries); err != nil {
+			if err := printListTable(entries, outdated); err != nil {
 				return err
 			}
 			warnRevoked(cmd.Context(), client, lock)
 			return nil
 		},
 	})
+	cmd.Flags().StringVar(&source, "source", "", "按来源过滤：git / cloud / local")
+	cmd.Flags().BoolVar(&outdated, "outdated", false, "只列出远端有新版的 Skill")
+	return cmd
 }
 
 // listEntries 把锁文件展开成一行一个 Agent 的安装记录。
 //
 // 路径默认脱敏：完整绝对路径会泄露本机目录布局，列表是要被贴到 issue 里的
 // （详细设计 §3.9）。要完整路径加 --verbose。
-func listEntries(lock lockfile.Lock, projectRoot string) []listEntry {
+//
+// source 非空时只留该来源的；latest 里有的会带上远端的新 commit（--outdated）。
+func listEntries(lock lockfile.Lock, projectRoot, source string,
+	latest map[string]string) []listEntry {
+
 	entries := make([]listEntry, 0, len(lock.Skills))
 	for _, skill := range lock.Skills {
+		kind := sourceOfEntry(skill)
+		if source != "" && kind != source {
+			continue
+		}
+		remote, hasRemote := latest[skill.Name]
+		if len(latest) > 0 && !hasRemote {
+			continue // --outdated：只列有新版的
+		}
 		for _, agentName := range skill.Agents {
 			target, err := targetPathOf(agentName, skill, projectRoot)
 			if err != nil {
@@ -115,29 +160,58 @@ func listEntries(lock lockfile.Lock, projectRoot string) []listEntry {
 			if !verbose {
 				shown = redact.Path(target)
 			}
-			entries = append(entries, listEntry{
+			entry := listEntry{
 				Skill:   skill.Name,
 				Agent:   agentName,
+				Source:  kind,
 				Version: ResolvedLabel(skill),
 				Path:    shown,
 				Managed: installer.IsManaged(target),
-			})
+			}
+			if hasRemote {
+				entry.Latest = short(remote)
+			}
+			entries = append(entries, entry)
 		}
 	}
 	return entries
 }
 
+// sourceOfEntry 说这条安装记录的来源类型。
+//
+// Git 来源有仓库地址；本地目录来源标了 local；其余是注册中心装来的。
+func sourceOfEntry(entry lockfile.LockedSkill) string {
+	switch {
+	case entry.Repository != "" || entry.SourceType == "git":
+		return "git"
+	case entry.SourceType == "local":
+		return "local"
+	default:
+		return "cloud"
+	}
+}
+
 // printListTable 打印人读表格。
-func printListTable(entries []listEntry) error {
+func printListTable(entries []listEntry, outdated bool) error {
 	w := newTable(os.Stdout)
-	fmt.Fprintln(w, "SKILL\tAGENT\t版本/commit\t路径\t受管")
+	if outdated {
+		fmt.Fprintln(w, "SKILL\tAGENT\t来源\t本地 commit\t新 commit\t路径\t受管")
+	} else {
+		fmt.Fprintln(w, "SKILL\tAGENT\t来源\t版本/commit\t路径\t受管")
+	}
 	for _, entry := range entries {
 		managed := "否"
 		if entry.Managed {
 			managed = "是"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			entry.Skill, entry.Agent, entry.Version, entry.Path, managed)
+		if outdated {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				entry.Skill, entry.Agent, entry.Source, entry.Version,
+				entry.Latest, entry.Path, managed)
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			entry.Skill, entry.Agent, entry.Source, entry.Version, entry.Path, managed)
 	}
 	return w.Flush()
 }
@@ -184,11 +258,14 @@ func ResolvedLabel(skill lockfile.LockedSkill) string {
 }
 
 func newUninstallCmd() *cobra.Command {
+	var keepFiles, purgeCache bool
 	var force, purge bool
 	cmd := &cobra.Command{
 		Use:   "uninstall <skill-name>",
 		Short: "移除安装内容与锁文件记录",
-		Args:  cobra.ExactArgs(1),
+		Long: "卸载只动本机：注销安装记录，必要时移走本地文件。\n" +
+			"云端的 Skill 不受影响——删云端要用 skillmesh cloud delete。",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectRoot := projectRootDir()
 			lock, err := lockfile.Load(projectRoot)
@@ -204,8 +281,14 @@ func newUninstallCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := uninstallTarget(entry.Name, target, force, purge); err != nil {
+				if keepFiles {
+					// 保留文件：只注销记录，目录原样留着。
+					fmt.Printf("保留 %s\n", target)
+				} else if err := uninstallTarget(entry.Name, target, force || purge); err != nil {
 					return err
+				}
+				if purgeCache {
+					purgeLocalCache(entry.Name, agentName)
 				}
 				opLog().Record(oplog.ActionUninstall, entry.Name, ResolvedLabel(entry),
 					map[string]string{"agent": agentName, "path": target})
@@ -222,34 +305,64 @@ func newUninstallCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false, "连同不受 SkillMesh 管理的目录一起删除")
-	cmd.Flags().BoolVar(&purge, "purge", false, "彻底删除，不进回收站（不可恢复）")
+	cmd.Flags().BoolVar(&keepFiles, "keep-files", false,
+		"保留本地文件，只注销安装记录")
+	cmd.Flags().BoolVar(&purgeCache, "purge-cache", false,
+		"卸载后清理本机缓存（这个 Skill 的同步基线与快照）")
+	// --force / --purge 是旧名字：语义都是「直接删，不进回收站」。
+	// 留着只为兼容旧脚本，帮助里标成废弃。
+	cmd.Flags().BoolVar(&force, "force", false,
+		"直接删除，不进回收站（不受管理的目录也删；已废弃，用 --keep-files/--purge-cache）")
+	cmd.Flags().BoolVar(&purge, "purge", false,
+		"直接删除，不进回收站（已废弃，等同 --force）")
+	_ = cmd.Flags().MarkDeprecated("force", "用 --keep-files 保留文件，或默认进回收站")
+	_ = cmd.Flags().MarkDeprecated("purge", "用 --keep-files 保留文件，或默认进回收站")
 	return cmd
 }
 
 // uninstallTarget 按模式处理一个目标目录：真删、强删，或移进回收站。
 //
 // 默认进回收站：卸载还能找回来（设计文档 §6.4、§15.1）。
-func uninstallTarget(name, target string, force, purge bool) error {
-	switch {
-	case purge:
-		// --purge 是真删：不可恢复，只在明确要求时走
-		if err := os.RemoveAll(target); err != nil {
-			return err
+//
+// 目录不受 SkillMesh 管理时不删——那多半是用户自己换上去的，
+// 删掉等于替用户做决定（设计文档 §3.9「防止误删用户自行替换的目录」）。
+func uninstallTarget(name, target string, force bool) error {
+	if !force && !installer.IsManaged(target) {
+		if _, err := os.Stat(target); err != nil {
+			return nil // 已经不在了，没什么可删的
 		}
-		fmt.Printf("已彻底删除 %s\n", target)
-	case force:
+		fmt.Printf("保留 %s —— 目录不是 SkillMesh 装的，可能你换过它\n", target)
+		return nil
+	}
+	if force {
+		// --force 是真删：不可恢复，只在明确要求时走
 		if err := os.RemoveAll(target); err != nil {
 			return err
 		}
 		fmt.Printf("已移除 %s\n", target)
-	default:
-		item, err := trash.NewStore(Cfg.ConfigDir).Move(name, target)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("已移到回收站 %s（%d KiB，skillmesh trash restore 可找回）\n",
-			item.Entry, item.SizeKiB)
+		return nil
 	}
+	item, err := trash.NewStore(Cfg.ConfigDir).Move(name, target)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已移到回收站 %s（%d KiB，skillmesh trash restore 可找回）\n",
+		item.Entry, item.SizeKiB)
 	return nil
+}
+
+// purgeLocalCache 清掉这个 Skill 在本机留下的缓存：同步基线与基线快照。
+//
+// 快照是「上次同步时双方都认可的那份内容」，留着它下次同步会拿旧基线
+// 去对账——卸载了却还记着基线，是很难查的一类错。
+func purgeLocalCache(name, agentName string) {
+	state, err := syncstate.Load(Cfg.ConfigDir)
+	if err == nil {
+		state.Remove(name, agentName)
+		_ = state.Save(Cfg.ConfigDir)
+	}
+	snapshot := filepath.Join(Cfg.ConfigDir, "sync-base", agentName, name)
+	if err := os.RemoveAll(snapshot); err == nil {
+		fmt.Printf("已清理本机缓存 %s\n", snapshot)
+	}
 }

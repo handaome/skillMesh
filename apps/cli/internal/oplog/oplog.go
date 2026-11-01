@@ -36,6 +36,12 @@ const (
 	ActionCloudDelete   = "skill.archived"
 	ActionCloudRestore  = "skill.restored"
 	ActionVersionRevoke = "version.revoke"
+
+	// ActionUpdateConflict 记「更新因为本地有改动没做」。
+	//
+	// 更新跳过时只打一行字，终端一滚就没了：事后没人查得到
+	// 「为什么这个 Skill 没更新上去」（设计文档 §4.5「基础冲突记录」）。
+	ActionUpdateConflict = "update.conflicted"
 )
 
 // Event 是一条操作记录。

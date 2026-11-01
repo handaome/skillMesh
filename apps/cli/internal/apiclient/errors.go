@@ -1,6 +1,7 @@
 package apiclient
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -43,8 +44,12 @@ func (e *ProblemError) Error() string {
 }
 
 // CodeOf 提取服务端错误码；非 problem 响应返回 HTTP_<status>。
+//
+// 顺着包装链找（errors.As）：apiclient 的方法常给错误包一层中文说明，
+// 直接类型断言取不到错误码，按码分支的调用方就全落空了。
 func CodeOf(err error) string {
-	if pe, ok := err.(*ProblemError); ok {
+	var pe *ProblemError
+	if errors.As(err, &pe) {
 		return pe.Problem.Code
 	}
 	return ""

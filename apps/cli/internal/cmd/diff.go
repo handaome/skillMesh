@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
 )
@@ -137,4 +138,165 @@ func describeChanges(changes []fileChange) string {
 		}
 	}
 	return out
+}
+
+// diffOp 是一行编辑：空格是上下文，'-' 是旧文件里有而新文件里没有的，
+// '+' 是新文件里新加的。
+type diffOp struct {
+	kind byte
+	text string
+	// oldLine / newLine 是这一行在各自文件里的行号（1 起）。
+	// 新增的行没有旧行号（oldLine 为 0）。
+	oldLine int
+	newLine int
+}
+
+// diffLines 算两段文本的行级差异。
+//
+// 用的是 lcsLineCounts 那套最长公共子序列：先算出公共部分，
+// 再沿着它把两边多出来的行标成删除/新增。
+//
+// 差异太大时不做行级比较（DP 表会吃光内存），退化成整段替换。
+func diffLines(oldText, newText string) []diffOp {
+	old := strings.Split(oldText, "\n")
+	updated := strings.Split(newText, "\n")
+	if len(old)*len(updated) > maxDiffCells {
+		ops := make([]diffOp, 0, len(old)+len(updated))
+		for i, line := range old {
+			ops = append(ops, diffOp{kind: '-', text: line, oldLine: i + 1})
+		}
+		for i, line := range updated {
+			ops = append(ops, diffOp{kind: '+', text: line, newLine: i + 1})
+		}
+		return ops
+	}
+	table := make([][]int, len(old)+1)
+	for i := range table {
+		table[i] = make([]int, len(updated)+1)
+	}
+	for i := len(old) - 1; i >= 0; i-- {
+		for j := len(updated) - 1; j >= 0; j-- {
+			if old[i] == updated[j] {
+				table[i][j] = table[i+1][j+1] + 1
+			} else if table[i+1][j] >= table[i][j+1] {
+				table[i][j] = table[i+1][j]
+			} else {
+				table[i][j] = table[i][j+1]
+			}
+		}
+	}
+	var ops []diffOp
+	i, j := 0, 0
+	for i < len(old) && j < len(updated) {
+		switch {
+		case old[i] == updated[j]:
+			ops = append(ops, diffOp{kind: ' ', text: old[i], oldLine: i + 1, newLine: j + 1})
+			i++
+			j++
+		case table[i+1][j] >= table[i][j+1]:
+			ops = append(ops, diffOp{kind: '-', text: old[i], oldLine: i + 1})
+			i++
+		default:
+			ops = append(ops, diffOp{kind: '+', text: updated[j], newLine: j + 1})
+			j++
+		}
+	}
+	for ; i < len(old); i++ {
+		ops = append(ops, diffOp{kind: '-', text: old[i], oldLine: i + 1})
+	}
+	for ; j < len(updated); j++ {
+		ops = append(ops, diffOp{kind: '+', text: updated[j], newLine: j + 1})
+	}
+	return ops
+}
+
+// UnifiedDiff 生成两个文本之间的 unified diff。
+//
+// 上下文取 3 行——够看出改动发生在哪儿，又不至于把整个文件塞进补丁。
+// 两边一模一样时返回空串。
+func UnifiedDiff(path, oldText, newText string) string {
+	ops := diffLines(oldText, newText)
+	changed := false
+	for _, op := range ops {
+		if op.kind != ' ' {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", path, path)
+	for _, hunk := range diffHunks(ops, 3) {
+		b.WriteString(hunk)
+	}
+	return b.String()
+}
+
+// diffHunks 把编辑序列切成 unified diff 的各个 hunk。
+func diffHunks(ops []diffOp, context int) []string {
+	changed := []int{}
+	for i, op := range ops {
+		if op.kind != ' ' {
+			changed = append(changed, i)
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	// 相邻的改动并成一个 hunk，前后各带 context 行上下文。
+	type span struct{ from, to int }
+	spans := []span{}
+	for _, index := range changed {
+		from := index - context
+		if from < 0 {
+			from = 0
+		}
+		to := index + context
+		if to > len(ops)-1 {
+			to = len(ops) - 1
+		}
+		if len(spans) > 0 && from <= spans[len(spans)-1].to+1 {
+			if to > spans[len(spans)-1].to {
+				spans[len(spans)-1].to = to
+			}
+			continue
+		}
+		spans = append(spans, span{from: from, to: to})
+	}
+	hunks := make([]string, 0, len(spans))
+	for _, s := range spans {
+		oldStart, oldCount, newStart, newCount := 0, 0, 0, 0
+		var body strings.Builder
+		for _, op := range ops[s.from : s.to+1] {
+			switch op.kind {
+			case ' ':
+				if oldCount == 0 {
+					oldStart = op.oldLine
+				}
+				if newCount == 0 {
+					newStart = op.newLine
+				}
+				oldCount++
+				newCount++
+				body.WriteString(" " + op.text + "\n")
+			case '-':
+				if oldCount == 0 {
+					oldStart = op.oldLine
+				}
+				oldCount++
+				body.WriteString("-" + op.text + "\n")
+			case '+':
+				if newCount == 0 {
+					newStart = op.newLine
+				}
+				newCount++
+				body.WriteString("+" + op.text + "\n")
+			}
+		}
+		hunks = append(hunks, fmt.Sprintf("@@ -%d,%d +%d,%d @@\n%s",
+			oldStart, oldCount, newStart, newCount, body.String()))
+	}
+	return hunks
 }

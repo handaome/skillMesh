@@ -73,11 +73,107 @@ func MergePlan(base, local, cloud map[string]string) map[string]fileAction {
 	return plan
 }
 
+// resolveNamedConflict 处理 --conflict <id> 指定的冲突。
+//
+// 先问服务端这个变更集是谁的，再在本机找到那份，按 --resolve 给的方式处理，
+// 最后把处理结果告诉服务端——另一台设备还在等这个状态。
+func resolveNamedConflict(ctx context.Context, client *apiclient.Client,
+	options SyncOptions) (syncResult, syncstate.Entry, *SyncTarget, error) {
+
+	changeset, err := client.GetChangeset(ctx, options.Conflict)
+	if err != nil {
+		return syncResult{}, syncstate.Entry{}, nil,
+			fmt.Errorf("取冲突 %s 失败: %w", options.Conflict, err)
+	}
+	skill, err := client.Skill(ctx, changeset.SkillID)
+	if err != nil {
+		return syncResult{}, syncstate.Entry{}, nil, err
+	}
+	targets, err := SyncTargets(options)
+	if err != nil {
+		return syncResult{}, syncstate.Entry{}, nil, err
+	}
+	var found *SyncTarget
+	for i := range targets {
+		if targets[i].SkillID == changeset.SkillID || targets[i].Name == skill.Slug {
+			found = &targets[i]
+			break
+		}
+	}
+	if found == nil {
+		return syncResult{}, syncstate.Entry{}, nil,
+			fmt.Errorf("本机没有 %s 的副本，解决不了这个冲突", orDash(skill.Name))
+	}
+	local, err := packager.Pack(found.Path)
+	if err != nil {
+		return syncResult{}, syncstate.Entry{}, nil, err
+	}
+	result, entry, err := resolveConflict(ctx, client, *found, local,
+		ManifestDigest(local.Manifest), skill, options)
+	if err != nil {
+		return result, syncstate.Entry{}, found, err
+	}
+	if result.Outcome != Conflicted && result.Outcome != Failed && !options.DryRun {
+		if _, err := client.ResolveChangeset(ctx, options.Conflict,
+			serverResolution(options.Resolve)); err != nil {
+			notice("提示：冲突状态没同步到服务端（%v）\n", err)
+		}
+	}
+	return result, entry, found, nil
+}
+
+// dropTarget 从待处理列表里去掉一个条目。
+func dropTarget(targets []SyncTarget, drop SyncTarget) []SyncTarget {
+	kept := make([]SyncTarget, 0, len(targets))
+	for _, target := range targets {
+		if target.Name == drop.Name && target.Agent == drop.Agent {
+			continue
+		}
+		kept = append(kept, target)
+	}
+	return kept
+}
+
+// serverResolution 把本地的解决方式翻译成服务端认的词。
+//
+// 服务端只认三种：keep-local / keep-cloud / keep-both。
+// keep-both 在服务端那边记成「已合并」——keep-merged 的结果同样是
+// 一份合并过的内容留在本机，按同一个口径报。
+func serverResolution(resolve string) string {
+	if resolve == "keep-merged" {
+		return "keep-both"
+	}
+	return resolve
+}
+
+// reportConflictResolved 告诉服务端这条冲突是怎么解决的。
+//
+// 服务端记着一条「冲突中」的变更集：本地解决完了不说一声，
+// 另一台设备看到的还是「有冲突没解决」（设计文档 §6.3）。
+// 报不上去只提示：解决本身已经做完了，不能因为报不上去就改结果。
+func reportConflictResolved(ctx context.Context, client *apiclient.Client,
+	changesetID, resolve string) {
+
+	if changesetID == "" {
+		return
+	}
+	if resolve == "" {
+		// 没指定解决方式：按文件合上了，两边的内容都留着。
+		resolve = "keep-merged"
+	}
+	if _, err := client.ResolveChangeset(ctx, changesetID, serverResolution(resolve)); err != nil {
+		notice("提示：冲突状态没同步到服务端（%v）\n", err)
+	}
+}
+
 // MergeConflict 按文件合并一次冲突（设计文档 §6.3）。
 //
 //	本地改了 A、云端改了 B      → 两边都要，合完直接上传
 //	同一个文件两边都改且能文本合 → 合完上传
 //	同一个文件两边都改且合不了   → 返回 ok=false，交给 --resolve 生成冲突副本
+//
+// keepConflicts 为真时，合不上的文件也算合上了：带冲突标记的内容就是
+// 合并结果（--resolve keep-merged），写回本机后重算摘要再上传。
 //
 // 合并结果先落在临时文件上，全部合成了才写回本机目录：
 // 中途失败不能留下「改了一半」的目录——基线没更新，下一轮又判冲突。
@@ -86,7 +182,8 @@ func MergePlan(base, local, cloud map[string]string) map[string]fileAction {
 // 一并换掉（CopyTree 只拷普通文件），也会把整个目录拷两遍——
 // 带 .git 的大目录能明显变慢。本机目录里没被碰过的文件原样留着。
 func MergeConflict(ctx context.Context, client *apiclient.Client, target SyncTarget,
-	entry syncstate.Entry, local packager.Artifact, skill apiclient.Skill) (bool, string, error) {
+	entry syncstate.Entry, local packager.Artifact, skill apiclient.Skill,
+	keepConflicts bool) (bool, string, error) {
 
 	localFiles, err := skillscan.DirHashes(target.Path)
 	if err != nil {
@@ -110,7 +207,7 @@ func MergeConflict(ctx context.Context, client *apiclient.Client, target SyncTar
 	defer cleanup()
 
 	// 合并结果先写到临时文件：算完再写回本机目录。
-	staged, err := stageMerged(target.Path, cloudDir, entry.BaseSnapshot, plan)
+	staged, err := stageMerged(target.Path, cloudDir, entry.BaseSnapshot, plan, keepConflicts)
 	if err != nil {
 		return false, err.Error(), err
 	}
@@ -162,8 +259,11 @@ type mergeResult struct {
 //
 // 本机目录不动：算的过程中出问题（合不了、读不出文件），
 // 本机目录还是原样，基线没更新，下一轮会重新判冲突。
-func stageMerged(localDir, cloudDir, baseSnapshot string, plan map[string]fileAction) (
-	mergeResult, error) {
+//
+// keepConflicts 为真时，合不上的文件也写进结果：带冲突标记的内容
+// 就是合并结果（--resolve keep-merged）。
+func stageMerged(localDir, cloudDir, baseSnapshot string, plan map[string]fileAction,
+	keepConflicts bool) (mergeResult, error) {
 
 	result := mergeResult{modes: map[string]os.FileMode{}}
 	work, err := os.MkdirTemp("", "skillmesh-merge-*")
@@ -208,6 +308,20 @@ func stageMerged(localDir, cloudDir, baseSnapshot string, plan map[string]fileAc
 						cleanup()
 						return result, fmt.Errorf("写冲突副本失败 %s：%w", path, err)
 					}
+				}
+				if keepConflicts {
+					// keep-merged：带标记的内容就是合并结果，直接当地文件。
+					dst := filepath.Join(work, filepath.FromSlash(path))
+					if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+						cleanup()
+						return result, fmt.Errorf("暂存合并结果失败 %s：%w", path, err)
+					}
+					if err := os.WriteFile(dst, merged, 0o644); err != nil {
+						cleanup()
+						return result, fmt.Errorf("暂存合并结果失败 %s：%w", path, err)
+					}
+					result.merged = append(result.merged, path)
+					continue
 				}
 				result.conflicted = append(result.conflicted, path)
 				continue

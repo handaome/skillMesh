@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -18,7 +19,9 @@ type infoPayload struct {
 }
 
 func newInfoCmd() *cobra.Command {
-	return supportsJSON(&cobra.Command{
+	var versionsOnly bool
+	var version string
+	cmd := supportsJSON(&cobra.Command{
 		Use:   "info <skill-id>",
 		Short: "查看 Skill 详情、来源、扫描结论与版本列表",
 		Long: "装之前先看一眼：来源、许可证、扫描结论和风险都在这儿。\n" +
@@ -29,35 +32,70 @@ func newInfoCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			skill, err := client.Skill(cmd.Context(), args[0])
+			skill, err := lookupSkill(cmd.Context(), client, args[0])
 			if err != nil {
 				return err
 			}
-			versions, err := client.Versions(cmd.Context(), args[0])
-			if err != nil {
-				return err
+			// --version 只看一版：直接问服务端要那一版的详情，
+			// 不用把整个版本列表拉回来再筛。
+			var versions []apiclient.SkillVersion
+			if version != "" {
+				one, err := client.Version(cmd.Context(), skill.ID, version)
+				if err != nil {
+					return err
+				}
+				versions = []apiclient.SkillVersion{one}
+			} else {
+				page, err := client.Versions(cmd.Context(), skill.ID)
+				if err != nil {
+					return err
+				}
+				versions = page.Items
 			}
-			blocked, findings := collectRisks(versions.Items)
+			blocked, findings := collectRisks(versions)
 			if jsonEnabled() {
 				return writeJSON(infoPayload{
 					Skill:    skill,
-					Versions: jsonItems(versions.Items),
+					Versions: jsonItems(versions),
 					Blocked:  jsonItems(blocked),
 					Findings: jsonItems(findings),
 				})
 			}
+			// --versions：只列版本，不展开详情。
+			if versionsOnly {
+				return printVersions(versions)
+			}
 			fmt.Printf("%s (%s)\n%s\n", skill.Name, skill.Slug, skill.Description)
-			if len(versions.Items) == 0 {
+			if len(versions) == 0 {
 				fmt.Println("暂无版本")
 				return nil
 			}
-			printProvenance(skill, versions.Items[0])
-			if err := printVersions(versions.Items); err != nil {
+			printProvenance(skill, versions[0])
+			if err := printVersions(versions); err != nil {
 				return err
 			}
 			return printRisks(blocked, findings)
 		},
 	})
+	cmd.Flags().BoolVar(&versionsOnly, "versions", false, "只列版本，不展开详情")
+	cmd.Flags().StringVar(&version, "version", "", "只看这一个版本")
+	return cmd
+}
+
+// lookupSkill 按 ID 或 slug 找 Skill。
+//
+// 服务端的详情接口只认 UUID，但人手里拿着的通常是 slug——
+// 拿 slug 查不到就按 slug 再找一次，别让人先去别处抄 ID。
+func lookupSkill(ctx context.Context, client *apiclient.Client, idOrSlug string) (apiclient.Skill, error) {
+	skill, err := client.Skill(ctx, idOrSlug)
+	if err == nil {
+		return skill, nil
+	}
+	found, ok, slugErr := client.FindSkillBySlug(ctx, idOrSlug)
+	if !ok || slugErr != nil {
+		return apiclient.Skill{}, err // 原来的错更贴近真实原因
+	}
+	return found, nil
 }
 
 // printProvenance 打印来源信息。缺的就写「未提供」，不留空让人猜。

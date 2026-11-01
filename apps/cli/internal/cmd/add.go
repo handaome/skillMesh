@@ -20,8 +20,8 @@ func NewAddCmd() *cobra.Command {
 	var (
 		ref, subpath, credentialRef string
 		refType, updatePolicy       string
+		alias, localDir             string
 		replace, all                bool
-		localDir                    string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <repo-url>",
@@ -36,6 +36,15 @@ func NewAddCmd() *cobra.Command {
 			if refType != "" && !contains([]string{"branch", "tag", "commit", "default"}, refType) {
 				return fmt.Errorf("--ref-type 只能是 branch / tag / commit / default")
 			}
+			// --name 是本机上的别名，一个名字只对得上一个 Skill。
+			if alias != "" {
+				if err := CheckDirName(alias); err != nil {
+					return err
+				}
+				if all {
+					return fmt.Errorf("--name 是单个 Skill 的别名，不能和 --all 同时用")
+				}
+			}
 			// 本地目录：只装到本机，来源写进锁文件，不进注册中心。
 			if localDir != "" {
 				if len(args) > 0 {
@@ -49,7 +58,7 @@ func NewAddCmd() *cobra.Command {
 					Root: root, Source: "local:" + root, SourceType: "local",
 					Provider: "local", Subpath: subpath, All: all, Scope: scopeOr(""),
 					Agents: agentNamesOr("claude-code"), UpdatePolicy: updatePolicy,
-					Replace: replace, DryRun: globalDryRun,
+					Replace: replace, DryRun: globalDryRun, Alias: alias,
 				})
 			}
 			if len(args) == 0 {
@@ -84,6 +93,7 @@ func NewAddCmd() *cobra.Command {
 				Subpath: subpath, All: all, Scope: scopeOr(""),
 				Agents:       agentNamesOr("claude-code"),
 				UpdatePolicy: updatePolicy, Replace: replace, DryRun: globalDryRun,
+				Alias: alias,
 			})
 		},
 	}
@@ -94,6 +104,8 @@ func NewAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&localDir, "local", "",
 		"从本地目录安装（不进注册中心，来源只写锁文件）")
 	cmd.Flags().StringVar(&credentialRef, "credential-ref", "", "本机凭据管理器中的凭据引用")
+	cmd.Flags().StringVar(&alias, "name", "",
+		"本机上的别名：只改安装目录与锁文件里的名字，不改上游 SKILL.md")
 	cmd.Flags().BoolVar(&all, "all", false, "安装仓库里的全部 Skill")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
 	cmd.Flags().StringVar(&updatePolicy, "update-policy", "notify",
@@ -204,10 +216,13 @@ type installPlan struct {
 //
 // source 是来源标识（仓库地址），用来判断目标目录里装的是不是同一个东西。
 //
+// alias 是本机上的别名（--name）：给了就用它当安装名，
+// 上游 SKILL.md 里的声明名不动——别名只是本机怎么称呼它。
+//
 // 目标路径按 agentName 算：分类分层（Hermes 的 <category>/<name>/）
 // 由 SKILL.md 声明决定，算出来的才是真正要装的位置。
 func PlanInstalls(root string, candidates []skillscan.Candidate,
-	agentName, scope, projectRoot, source string, replace bool) installPlan {
+	agentName, scope, projectRoot, source string, replace bool, alias string) installPlan {
 	var plan installPlan
 	used := map[string]string{} // 安装名 -> 来源路径
 	for _, candidate := range candidates {
@@ -225,6 +240,9 @@ func PlanInstalls(root string, candidates []skillscan.Candidate,
 		if err != nil {
 			plan.Fail = append(plan.Fail, failItem{Path: rel, Why: err.Error()})
 			continue
+		}
+		if alias != "" {
+			name = alias
 		}
 		if previous, duplicate := used[name]; duplicate {
 			plan.Skip = append(plan.Skip, skipItem{

@@ -23,18 +23,21 @@ type localInstallOptions struct {
 	// SourceType 是 git 或 local，写进锁文件。
 	SourceType string
 	// Repository 是 Git 地址；本地来源留空。
-	Repository string
-	Provider   string
-	RefType    string
-	Ref        string
-	Commit     string
-	Subpath    string
-	All        bool
-	Scope      string
-	Agents     []string
+	Repository   string
+	Provider     string
+	RefType      string
+	Ref          string
+	Commit       string
+	Subpath      string
+	All          bool
+	Scope        string
+	Agents       []string
 	UpdatePolicy string
-	Replace    bool
-	DryRun     bool
+	Replace      bool
+	DryRun       bool
+	// Alias 是本机上的别名：只改安装目录与锁文件里的名字，
+	// 上游 SKILL.md 里的声明名一个字都不动（设计文档 §3.5）。
+	Alias string
 }
 
 // installFromDir 把 root 下的 Skill 装到目标 Agent 目录，并把来源写进锁文件。
@@ -73,7 +76,7 @@ func installFromDir(opts localInstallOptions) error {
 	// 先把全部候选校验一遍、定好计划，再动手装：
 	// 一个 Skill 有问题不该挡住其他全部。
 	plan := PlanInstalls(opts.Root, candidates, targets[0], targetScope, projectRoot,
-		opts.Source, opts.Replace)
+		opts.Source, opts.Replace, opts.Alias)
 	reportPlan(plan, base, opts.DryRun)
 	if opts.DryRun {
 		return nil

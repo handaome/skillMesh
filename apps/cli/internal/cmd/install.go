@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/handaome/skillmesh/apps/cli/internal/apiclient"
+	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/handaome/skillmesh/apps/cli/internal/oplog"
@@ -16,13 +18,15 @@ import (
 )
 
 func newInstallCmd() *cobra.Command {
-	var version, file string
+	var version, file, path, ref string
 	var locked, replace bool
 
 	cmd := &cobra.Command{
 		Use:   "install <skill-id>",
 		Short: "从 SkillMesh 注册中心安装指定版本的 Skill",
-		Args:  cobra.MaximumNArgs(1),
+		Long: "来源有三种：注册中心上的 Skill、锁文件里登记过的本地来源、Git 仓库地址。\n" +
+			"给 Git 地址时配 --path 指到仓库里的子目录。",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 本地 zip：没签名、没走过服务端扫描，不进注册中心，
 			// 只装到本机，来源写进锁文件（详细设计 §7.1 的来源分级）。
@@ -43,7 +47,19 @@ func newInstallCmd() *cobra.Command {
 				})
 			}
 			if len(args) == 0 {
-				return fmt.Errorf("要给 skill-id，或用 --file 指定本地 zip")
+				return fmt.Errorf("要给 skill-id、仓库地址，或用 --file 指定本地 zip")
+			}
+			// Git 地址：直接从仓库装（设计文档 §3.5「支持来源类型」第三项）。
+			if looksLikeGitURL(args[0]) {
+				repo, err := gitx.NormalizeURL(args[0])
+				if err != nil {
+					return err
+				}
+				return installFromGit(cmd.Context(), gitInstallOptions{
+					Repository: repo, Ref: ref, Path: path,
+					Scope: scopeOr("user"), Agents: agentNamesOr("claude-code"),
+					Replace: replace, DryRun: globalDryRun,
+				})
 			}
 			client, err := newClient(cmd.Context())
 			if err != nil {
@@ -68,6 +84,14 @@ func newInstallCmd() *cobra.Command {
 				if !cmd.Flags().Changed("scope") && fromLock.Scope != "" {
 					targetScope = fromLock.Scope
 				}
+			} else if hasLock && fromLock.Repository != "" {
+				// 已登记的本地来源：按锁文件里记的仓库、ref 与子目录重装一份。
+				// 锁文件记的就是上次解析到的那个版本，重装不会跑到别处去。
+				return installFromGit(cmd.Context(), gitInstallOptions{
+					Repository: fromLock.Repository, Ref: fromLock.Ref, Path: fromLock.Path,
+					Scope: scopeOr(fromLock.Scope), Agents: agentNamesOr("claude-code"),
+					Replace: replace, DryRun: globalDryRun,
+				})
 			}
 
 			versions, err := client.Versions(cmd.Context(), skillID)
@@ -108,9 +132,55 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&version, "version", "", "指定版本，默认取最新已发布")
 	cmd.Flags().StringVar(&file, "file", "",
 		"从本地 zip 安装（不进注册中心，来源只写锁文件）")
+	cmd.Flags().StringVar(&path, "path", "", "Git 仓库里 Skill 所在的子目录")
+	cmd.Flags().StringVar(&ref, "ref", "", "Git 分支、标签或 commit")
 	cmd.Flags().BoolVar(&locked, "locked", false, "严格按锁文件校验，不符则失败")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
 	return supportsDryRun(cmd)
+}
+
+// gitInstallOptions 是「从 Git 仓库装」这一路的参数。
+type gitInstallOptions struct {
+	Repository string
+	Ref        string
+	Path       string
+	Scope      string
+	Agents     []string
+	Replace    bool
+	DryRun     bool
+}
+
+// installFromGit 克隆仓库并把里面的 Skill 装到目标 Agent 目录。
+//
+// 来源记进锁文件（仓库、ref、子目录、commit），下次 update 能照着它查更新。
+func installFromGit(ctx context.Context, opts gitInstallOptions) error {
+	work, err := os.MkdirTemp("", "skillmesh-install-git-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(work)
+
+	root := filepath.Join(work, "repo")
+	commit, err := gitx.Clone(ctx, opts.Repository, opts.Ref, root)
+	if err != nil {
+		return err
+	}
+	return installFromDir(localInstallOptions{
+		Root: root, Source: opts.Repository, SourceType: "git",
+		Repository: opts.Repository, Provider: providerOf(opts.Repository),
+		RefType: RefTypeOf(opts.Ref), Ref: opts.Ref, Commit: commit,
+		Subpath: opts.Path, Scope: opts.Scope, Agents: opts.Agents,
+		UpdatePolicy: "manual", Replace: opts.Replace, DryRun: opts.DryRun,
+	})
+}
+
+// looksLikeGitURL 判断这个参数是不是仓库地址。
+//
+// 靠 NormalizeURL 判：简写（owner/repo）、本地路径、非法协议它都拒绝，
+// 能过的就是远程仓库地址。
+func looksLikeGitURL(raw string) bool {
+	_, err := gitx.NormalizeURL(raw)
+	return err == nil
 }
 
 // installRequest 是一次注册中心安装的全部参数。

@@ -34,6 +34,26 @@ func PasswordLogin(ctx context.Context, server, username, password string) (Pass
 	return tokens, nil
 }
 
+// Register 注册一个内置账号（POST /auth/register）。
+//
+// 服务端不开放自助注册时（skillmesh.auth.allow-register=false）会回 403，
+// 那时该找管理员建号，不是换个参数能绕过去的。
+func Register(ctx context.Context, server, username, password, displayName, email string) (PasswordTokens, error) {
+	client := New(server, "", 30*time.Second)
+	var tokens PasswordTokens
+	body := map[string]string{"username": username, "password": password}
+	if displayName != "" {
+		body["display_name"] = displayName
+	}
+	if email != "" {
+		body["email"] = email
+	}
+	if err := client.doWith(ctx, http.MethodPost, "/auth/register", nil, body, &tokens); err != nil {
+		return PasswordTokens{}, fmt.Errorf("注册失败: %w", err)
+	}
+	return tokens, nil
+}
+
 // RefreshLocal 用刷新令牌换一对新令牌（内置账号这条路）。
 //
 // 外部 IdP 的续期走 IdP 自己的 token 端点，内置账号没有 IdP：

@@ -233,28 +233,89 @@ func (c *Client) Versions(ctx context.Context, id string) (VersionPage, error) {
 	}
 }
 
+// Version 取某一个版本的详情（GET /skills/{id}/versions/{version}）。
+func (c *Client) Version(ctx context.Context, skillID, version string) (SkillVersion, error) {
+	var out SkillVersion
+	path := "/skills/" + url.PathEscape(skillID) + "/versions/" + url.PathEscape(version)
+	return out, c.do(ctx, http.MethodGet, path, nil, &out)
+}
+
+// ServerTime 取服务端的时间（响应的 Date 头）。
+//
+// 时钟偏差是个隐形坑：本地快一小时，令牌刚拿到就「过期」了，
+// 而令牌有效期是按签发时刻算的（设计文档 §3.9 的诊断项）。
+func (c *Client) ServerTime(ctx context.Context) (time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/config/public", nil)
+	if err != nil {
+		return time.Time{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	date := resp.Header.Get("Date")
+	if date == "" {
+		return time.Time{}, fmt.Errorf("服务端没给 Date 头")
+	}
+	return http.ParseTime(date)
+}
+
 // DownloadArtifact 取版本制品字节。走 stream 而不是 presigned URL，
 // 避免把带权限的地址写进本地文件（详细设计 §12）。
 func (c *Client) DownloadArtifact(ctx context.Context, artifactID string) ([]byte, error) {
 	target := c.base + "/artifacts/" + url.PathEscape(artifactID) + "/download?disposition=stream"
+	// 服务端有下载并发上限（详细设计 §4.1），满了会回 429。
+	// 按 Retry-After 退避重试，别让一次安装直接失败。
+	for attempt := 0; ; attempt++ {
+		data, retry, err := c.downloadOnce(ctx, target, nil, 0)
+		if err == nil {
+			return data, nil
+		}
+		if !retry || attempt >= maxRateLimitRetries {
+			return nil, err
+		}
+	}
+}
+
+// downloadOnce 取一次字节。第二个返回值表示「被限流了，可以退避重试」。
+//
+// maxBytes 大于 0 时最多读这么多字节（体检用）。
+func (c *Client) downloadOnce(ctx context.Context, target string,
+	headers map[string]string, maxBytes int) ([]byte, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Header.Set("Authorization", bearerPrefix+c.token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, &NetworkError{URL: target, Err: err}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, decodeProblem(resp)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		wait := rateLimitWait(resp)
+		if err := sleepContext(ctx, wait); err != nil {
+			return nil, false, err
+		}
+		return nil, true, fmt.Errorf("被限流（HTTP %d），%s 后重试", resp.StatusCode, wait)
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return nil, false, decodeProblem(resp)
 	}
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, resp.Body); err != nil {
-		return nil, err
+	src := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		src = io.LimitReader(resp.Body, int64(maxBytes))
 	}
-	return buf.Bytes(), nil
+	if _, err := io.Copy(&buf, src); err != nil {
+		return nil, false, err
+	}
+	return buf.Bytes(), false, nil
 }
 
 // ArtifactHead 取制品的头几个字节。
@@ -267,24 +328,17 @@ func (c *Client) ArtifactHead(ctx context.Context, artifactID string, n int) ([]
 		return nil, fmt.Errorf("取多少字节要大于 0，收到 %d", n)
 	}
 	target := c.base + "/artifacts/" + url.PathEscape(artifactID) + "/download?disposition=stream"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, err
+	headers := map[string]string{"Range": fmt.Sprintf("bytes=0-%d", n-1)}
+	for attempt := 0; ; attempt++ {
+		data, retry, err := c.downloadOnce(ctx, target, headers, n)
+		if err == nil {
+			if len(data) == 0 {
+				return nil, fmt.Errorf("制品是空的")
+			}
+			return data, nil
+		}
+		if !retry || attempt >= maxRateLimitRetries {
+			return nil, err
+		}
 	}
-	req.Header.Set("Authorization", bearerPrefix+c.token)
-	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", n-1))
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return nil, decodeProblem(resp)
-	}
-	buf := make([]byte, n)
-	read, _ := io.ReadFull(resp.Body, buf)
-	if read == 0 {
-		return nil, fmt.Errorf("制品是空的")
-	}
-	return buf[:read], nil
 }

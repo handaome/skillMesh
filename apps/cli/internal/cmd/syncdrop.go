@@ -59,10 +59,19 @@ func propagateLocalDeletes(ctx context.Context, client *apiclient.Client,
 	if len(candidates) == 0 {
 		return nil, nil
 	}
+	// 目录临时不可用时，扫不到东西不等于用户删了它：
+	// 这种根下面的删除不往云端传（设计文档 §3.6）。
+	blind := blindRoots(*state, roots)
 	var results []syncResult
 	dropping := map[string]bool{}
 	archived := map[string]bool{}
 	for _, entry := range candidates {
+		if rootBlind(entry, roots, blind) {
+			results = append(results, syncResult{Name: entry.Name, Path: entry.Path,
+				Outcome: PendingDelete,
+				Detail:  "本地目录看起来整个没了（可能临时不可用），没往云端传删除；确认要删用 skillmesh cloud delete"})
+			continue
+		}
 		if archived[entry.SkillID] {
 			continue // 同一个云端 Skill 装在多个 Agent 目录下，删一次就够
 		}
@@ -74,6 +83,70 @@ func propagateLocalDeletes(ctx context.Context, client *apiclient.Client,
 		results = append(results, result)
 	}
 	return results, dropping
+}
+
+// blindRoots 找出「现在不能当作空目录看待」的扫描根。
+//
+// 目录临时不可用时，扫不到东西不等于用户删了它们：照着「全没了」往云端
+// 传删除，一次就能把整个目录的 Skill 从云端清掉（设计文档 §3.6
+// 「不应将无法访问目录当作空目录并据此同步删除」）。
+//
+// 两种情况算「看不清」：
+//
+//   - 目录列不出来：权限变了、路径被换成了文件。东西还在，只是看不见。
+//   - 目录里一个 Skill 都不剩，而基线里本来有：整个目录被搬走、挂载点掉了。
+//     用户删东西是一个个删的，不会一次全没。
+//
+// 代价是「用户真的把整个目录清空了」也传不上去——那种情况云端留着，
+// 本机下一轮又会拉回来。宁可云端多留着，也别一次把用户的云端清空。
+func blindRoots(state syncstate.State, roots []scanRoot) map[string]bool {
+	blind := map[string]bool{}
+	for _, root := range roots {
+		if _, err := os.ReadDir(root.dir); err != nil {
+			blind[root.dir] = true
+			continue
+		}
+		if len(localSkills(root.dir, root.recursive)) > 0 {
+			continue // 目录里还有 Skill：不是整个目录没了
+		}
+		if rootHadSkills(state, root) {
+			blind[root.dir] = true
+		}
+	}
+	return blind
+}
+
+// rootHadSkills 这个扫描根的基线里原来有没有 Skill。
+func rootHadSkills(state syncstate.State, root scanRoot) bool {
+	for _, entry := range state.Skills {
+		if entry.Path != "" {
+			if pathWithin(root.dir, entry.Path) {
+				return true
+			}
+			continue
+		}
+		// 老基线没记路径：按 Agent 目录认。
+		if dir, err := agent.Dir(Cfg, entry.Agent, "user", ""); err == nil && dir == root.dir {
+			return true
+		}
+	}
+	return false
+}
+
+// rootBlind 这个条目所在的扫描根是不是现在看不清的。
+func rootBlind(entry syncstate.Entry, roots []scanRoot, blind map[string]bool) bool {
+	if entry.Path == "" {
+		dir, err := agent.Dir(Cfg, entry.Agent, "user", "")
+		if err != nil {
+			return false
+		}
+		return blind[dir]
+	}
+	root, ok := rootOf(entry.Path, roots)
+	if !ok {
+		return false
+	}
+	return blind[root.dir]
 }
 
 // archiveOne 把一个本地已删掉的 Skill 从云端软删除。
@@ -236,6 +309,12 @@ func sameNameOtherCopy(entry syncstate.Entry, scanned []SyncTarget) bool {
 // 「用户删掉了」——配置一改就清空云端，代价太大。
 // 扫描根整个没了（网盘没挂上、目录被搬走）同样不算删除。
 func inScope(path string, roots []scanRoot) bool {
+	_, ok := rootOf(path, roots)
+	return ok
+}
+
+// rootOf 找 path 所在的扫描根。找不到就是不在扫描范围内。
+func rootOf(path string, roots []scanRoot) (scanRoot, bool) {
 	for _, root := range roots {
 		if !pathWithin(root.dir, path) {
 			continue
@@ -243,9 +322,9 @@ func inScope(path string, roots []scanRoot) bool {
 		if _, err := os.Stat(root.dir); err != nil {
 			continue
 		}
-		return true
+		return root, true
 	}
-	return false
+	return scanRoot{}, false
 }
 
 // pathWithin target 在 root 底下吗。

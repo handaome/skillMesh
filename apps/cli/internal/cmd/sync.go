@@ -61,7 +61,7 @@ type SyncOptions struct {
 	// 云端有而本机没有的也不装。原来拆成 --skip-new 与 --no-pull-new 两个开关，
 	// 语义都是「别自作主张」，合成一个。
 	OnlyExisting bool
-	Resolve      string // keep-local / keep-cloud / keep-both，空表示不处理冲突
+	Resolve      string // keep-local / keep-cloud / keep-both / keep-merged，空表示不处理冲突
 	DryRun       bool
 	// AllowDelete 确认把「本地删掉的文件」也传到云端。
 	// 不确认就不传：目录扫不到不该等于云端被删（设计文档 §6.3）。
@@ -83,7 +83,20 @@ type SyncOptions struct {
 	CloudDeletes map[string]apiclient.DeletedSkill
 	// NoShare 关掉「技能统一到共享目录」（sync.shared_dir）的自动整理。
 	NoShare bool
+	// All 处理所有已授权同步项，含第一次发现的（与 --only-existing 相反）。
+	All bool
+	// Conflict 是要解决的那个冲突：服务端登记的变更集 ID。
+	//
+	// 空串表示不指定——同步过程中撞到的冲突按 --resolve 给的方式处理。
+	Conflict string
+	// Force 允许覆盖本地改动。覆盖前先备份进回收站。
+	//
+	// 只管覆盖，不管安全扫描与权限校验——那两道闸谁都不能绕（设计文档 §3.6）。
+	Force bool
 }
+
+// resolveModes 是 --resolve 允许的取值（设计文档 §3.6）。
+var resolveModes = []string{"keep-local", "keep-cloud", "keep-both", "keep-merged"}
 
 func newSyncCmd() *cobra.Command {
 	options := SyncOptions{}
@@ -103,6 +116,20 @@ func newSyncCmd() *cobra.Command {
 			if options.Direction != "upload" && options.Direction != "download" &&
 				options.Direction != "both" {
 				return fmt.Errorf("--direction 只能是 upload / download / both")
+			}
+			if options.Resolve != "" && !contains(resolveModes, options.Resolve) {
+				return fmt.Errorf("--resolve 只能是 %s，收到 %q",
+					strings.Join(resolveModes, " / "), options.Resolve)
+			}
+			if options.Conflict != "" && options.Resolve == "" {
+				return fmt.Errorf("--conflict 要配合 --resolve 一起用：说清这个冲突怎么处理")
+			}
+			if options.All && options.Only != "" {
+				return fmt.Errorf("--all 与 --skill 互斥：--all 就是全都处理")
+			}
+			// --all 是「全都处理」，含第一次发现的——与 --only-existing 相反。
+			if options.All {
+				options.OnlyExisting = false
 			}
 			results, queue, err := runSync(cmd.Context(), options)
 			if len(results) == 0 && err == nil {
@@ -132,8 +159,14 @@ func newSyncCmd() *cobra.Command {
 	cmd.Flags().StringVar(&options.Direction, "direction", "both", "同步方向：upload / download / both")
 	cmd.Flags().BoolVar(&options.OnlyExisting, "only-existing", false,
 		"只处理已收编的 Skill：本地新发现的不上传，云端新增的也不装")
+	cmd.Flags().BoolVar(&options.All, "all", false,
+		"处理所有已授权同步项（含第一次发现的，与 --only-existing 相反）")
 	cmd.Flags().StringVar(&options.Resolve, "resolve", "",
-		"冲突解决方式：keep-local / keep-cloud / keep-both")
+		"冲突解决方式：keep-local / keep-cloud / keep-both / keep-merged")
+	cmd.Flags().StringVar(&options.Conflict, "conflict", "",
+		"要解决的冲突（服务端变更集 ID），配合 --resolve 一起用")
+	cmd.Flags().BoolVar(&options.Force, "force", false,
+		"覆盖本地改动（覆盖前先备份进回收站；不绕过扫描与权限校验）")
 	cmd.Flags().BoolVar(&options.AllowDelete, "allow-delete", false,
 		"确认把本地删掉的文件也同步到云端（删除传播需要显式确认）")
 	cmd.Flags().BoolVar(&options.PropagateDelete, "propagate-delete", false,
@@ -201,6 +234,22 @@ func runSync(ctx context.Context, options SyncOptions) ([]syncResult, syncqueue.
 	var results []syncResult
 	results = append(results, shareResults...)
 	results = append(results, deleteResults...)
+	// --conflict <id>：先把指定的那个冲突解决掉。
+	// 解决完的那份不再进后面的循环——同一份内容传两遍，
+	// 服务端会多出一个版本，白白多一次审核。
+	if options.Conflict != "" {
+		result, entry, resolved, err := resolveNamedConflict(ctx, client, options)
+		if err != nil {
+			return nil, syncqueue.Queue{}, err
+		}
+		results = append(results, result)
+		if entry.Name != "" && !options.DryRun {
+			state.Upsert(entry)
+		}
+		if resolved != nil {
+			targets = dropTarget(targets, *resolved)
+		}
+	}
 	// 云端删了、本地跟着删的这次也要留痕：这是最需要事后能查清的一类动作。
 	for _, result := range deleteResults {
 		recordSyncResult(ctx, client, SyncTarget{Name: result.Name, Path: result.Path}, result)
@@ -579,6 +628,9 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 		// 云端也判一次：别的设备可能在两次请求之间动过内容（详细设计 §3.6）。
 		var err error
 		changeset, err = confirmWithCloud(ctx, client, target, local, localHash, decision, options.DryRun)
+		// 变更集留着：增量上传要用它开上传会话并提交（详细设计 §2.4.2）。
+		// 冲突时也留着——用户要靠它指定要解决哪个冲突（--conflict）。
+		target.ChangesetID = changeset
 		if err != nil {
 			// 只有服务端明确判了冲突才算冲突。服务端自己出错（500/404/403）
 			// 是失败：失败才进重试队列，报成冲突会让用户去 --resolve 白折腾。
@@ -594,8 +646,9 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 			decision = syncstate.Conflict
 		}
 	}
-	// 变更集留着：增量上传要用它开上传会话并提交（详细设计 §2.4.2）。
-	target.ChangesetID = changeset
+	if target.ChangesetID == "" {
+		target.ChangesetID = changeset
+	}
 	result, entry, err := ApplyDecision(ctx, client, target, decision, local, localHash,
 		skill, found, options)
 	if result.SkillID == "" {
@@ -648,7 +701,8 @@ func confirmWithCloud(ctx context.Context, client *apiclient.Client, target Sync
 		return "", err
 	}
 	if response.Status == "conflict" {
-		return "", fmt.Errorf("%w（%s），不自动覆盖", ErrConflict, response.Message)
+		// 变更集 ID 一起带回去：用户要靠它指定解决哪个冲突（--conflict）。
+		return response.ChangesetID, fmt.Errorf("%w（%s），不自动覆盖", ErrConflict, response.Message)
 	}
 	return response.ChangesetID, nil
 }
@@ -669,8 +723,13 @@ func IdempotencyKey(skillID, localHash, baseHash string) string {
 // OutcomeForError 把提交变更集时的错误归成同步结果。
 func OutcomeForError(target SyncTarget, err error) syncResult {
 	if errors.Is(err, ErrConflict) {
+		detail := err.Error()
+		if target.ChangesetID != "" {
+			detail += "；变更集 " + target.ChangesetID +
+				"，用 --resolve <方式> --conflict " + target.ChangesetID + " 处理"
+		}
 		return syncResult{Name: target.Name, Path: target.Path, Outcome: Conflicted,
-			Detail: err.Error()}
+			Detail: detail}
 	}
 	return failedResult(target, err.Error())
 }
@@ -725,7 +784,14 @@ func ApplyDecision(ctx context.Context, client *apiclient.Client, target SyncTar
 			Detail: version}, entry, nil
 
 	case syncstate.Conflict:
-		return resolveConflict(ctx, client, target, local, localHash, skill, options)
+		result, entry, err := resolveConflict(ctx, client, target, local, localHash, skill, options)
+		if err == nil && !options.DryRun &&
+			result.Outcome != Conflicted && result.Outcome != Failed {
+			// 冲突在本地解决了，服务端那边也得知道：
+			// 那条变更集还挂着「冲突中」，另一台设备看到的还是没解决。
+			reportConflictResolved(ctx, client, target.ChangesetID, options.Resolve)
+		}
+		return result, entry, err
 
 	default: // Upload
 		if options.Direction == "download" {
@@ -844,8 +910,6 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target SyncT
 	entry := syncstate.Entry{Name: target.Name, Agent: target.Agent,
 		BaseHash: target.BaseHash, SkillID: target.SkillID,
 		BaseFiles: target.BaseFiles, BaseSnapshot: target.BaseSnapshot}
-	hint := fmt.Sprintf("本地 %s vs 云端 %s，用 --resolve keep-local/keep-cloud/keep-both 处理",
-		localHash[:8], "已变")
 
 	switch options.Resolve {
 	case "keep-local":
@@ -867,6 +931,19 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target SyncT
 			// 本次只上传：拉云端跟方向反着来，用户说了要保留云端就别硬传。
 			return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
 				Detail: "本次只上传，不能保留云端；要按云端来请用 --direction both"}, entry, nil
+		}
+		// 云端那份要盖掉本地：本地有改动就先备份——
+		// 盖掉了还能找回来（--force 的前提就是有可回滚快照）。
+		if locallyChanged(target) {
+			if !options.Force {
+				return syncResult{Name: target.Name, Path: target.Path, Outcome: Skipped,
+					Detail: "本地有改动，不覆盖；确认要盖掉就加 --force"}, entry, nil
+			}
+			item, err := backupInstalled(target.Name, target.Path)
+			if err != nil {
+				return failedResult(target, "备份本地版本失败: "+err.Error()), syncstate.Entry{}, nil
+			}
+			fmt.Printf("本地改动已备份到回收站 %s\n", item.Entry)
 		}
 		version, err := DownloadInto(ctx, client, target, skill)
 		if err != nil {
@@ -897,41 +974,77 @@ func resolveConflict(ctx context.Context, client *apiclient.Client, target SyncT
 		return syncResult{Name: target.Name, Path: target.Path, Outcome: Uploaded,
 			Detail: fmt.Sprintf("本地版本备份到 %s，云端上传 %s", backup, result.Version)}, entry, nil
 
+	case "keep-merged":
+		// 本地合并文件：按文件三方合并，合不上的地方保留带冲突标记的内容，
+		// 合并完重算摘要再上传（设计文档 §3.6 的 keep-merged）。
+		return mergeAndUpload(ctx, client, target, local, localHash, skill, options, true)
+
 	default:
 		// 先按文件合一次（设计文档 §6.3）：两边改的不是同一处就合掉，
 		// 真的合不了才落到「冲突副本，等人来定」。
-		base, _ := syncstate.Load(Cfg.ConfigDir)
-		prior, _ := base.Find(target.Name, target.Agent)
-		ok, note, mergeErr := MergeConflict(ctx, client, target, prior, local, skill)
-		outcome := Conflicted
-		switch {
-		case mergeErr != nil:
-			// 合并失败得说实话：报成「冲突」的话，用户只会去 --resolve 白折腾。
-			hint = "按文件合并失败：" + mergeErr.Error()
-			outcome = Failed
-		case ok:
-			if result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
-				RelPath: filepath.Base(target.Path)},
-				PublishOptions{Visibility: syncVisibility}); err == nil {
-				entry.SkillID = result.SkillID
-				entry.LastVersion = result.Version
-				// 合并改过本地文件：基线按合并后的内容重算，
-				// 不能记合并前那份摘要。
-				saveBaseline(target, &entry)
-				return syncResult{Name: target.Name, Path: target.Path, Outcome: Uploaded,
-					Detail: note + "，已上传 " + result.Version}, entry, nil
-			}
-		case note != "":
-			hint = note + "；用 --resolve keep-local/keep-cloud/keep-both 强行决定"
-		}
-		// 让服务端也知道这次冲突了：另一台设备可能正等着知道这件事。
-		if !options.DryRun {
-			_ = client.ReportAuditEvent(ctx, "sync.conflict_reported", target.SkillID, "denied",
-				map[string]string{"skill": target.Name, "local_hash": localHash[:12]})
-		}
-		return syncResult{Name: target.Name, Path: target.Path,
-			Outcome: outcome, Detail: hint}, syncstate.Entry{}, nil
+		return mergeAndUpload(ctx, client, target, local, localHash, skill, options, false)
 	}
+}
+
+// mergeAndUpload 按文件合并一次，合并好了就上传。
+//
+// keepConflicts 为真时不把合不上的文件当成失败：带冲突标记的内容就是
+// 合并结果（keep-merged），写回本机后重算摘要再上传。
+func mergeAndUpload(ctx context.Context, client *apiclient.Client, target SyncTarget,
+	local packager.Artifact, localHash string, skill apiclient.Skill,
+	options SyncOptions, keepConflicts bool) (syncResult, syncstate.Entry, error) {
+
+	entry := syncstate.Entry{Name: target.Name, Agent: target.Agent,
+		BaseHash: target.BaseHash, SkillID: target.SkillID,
+		BaseFiles: target.BaseFiles, BaseSnapshot: target.BaseSnapshot}
+	hint := fmt.Sprintf("本地 %s vs 云端 %s，用 --resolve keep-local/keep-cloud/keep-both 处理",
+		localHash[:8], "已变")
+
+	base, _ := syncstate.Load(Cfg.ConfigDir)
+	prior, _ := base.Find(target.Name, target.Agent)
+	ok, note, mergeErr := MergeConflict(ctx, client, target, prior, local, skill, keepConflicts)
+	outcome := Conflicted
+	switch {
+	case mergeErr != nil:
+		// 合并失败得说实话：报成「冲突」的话，用户只会去 --resolve 白折腾。
+		hint = "按文件合并失败：" + mergeErr.Error()
+		outcome = Failed
+	case ok:
+		if result, err := PublishOne(ctx, client, PublishTarget{Dir: target.Path,
+			RelPath: filepath.Base(target.Path)},
+			PublishOptions{Visibility: syncVisibility}); err == nil {
+			entry.SkillID = result.SkillID
+			entry.LastVersion = result.Version
+			// 合并改过本地文件：基线按合并后的内容重算，
+			// 不能记合并前那份摘要。
+			saveBaseline(target, &entry)
+			return syncResult{Name: target.Name, Path: target.Path, Outcome: Uploaded,
+				Detail: note + "，已上传 " + result.Version}, entry, nil
+		}
+	case note != "":
+		hint = note + "；用 --resolve keep-local/keep-cloud/keep-both 强行决定"
+	}
+	// 让服务端也知道这次冲突了：另一台设备可能正等着知道这件事。
+	if !options.DryRun {
+		_ = client.ReportAuditEvent(ctx, "sync.conflict_reported", target.SkillID, "denied",
+			map[string]string{"skill": target.Name, "local_hash": localHash[:12]})
+	}
+	return syncResult{Name: target.Name, Path: target.Path,
+		Outcome: outcome, Detail: hint}, syncstate.Entry{}, nil
+}
+
+// locallyChanged 判断本地这份相对基线是不是被改过。
+//
+// 基线为空（从没同步过）算没改：那时没有可对照的东西。
+func locallyChanged(target SyncTarget) bool {
+	if target.BaseHash == "" {
+		return false
+	}
+	files, err := skillscan.DirHashes(target.Path)
+	if err != nil {
+		return false
+	}
+	return localHashOf(ToHashMap(files)) != target.BaseHash
 }
 
 // DownloadInto 把云端最新已发布版本装回本机目录。
@@ -1138,7 +1251,10 @@ func reportSync(results []syncResult, queue syncqueue.Queue) error {
 		counts[Conflicted], counts[PendingDelete], counts[Deleted],
 		counts[Shared]+counts[WouldShare], counts[Failed])
 	if counts[Conflicted] > 0 {
-		return fmt.Errorf("%d 个存在冲突，需要 --resolve 处理", counts[Conflicted])
+		// 冲突要人来拍板：退出码得是 7（设计文档 §3.2 的退出码表），
+		// 脚本才知道该叫人，而不是当成普通失败去重试。
+		return fmt.Errorf("%w：%d 个存在冲突，需要 --resolve 处理",
+			ErrConflict, counts[Conflicted])
 	}
 	if counts[PendingDelete] > 0 {
 		return fmt.Errorf("%d 个有本地删除待确认，需要 --allow-delete", counts[PendingDelete])

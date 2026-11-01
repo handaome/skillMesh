@@ -29,35 +29,64 @@ func newLoginCmd() *cobra.Command {
 	var manual bool
 	var username string
 	var password string
+	var deviceCode bool
 	cmd := &cobra.Command{
 		Use:   "login [服务端地址]",
 		Short: "登录 SkillMesh：内置账号用用户名密码，或走浏览器授权码 + PKCE",
 		Long: "登录 SkillMesh。位置参数是服务端地址（设计文档 §7.4 的用法）。\n" +
 			"带 --username 走内置账号（用户名 + 密码，不需要浏览器）；\n" +
 			"不带则走浏览器授权码 + PKCE，OIDC issuer 从服务端的公开配置里取。\n" +
-			"没有图形界面时加 --manual：打印授权地址，手动粘贴回调 URL。",
+			"没有图形界面时加 --manual：打印授权地址，手动粘贴回调 URL；\n" +
+			"连回调都不方便时加 --device-code：打印一次性代码，在别的设备上授权。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			server := Cfg.Server
 			explicit := len(args) == 1
 			if explicit {
 				server = strings.TrimRight(args[0], "/")
+				// 位置参数优先于配置里的默认地址：记住它，登录后连的也是它。
+				Cfg.Server = server
 			}
 			// 内置账号：用户名 + 密码。这条路不需要浏览器。
 			if username != "" {
 				return loginWithPassword(cmd.Context(), server, username, password)
+			}
+			if deviceCode {
+				return runDeviceLogin(cmd.Context(), server, explicit)
 			}
 			return runOidcLogin(cmd.Context(), server, explicit, manual)
 		},
 	}
 	cmd.Flags().BoolVar(&manual, "manual", false,
 		"无浏览器环境：打印授权地址，手动粘贴回调 URL")
+	cmd.Flags().BoolVar(&deviceCode, "device-code", false,
+		"无浏览器环境：打印一次性代码，在别的设备上完成授权")
 	cmd.Flags().StringVar(&username, "username", "",
 		"内置账号的用户名（给了就走用户名密码登录，不用浏览器）")
 	cmd.Flags().StringVar(&password, "password", "",
 		"内置账号的密码（不给就在终端里输入，不回显）")
 	cmd.AddCommand(newLoginStatusCmd())
 	return cmd
+}
+
+// runDeviceLogin 走设备授权流程登录。
+//
+// 与授权码流程同源：先定出 issuer 与 client_id，再换令牌、存凭据。
+func runDeviceLogin(ctx context.Context, server string, explicit bool) error {
+	issuer, clientID, err := issuerFor(ctx, server, explicit)
+	if err != nil {
+		return err
+	}
+	tokens, err := runDeviceFlow(ctx, issuer, clientID)
+	if err != nil {
+		return err
+	}
+	if err := saveLoginState(tokens); err != nil {
+		return err
+	}
+	fmt.Printf("已登录，令牌有效期至 %s\n",
+		tokens.ExpiresAt.Local().Format(time.RFC3339))
+	return nil
 }
 
 // newLoginStatusCmd 看看当前登录的是谁。
@@ -100,24 +129,41 @@ func newLoginStatusCmd() *cobra.Command {
 }
 
 // runOidcLogin 走浏览器授权码 + PKCE。
+func runOidcLogin(ctx context.Context, server string, explicit, manual bool) error {
+	issuerURL, clientID, err := issuerFor(ctx, server, explicit)
+	if err != nil {
+		return err
+	}
+	tokens, err := runPkceFlow(ctx, issuerURL, clientID, manual)
+	if err != nil {
+		return err
+	}
+	if err := saveLoginState(tokens); err != nil {
+		return err
+	}
+	fmt.Printf("已登录，令牌有效期至 %s\n",
+		tokens.ExpiresAt.Local().Format(time.RFC3339))
+	return nil
+}
+
+// issuerFor 定出这次登录用哪个 issuer 与 client_id。
 //
 // issuer 的来路有两条：传了服务端地址就从它的公开配置里取；
 // 没传就认环境变量 SM_OIDC_ISSUER。
-func runOidcLogin(ctx context.Context, server string, explicit, manual bool) error {
-	var issuerURL string
+func issuerFor(ctx context.Context, server string, explicit bool) (issuer, clientID string, err error) {
+	clientID = Cfg.ClientID
 	// 服务端是不是只开了内置账号。走不通浏览器授权码时，靠它说清该怎么办。
 	localAuthOnly := false
-	clientID := Cfg.ClientID
 	if explicit {
 		// 位置参数是服务端地址：从它的公开配置里取 issuer。
 		// 设计文档 §7.4 写的是 `login https://skills.example.com`——
 		// 那是服务端，不是 issuer，混用会连错地方。
 		cfg, err := apiclient.FetchPublicConfig(ctx, server)
 		if err != nil {
-			return fmt.Errorf("取服务端公开配置失败（%s）：%w；"+
+			return "", "", fmt.Errorf("取服务端公开配置失败（%s）：%w；"+
 				"也可以用环境变量 SM_OIDC_ISSUER 直接指定 issuer", server, err)
 		}
-		issuerURL = cfg.Issuer
+		issuer = cfg.Issuer
 		localAuthOnly = cfg.LocalAuth && cfg.Issuer == ""
 		if cfg.ClientID != "" {
 			clientID = cfg.ClientID
@@ -126,32 +172,32 @@ func runOidcLogin(ctx context.Context, server string, explicit, manual bool) err
 		// 否则后续 sync 还会连默认的 localhost。
 		Cfg.Server = server
 	}
-	if issuerURL == "" {
-		issuerURL = os.Getenv("SM_OIDC_ISSUER")
+	if issuer == "" {
+		issuer = os.Getenv("SM_OIDC_ISSUER")
 	}
-	if issuerURL == "" {
+	if issuer == "" {
 		// 服务端只开了内置账号：浏览器授权码这条路根本走不通。
 		// 直接说清要加 --username，别让人去设一个不存在的 issuer。
 		if localAuthOnly {
-			return fmt.Errorf("这个服务端只支持内置账号登录：请加 --username <用户名>")
+			return "", "", fmt.Errorf("这个服务端只支持内置账号登录：请加 --username <用户名>")
 		}
-		return fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
+		return "", "", fmt.Errorf("缺少 issuer：skillmesh login <服务端地址>，" +
 			"或设环境变量 SM_OIDC_ISSUER")
 	}
-	tokens, err := runPkceFlow(ctx, issuerURL, clientID, manual)
-	if err != nil {
-		return err
-	}
+	return issuer, clientID, nil
+}
+
+// saveLoginState 存令牌并记住这台服务端。
+//
+// 服务端地址登录成功才写：失败时不该把配置改掉。
+func saveLoginState(tokens auth.Tokens) error {
 	path := tokenPath()
 	if err := tokens.Save(path); err != nil {
 		return err
 	}
-	// 登录成功才写服务端地址：失败时不该把配置改掉。
 	if err := config.SaveServer(Cfg.Server); err != nil {
 		fmt.Fprintf(os.Stderr, "提示：服务端地址没写进配置（%v），后续命令请用 --server 指定\n", err)
 	}
-	fmt.Printf("已登录，令牌有效期至 %s\n",
-		tokens.ExpiresAt.Local().Format(time.RFC3339))
 	fmt.Printf("若系统凭据管理器不可用，令牌回退保存在 %s\n", path)
 	return nil
 }
@@ -161,19 +207,11 @@ func runOidcLogin(ctx context.Context, server string, explicit, manual bool) err
 // 密码不给 --password 就在终端里输入（不回显）：命令行参数会留在
 // shell 历史与进程列表里，密码不该出现在那里。
 func loginWithPassword(ctx context.Context, server, username, password string) error {
-	if password == "" {
-		password = os.Getenv("SM_PASSWORD")
+	typed, err := readPassword(password, username)
+	if err != nil {
+		return err
 	}
-	if password == "" {
-		fmt.Printf("请输入 %s 的密码（不回显）：", username)
-		typed, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Println()
-		if err != nil {
-			return fmt.Errorf("读取密码失败: %w", err)
-		}
-		password = string(typed)
-	}
-	tokens, err := apiclient.PasswordLogin(ctx, server, username, password)
+	tokens, err := apiclient.PasswordLogin(ctx, server, username, typed)
 	if err != nil {
 		return err
 	}
@@ -182,17 +220,91 @@ func loginWithPassword(ctx context.Context, server, username, password string) e
 		RefreshToken: tokens.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second),
 	}
-	path := tokenPath()
-	if err := saved.Save(path); err != nil {
+	if err := saveLoginState(saved); err != nil {
 		return err
-	}
-	if err := config.SaveServer(server); err != nil {
-		fmt.Fprintf(os.Stderr, "提示：服务端地址没写进配置（%v），后续命令请用 --server 指定\n", err)
 	}
 	fmt.Printf("已登录（%s），令牌有效期至 %s\n",
 		username, saved.ExpiresAt.Local().Format(time.RFC3339))
-	fmt.Printf("若系统凭据管理器不可用，令牌回退保存在 %s\n", path)
 	return nil
+}
+
+// readPassword 拿密码：命令行给的、环境变量给的、终端里问的。
+//
+// 命令行参数会留在 shell 历史与进程列表里，密码不该出现在那里
+// （设计文档 §3.3 的安全规则）。
+func readPassword(password, username string) (string, error) {
+	if password != "" {
+		return password, nil
+	}
+	if env := os.Getenv("SM_PASSWORD"); env != "" {
+		return env, nil
+	}
+	fmt.Printf("请输入 %s 的密码（不回显）：", username)
+	typed, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", fmt.Errorf("读取密码失败: %w", err)
+	}
+	return string(typed), nil
+}
+
+// newRegisterCmd 注册内置账号（设计文档 §3.3）。
+//
+// 服务端不开放自助注册时（skillmesh.auth.allow-register=false）会回 403，
+// 那时该找管理员建号，不是换个参数能绕过去的。
+func newRegisterCmd() *cobra.Command {
+	var username, password, displayName, email string
+	cmd := &cobra.Command{
+		Use:   "register [服务端地址]",
+		Short: "注册内置账号",
+		Long: "注册一个内置账号（用户名 + 密码）。\n" +
+			"密码最短 8 位、最长 72 位（72 是 BCrypt 的硬上限）。\n" +
+			"服务端不开放自助注册时会回 403，让管理员建号。",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			server := Cfg.Server
+			if len(args) == 1 {
+				server = strings.TrimRight(args[0], "/")
+				Cfg.Server = server
+			}
+			if username == "" {
+				return fmt.Errorf("要给 --username")
+			}
+			typed, err := readPassword(password, username)
+			if err != nil {
+				return err
+			}
+			// 8-72 是服务端与 BCrypt 的共同要求（72 是硬上限，
+			// 超出的部分会被静默截断）。先在本地挡住，别让服务端才说。
+			if len([]rune(typed)) < 8 || len([]rune(typed)) > 72 {
+				return fmt.Errorf("密码长度要在 8-72 个字符之间")
+			}
+			tokens, err := apiclient.Register(cmd.Context(), server, username, typed, displayName, email)
+			if err != nil {
+				if apiclient.CodeOf(err) == "FORBIDDEN" {
+					return fmt.Errorf("这个服务端不开放自助注册，让管理员建号吧")
+				}
+				return err
+			}
+			// 注册端点直接给令牌：注册完就是登录状态。
+			saved := auth.Tokens{
+				AccessToken:  tokens.AccessToken,
+				RefreshToken: tokens.RefreshToken,
+				ExpiresAt:    time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second),
+			}
+			if err := saveLoginState(saved); err != nil {
+				return err
+			}
+			fmt.Printf("已注册并登录（%s），令牌有效期至 %s\n",
+				username, saved.ExpiresAt.Local().Format(time.RFC3339))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&username, "username", "", "用户名")
+	cmd.Flags().StringVar(&password, "password", "", "密码（不给就在终端里输入，不回显）")
+	cmd.Flags().StringVar(&displayName, "display-name", "", "显示名")
+	cmd.Flags().StringVar(&email, "email", "", "邮箱")
+	return cmd
 }
 
 func newLogoutCmd() *cobra.Command {
