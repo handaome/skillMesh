@@ -759,9 +759,11 @@ agents:
 ./skillmesh.exe --json installations        # 各台机器上装了什么
 ./skillmesh.exe --json logs --tail 20       # 本机操作日志
 ./skillmesh.exe --json scan --path ./skills # 本机扫描结果
+./skillmesh.exe --json doctor               # 诊断
 ```
 
-目前支持 `--json` 的就是上面这六个命令。给别的命令加 `--json` 会在 stderr 提示「暂不支持」，输出仍是人读格式——不会悄悄混进半个 JSON。
+目前支持 `--json` 的就是上面这些，加上 `group` 的五个子命令（`list`/`show`/`create`/`update`/`install`）。
+给别的命令加 `--json` 会在 stderr 提示「暂不支持」，输出仍是人读格式——不会悄悄混进半个 JSON。
 
 失败时 stderr 给一个信封：
 
