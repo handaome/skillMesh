@@ -5,6 +5,7 @@ import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.SafePath;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,8 +49,8 @@ public class SourceService {
 
     /** 解析仓库，返回其中的 Skill 候选清单。 */
     public ResolveResult resolve(String repositoryUrl, String subpath, String ref) {
-        String url = policy.requireAllowed(repositoryUrl);
-        try (Checkout checkout = checkout(url, ref)) {
+        GitHostPolicy.Allowed allowed = policy.allow(repositoryUrl);
+        try (Checkout checkout = checkout(allowed, ref)) {
             return new ResolveResult(repositoryUrl, checkout.commit(),
                 candidates(checkout.root(), subpath));
         } catch (IOException e) {
@@ -67,13 +68,16 @@ public class SourceService {
      * 临时目录归调用方管（try-with-resources 关掉即删）。
      */
     public Checkout checkout(String repositoryUrl, String ref) {
-        String url = policy.requireAllowed(repositoryUrl);
+        return checkout(policy.allow(repositoryUrl), ref);
+    }
+
+    private Checkout checkout(GitHostPolicy.Allowed allowed, String ref) {
         acquireSlot();
         Path workspace = null;
         try {
             workspace = Files.createTempDirectory("skillmesh-source-");
             // 仓库直接建在工作区里：root 就是仓库根，扫描与定位子目录都对着它。
-            String commit = clone(url, ref, workspace);
+            String commit = clone(allowed, ref, workspace);
             return new Checkout(workspace, commit);
         } catch (ApiException e) {
             deleteQuietly(workspace);
@@ -102,9 +106,10 @@ public class SourceService {
 
     /** 查远端某个 ref 指向的 commit，不带完整内容。 */
     public UpdateCheck checkUpdates(String repositoryUrl, String ref) {
-        String url = policy.requireAllowed(repositoryUrl);
+        GitHostPolicy.Allowed allowed = policy.allow(repositoryUrl);
         try {
-            String head = run(List.of("git", "ls-remote", url, ref == null || ref.isBlank() ? "HEAD" : ref));
+            String head = run(List.of("git", "ls-remote", allowed.url(),
+                ref == null || ref.isBlank() ? "HEAD" : ref), pin(allowed));
             String commit = head.isBlank() ? "" : head.split("\\s+")[0];
             return new UpdateCheck(commit, repositoryUrl, ref == null ? "" : ref);
         } catch (IOException e) {
@@ -115,7 +120,9 @@ public class SourceService {
         }
     }
 
-    private String clone(String url, String ref, Path target) throws IOException, InterruptedException {
+    private String clone(GitHostPolicy.Allowed allowed, String ref, Path target)
+            throws IOException, InterruptedException {
+        String url = allowed.url();
         run(List.of("git", "init", "--quiet", target.toString()));
         // 关掉换行自动转换：Skill 里常带 shell 脚本，转成 CRLF 到了 Unix 上就跑不起来。
         run(List.of("git", "-C", target.toString(), "config", "core.autocrlf", "false"));
@@ -123,7 +130,7 @@ public class SourceService {
         List<String> fetch = new ArrayList<>(List.of(
             "git", "-C", target.toString(), "fetch", "--depth", "1", "--quiet", "origin"));
         fetch.add(ref == null || ref.isBlank() ? "HEAD" : ref);
-        run(fetch);
+        run(fetch, pin(allowed));
         run(List.of("git", "-C", target.toString(), "checkout", "--quiet", "FETCH_HEAD"));
         return run(List.of("git", "-C", target.toString(), "rev-parse", "HEAD"));
     }
@@ -192,23 +199,78 @@ public class SourceService {
      * 会跟着这次重定向走，于是 github.com 302 到 169.254.169.254 是能打通的。
      * 关掉之后重定向直接失败，用户改用最终地址就行。
      *
-     * ponytail: 只挡 HTTP 重定向，ssh:// 仍走 GitHostPolicy 的 DNS 校验，
-     * 校验与 git 自己的解析之间仍有 DNS rebinding 窗口。
-     * 升级路径：解析后把 IP 固定给 git（http.curloptResolve / ssh config Host）。
+     * 顺带把地址固定也挂上去：-c 的选项要排在子命令前面。
      */
-    private static List<String> withSafeRedirects(List<String> command) {
+    private static List<String> withSafeRedirects(List<String> command, Pin pin) {
         if (command.isEmpty() || !"git".equals(command.get(0))) {
             return command;
         }
-        List<String> safe = new ArrayList<>(command);
-        safe.add(1, "-c");
-        safe.add(2, "http.followRedirects=false");
-        return safe;
+        List<String> prefix = new ArrayList<>(List.of("git", "-c", "http.followRedirects=false"));
+        if (pin != null) {
+            for (String option : pin.options()) {
+                prefix.add("-c");
+                prefix.add(option);
+            }
+        }
+        prefix.addAll(command.subList(1, command.size()));
+        return prefix;
+    }
+
+    /**
+     * 一次 git 操作的地址固定：命令行选项与 ssh 命令。
+     *
+     * @param options git 的 -c 选项（http.curloptResolve）
+     * @param sshCommand ssh 命令（ssh:// 时用）
+     */
+    record Pin(List<String> options, String sshCommand) {}
+
+    /**
+     * 把 git 连的地址固定到刚校验过的那个。
+     *
+     * 校验与 git 自己的解析之间有时间差：这段时间里 DNS 换成内网地址，
+     * 校验就白做了（DNS rebinding）。
+     *
+     * https 用 curl 的 resolve 把主机钉在这些地址上；ssh 用 HostName 指到
+     * 那个地址，再用 HostKeyAlias 保住主机名——主机密钥照旧按域名校验，
+     * 不会因为换了地址就跳过校验。
+     */
+    Pin pin(GitHostPolicy.Allowed allowed) {
+        String scheme = allowed.url().startsWith("ssh://") ? "ssh" : "https";
+        if ("ssh".equals(scheme)) {
+            return new Pin(List.of(),
+                "ssh -o HostName=" + allowed.addresses().get(0)
+                    + " -o HostKeyAlias=" + allowed.host());
+        }
+        int port = 443;
+        try {
+            int parsed = URI.create(allowed.url()).getPort();
+            if (parsed > 0) {
+                port = parsed;
+            }
+        } catch (IllegalArgumentException ignored) {
+            // 地址已经校验过了，解析不出端口就用默认的。
+        }
+        StringBuilder resolve = new StringBuilder();
+        for (String address : allowed.addresses()) {
+            if (resolve.length() > 0) {
+                resolve.append(',');
+            }
+            resolve.append(allowed.host()).append(':').append(port).append(':').append(address);
+        }
+        return new Pin(List.of("http.curloptResolve=" + resolve), "");
     }
 
     String run(List<String> command) throws IOException, InterruptedException {
-        ProcessBuilder builder = new ProcessBuilder(withSafeRedirects(command));
+        return run(command, null);
+    }
+
+    String run(List<String> command, Pin pin) throws IOException, InterruptedException {
+        ProcessBuilder builder = new ProcessBuilder(withSafeRedirects(command, pin));
         builder.redirectErrorStream(true);
+        // ssh:// 的地址固定走环境变量：git 调 ssh 时才用得上。
+        if (pin != null && !pin.sshCommand().isBlank()) {
+            builder.environment().put("GIT_SSH_COMMAND", pin.sshCommand());
+        }
         // 显式配了代理就写进 git 的环境。系统环境里的 HTTPS_PROXY 本身就会继承，
         // 不配这个项也能走代理——这个项是给「代理只配在服务里」的场景用的。
         if (!proxy.isBlank()) {

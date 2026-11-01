@@ -5,6 +5,7 @@ import com.skillmesh.api.common.ErrorCodes;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -37,6 +38,20 @@ public class GitHostPolicy {
      * 只接受 https 和 ssh——http 明文、file:// 读本地文件、其它协议一律拒。
      */
     public String requireAllowed(String rawUrl) {
+        return allow(rawUrl).url();
+    }
+
+    /**
+     * 校验通过的主机：规范化后的地址、主机名、刚校验过的公网地址。
+     *
+     * 地址要一并交出去：校验与 git 自己的解析之间有时间差，这段时间里
+     * DNS 换成内网地址，校验就白做了（DNS rebinding）。把刚验过的地址
+     * 钉给 git，那段时间差就没有了。
+     */
+    public record Allowed(String url, String host, List<String> addresses) {}
+
+    /** 校验仓库地址能不能拉，通过就返回可以放心连的主机。 */
+    public Allowed allow(String rawUrl) {
         URI uri = parse(rawUrl);
         String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
         if (!"https".equals(scheme) && !"ssh".equals(scheme)) {
@@ -56,25 +71,30 @@ public class GitHostPolicy {
                 throw forbidden("仓库地址不得内嵌密码");
             }
         }
-        requirePublicAddress(host);
-        return rawUrl.trim();
+        return new Allowed(rawUrl.trim(), host, requirePublicAddress(host));
     }
 
-    /** 解析主机名，任一地址落在内网就拒。 */
-    private void requirePublicAddress(String host) {
+    /** 解析主机名，任一地址落在内网就拒。返回通过校验的地址。 */
+    private List<String> requirePublicAddress(String host) {
         InetAddress[] addresses;
         try {
             addresses = InetAddress.getAllByName(host);
         } catch (UnknownHostException e) {
             throw forbidden("主机名解析失败：" + host);
         }
+        List<String> allowed = new ArrayList<>();
         for (InetAddress address : addresses) {
             if (address.isLoopbackAddress() || address.isAnyLocalAddress()
                 || address.isLinkLocalAddress() || address.isSiteLocalAddress()
                 || isUniqueLocal(address)) {
                 throw forbidden("主机指向内网地址，拒绝（SSRF 防护）：" + host);
             }
+            allowed.add(address.getHostAddress());
         }
+        if (allowed.isEmpty()) {
+            throw forbidden("主机名解析不出地址：" + host);
+        }
+        return allowed;
     }
 
     /** 100.64.0.0/10 这段运营商级 NAT 不在 isSiteLocalAddress 覆盖范围内。 */

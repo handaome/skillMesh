@@ -33,11 +33,19 @@ class SourceServiceCloneTest {
     @MockitoBean
     private GitHostPolicy policy;
 
+    /** 放行本地地址：策略只认 https/ssh，测试不走公网。 */
+    private void allowAnyUrl() {
+        when(policy.allow(anyString())).thenAnswer(call -> {
+            String url = call.getArgument(0);
+            return new GitHostPolicy.Allowed(url, "localhost", List.of("127.0.0.1"));
+        });
+    }
+
     @Test
     void 浅克隆后能找到仓库里的Skill目录() throws Exception {
         assumeTrue(gitAvailable(), "本机没有 git，跳过");
         String url = localBareRepo();
-        when(policy.requireAllowed(anyString())).thenAnswer(call -> call.getArgument(0));
+        allowAnyUrl();
 
         SourceService.ResolveResult result = sources.resolve(url, null, null);
 
@@ -50,7 +58,7 @@ class SourceServiceCloneTest {
     void 检出目录本身就是仓库根() throws Exception {
         assumeTrue(gitAvailable(), "本机没有 git，跳过");
         String url = localBareRepo();
-        when(policy.requireAllowed(anyString())).thenAnswer(call -> call.getArgument(0));
+        allowAnyUrl();
 
         try (SourceService.Checkout checkout = sources.checkout(url, "HEAD")) {
             // 定位 Skill 目录按的是检出的根：根下必须直接能看见 skills/probe。
@@ -62,7 +70,7 @@ class SourceServiceCloneTest {
     void 标签要认成标签而不是分支() throws Exception {
         assumeTrue(gitAvailable(), "本机没有 git，跳过");
         String url = localBareRepo();
-        when(policy.requireAllowed(anyString())).thenAnswer(call -> call.getArgument(0));
+        allowAnyUrl();
 
         try (SourceService.Checkout checkout = sources.checkout(url, "v1.0.0")) {
             assertThat(sources.refType(checkout.root(), "v1.0.0")).isEqualTo("tag");
