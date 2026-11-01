@@ -102,6 +102,16 @@ skillmesh:
     cleanup-interval-ms: ${SM_RECYCLE_CLEANUP_INTERVAL_MS:3600000}
     # 启动后先等一会儿再跑第一次，别和迁移抢资源。
     cleanup-initial-delay-ms: ${SM_RECYCLE_CLEANUP_INITIAL_DELAY_MS:600000}
+  # 审计表按月分区：到期整月分区直接 DROP，清理是一条语句的事。
+  audit:
+    # 分区维护与保留期清理。默认开着：清理很便宜且幂等。
+    partition-enabled: ${SM_AUDIT_PARTITION_ENABLED:true}
+    # 间隔用毫秒数：cron 得按时区解释，换个时区清理时间就悄悄变了。
+    cleanup-interval-ms: ${SM_AUDIT_CLEANUP_INTERVAL_MS:86400000}
+    # 启动后先等一会儿再跑第一次，别和迁移抢资源。
+    cleanup-initial-delay-ms: ${SM_AUDIT_CLEANUP_INITIAL_DELAY_MS:600000}
+    # 审计保留多少个月。超过这个月的审计整月分区丢掉。
+    retention-months: ${SM_AUDIT_RETENTION_MONTHS:12}
 
 management:
   endpoints:
