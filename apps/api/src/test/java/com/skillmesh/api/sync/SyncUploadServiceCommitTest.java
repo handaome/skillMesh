@@ -204,6 +204,39 @@ class SyncUploadServiceCommitTest {
     }
 
     @Test
+    void 扫出真凭据的版本进隔离而不是发布() throws IOException {
+        // AWS Access Key 的形状：AKIA 加 16 位大写字母数字。
+        String secret = "AKIAIOSFODNN7EXAMPLE";
+        Map<String, byte[]> content = new LinkedHashMap<>();
+        content.put("SKILL.md", (SKILL_MD_V2 + "\naws_key = " + secret + "\n")
+            .getBytes(StandardCharsets.UTF_8));
+        content.put("guide.md", GUIDE_V1.getBytes(StandardCharsets.UTF_8));
+
+        SyncChangesetResponse changeset = submit(content);
+        byte[] changed = content.get("SKILL.md");
+        var slots = syncUploads.openUploads(owner, changeset.changesetId(), List.of(
+            new SyncUploadService.FileSpec("SKILL.md", ContentDigest.sha256(changed),
+                changed.length, "text/markdown")));
+        UUID sessionId = UUID.fromString(slots.get(0).uploadId());
+        uploadService.store(owner, sessionId, new ByteArrayInputStream(changed), changed.length,
+            "text/markdown");
+        uploadService.complete(owner, sessionId);
+
+        Map<String, Object> result = syncUploads.commit(owner, changeset.changesetId(),
+            baseRevision);
+
+        // 扫出真凭据 → 隔离，不是发布（设计文档 §10.1、§4.3 SEC-001）。
+        assertThat(result.get("version_status")).isEqualTo(VersionStatus.quarantined);
+        SkillVersionEntity version = versionOf("1.0.1");
+        assertThat(version.getStatus()).isEqualTo(VersionStatus.quarantined);
+        // 扫描流水里不能出现密钥值：结论是「哪个文件第几行像 AWS Key」，不是密钥本身。
+        String findings = jdbc.queryForObject(
+            "select findings_json::text from skill_scans where skill_version_id = ?",
+            String.class, version.getId());
+        assertThat(findings).doesNotContain(secret);
+    }
+
+    @Test
     void 合出来的内容跟本地声明的不一致就报错() {
         Map<String, byte[]> content = new LinkedHashMap<>();
         content.put("SKILL.md", SKILL_MD_V2.getBytes(StandardCharsets.UTF_8));

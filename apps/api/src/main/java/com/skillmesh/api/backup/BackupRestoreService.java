@@ -446,8 +446,15 @@ public class BackupRestoreService {
         }
     }
 
-    /** 对象存储：把备份里的对象放回桶里。制品按摘要寻址，重放一次是同内容覆盖。 */
-    private int restoreObjects(Path target) throws Exception {
+    /**
+     * 只恢复对象存储部分。
+     *
+     * 与 {@link #restoreDatabase} 对称：数据恢复了、对象还没恢复（或反过来）
+     * 时，只补缺的那一半，不必为了恢复对象去建一个空库。
+     *
+     * 对象存储：把备份里的对象放回桶里。制品按摘要寻址，重放一次是同内容覆盖。
+     */
+    public int restoreObjects(Path target) throws Exception {
         Manifest manifest = json.readValue(target.resolve("manifest.json").toFile(),
             Manifest.class);
         int count = 0;
