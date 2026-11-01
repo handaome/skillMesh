@@ -264,7 +264,8 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 			}, nil
 		}
 		skill, err = createSkill(ctx, client, slug, displayName, description, options,
-			sourceOf(target.Dir, skillscan.DetectLicense(target.Dir)), metadata)
+			sourceOf(target.Dir, skillscan.DetectLicense(target.Dir)), metadata,
+			artifact.SHA256)
 		if err != nil {
 			return publishResult{}, err
 		}
@@ -299,7 +300,7 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 		}, nil
 	}
 
-	created, err := client.CreateVersion(ctx, skill.ID, apiclient.CreateVersionRequest{
+	versionReq := apiclient.CreateVersionRequest{
 		Version:   version,
 		Channel:   orDefaultChannel(options.Channel),
 		SizeBytes: artifact.SizeBytes,
@@ -308,7 +309,11 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 		Manifest:  toManifest(artifact.Manifest),
 		// 基线带上，服务端才知道这次上传是基于哪个云端版本做的。
 		ExpectedBaseRevision: options.ExpectedBaseRevision,
-	})
+	}
+	// 幂等键按「版本请求体 + 内容摘要」算：同样的内容重发只会有一个版本，
+	// 内容变了就是另一次发布（键也变了）。
+	created, err := client.CreateVersion(ctx, skill.ID, versionReq,
+		apiclient.IdempotencyKey("skill-versions", artifact.SHA256, versionReq))
 	if err != nil {
 		return publishResult{}, err
 	}
@@ -394,10 +399,14 @@ func warnSkippedLinks(skipped []string) {
 //
 // meta 是 SKILL.md 的 frontmatter：扩展元信息（platforms/license/tags 等）
 // 随这一次发布一起上云，别的 Agent 装的时候能读到。
+//
+// contentDigest 是这次发布的内容摘要：幂等键里要算上它——
+// 请求体只有元数据，同样的元数据可能对应两次不同的发布。
 func createSkill(ctx context.Context, client *apiclient.Client, slug, displayName, description string,
-	options PublishOptions, source *apiclient.SkillSource, meta skillscan.Metadata) (apiclient.Skill, error) {
+	options PublishOptions, source *apiclient.SkillSource, meta skillscan.Metadata,
+	contentDigest string) (apiclient.Skill, error) {
 
-	skill, err := client.CreateSkill(ctx, apiclient.CreateSkillRequest{
+	req := apiclient.CreateSkillRequest{
 		Slug:           slug,
 		Name:           displayName,
 		Description:    description,
@@ -407,7 +416,9 @@ func createSkill(ctx context.Context, client *apiclient.Client, slug, displayNam
 		Source:         source,
 		Tags:           publishTags(meta.Tags),
 		Metadata:       meta.Extra(),
-	})
+	}
+	skill, err := client.CreateSkill(ctx, req,
+		apiclient.IdempotencyKey("skills", contentDigest, req))
 	if err != nil {
 		return apiclient.Skill{}, explainSlugTaken(err, slug, options.Scope)
 	}

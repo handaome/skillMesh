@@ -3,6 +3,9 @@ package apiclient
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,12 +82,42 @@ type UploadSession struct {
 }
 
 // CreateSkill 建一个 Skill 元数据。
-func (c *Client) CreateSkill(ctx context.Context, req CreateSkillRequest) (Skill, error) {
+//
+// idempotencyKey 是这次创建的幂等键：断网重试时必须复用同一个，
+// 不然服务端会建出第二个同名 Skill（详细设计 §2.1、§4.3 API-001）。
+func (c *Client) CreateSkill(ctx context.Context, req CreateSkillRequest,
+	idempotencyKey string) (Skill, error) {
 	var out Skill
-	if err := c.doWith(ctx, http.MethodPost, "/skills", nil, req, &out); err != nil {
+	if err := c.doWith(ctx, http.MethodPost, "/skills", nil, req, &out,
+		idempotencyHeaders(idempotencyKey)); err != nil {
 		return Skill{}, err
 	}
 	return out, nil
+}
+
+// IdempotencyKey 按「作用域 + 内容摘要 + 请求体」算幂等键。
+//
+// 服务端按「同一个键 = 同一次请求」处理：重试时把上次的响应原样还回来，
+// 不再建一份。
+//
+// 键必须是请求内容的函数：同一个键配了不同的内容，服务端会拒（409）。
+// 内容摘要也要算进去：建 Skill 的请求体只有元数据，同样的元数据
+// 可能对应两次不同的发布（内容变了）。
+func IdempotencyKey(scope, contentDigest string, body any) string {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(scope + "|" + contentDigest + "|" + string(raw)))
+	return scope + "-" + hex.EncodeToString(sum[:])[:32]
+}
+
+// idempotencyHeaders 把幂等键变成请求头。没键就一个头都不带。
+func idempotencyHeaders(key string) map[string]string {
+	if key == "" {
+		return nil
+	}
+	return map[string]string{"Idempotency-Key": key}
 }
 
 // FindSkillBySlug 按 slug 精确找 Skill。找不到返回 false。
@@ -109,10 +142,15 @@ func (c *Client) FindSkillBySlug(ctx context.Context, slug string) (Skill, bool,
 }
 
 // CreateVersion 建一个候选版本，返回直传对象存储的目标。
-func (c *Client) CreateVersion(ctx context.Context, skillID string, req CreateVersionRequest) (CreateVersionResponse, error) {
+//
+// idempotencyKey 是这次创建的幂等键：断网重试时必须复用同一个，
+// 不然服务端会多出一个版本（详细设计 §2.1、§4.3 API-001）。
+func (c *Client) CreateVersion(ctx context.Context, skillID string, req CreateVersionRequest,
+	idempotencyKey string) (CreateVersionResponse, error) {
 	var out CreateVersionResponse
 	path := "/skills/" + url.PathEscape(skillID) + "/versions"
-	if err := c.doWith(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+	if err := c.doWith(ctx, http.MethodPost, path, nil, req, &out,
+		idempotencyHeaders(idempotencyKey)); err != nil {
 		return CreateVersionResponse{}, err
 	}
 	return out, nil
