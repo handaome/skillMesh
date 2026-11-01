@@ -53,6 +53,12 @@ fi
 legacy=$(git -C "$ROOT" log --diff-filter=D --name-only --pretty=format: -- "$DIR/V*.sql" 2>/dev/null \
   | sed -n 's|.*/V\([0-9][0-9]*\)__.*|\1|p' | sort -n -u)
 
+# 已提交的链（HEAD 上的版本号）：新迁移只能排在它后面。
+# 一次加好几条迁移时（V15、V16、V17 一起提交），新迁移之间不算插队——
+# 插队的意思是「插到已经跑过的迁移前面」，那要看的是已提交的那条链。
+committed=$(git -C "$ROOT" ls-tree -r --name-only HEAD -- "$DIR" 2>/dev/null \
+  | sed -n 's|.*/V\([0-9][0-9]*\)__.*|\1|p')
+
 # 新加的迁移（相对 HEAD 是新增文件，或还没提交的新文件）：
 # 既不能用旧号，也不能插队。
 while IFS= read -r path; do
@@ -64,9 +70,9 @@ while IFS= read -r path; do
     echo "V$version 旧链用过（$base）：在按旧链建过表的库上用上去就是 checksum mismatch，换个号" >&2
     status=1
   fi
-  for other in "${versions[@]}"; do
-    if [ "$other" -gt "$version" ] && [ "${seen[$other]}" != "$base" ]; then
-      echo "V$version 插队了：链上已经有 V$other（${seen[$other]}），新迁移要排在链尾" >&2
+  for other in $committed; do
+    if [ "$other" -gt "$version" ]; then
+      echo "V$version 插队了：链上已经有 V$other，新迁移要排在链尾" >&2
       status=1
     fi
   done
