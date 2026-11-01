@@ -3,6 +3,7 @@ package com.skillmesh.api.source;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.SafePath;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -184,8 +185,29 @@ public class SourceService {
         return found;
     }
 
-    private String run(List<String> command) throws IOException, InterruptedException {
-        ProcessBuilder builder = new ProcessBuilder(command);
+    /**
+     * git 命令一律关掉 HTTP 重定向跟随。
+     *
+     * 主机白名单和 DNS 校验只管得住初始 URL；git 默认的 followRedirects=initial
+     * 会跟着这次重定向走，于是 github.com 302 到 169.254.169.254 是能打通的。
+     * 关掉之后重定向直接失败，用户改用最终地址就行。
+     *
+     * ponytail: 只挡 HTTP 重定向，ssh:// 仍走 GitHostPolicy 的 DNS 校验，
+     * 校验与 git 自己的解析之间仍有 DNS rebinding 窗口。
+     * 升级路径：解析后把 IP 固定给 git（http.curloptResolve / ssh config Host）。
+     */
+    private static List<String> withSafeRedirects(List<String> command) {
+        if (command.isEmpty() || !"git".equals(command.get(0))) {
+            return command;
+        }
+        List<String> safe = new ArrayList<>(command);
+        safe.add(1, "-c");
+        safe.add(2, "http.followRedirects=false");
+        return safe;
+    }
+
+    String run(List<String> command) throws IOException, InterruptedException {
+        ProcessBuilder builder = new ProcessBuilder(withSafeRedirects(command));
         builder.redirectErrorStream(true);
         // 显式配了代理就写进 git 的环境。系统环境里的 HTTPS_PROXY 本身就会继承，
         // 不配这个项也能走代理——这个项是给「代理只配在服务里」的场景用的。
@@ -194,11 +216,24 @@ public class SourceService {
             builder.environment().put("HTTP_PROXY", proxy);
         }
         Process process = builder.start();
-        byte[] output = process.getInputStream().readAllBytes();
+        // 输出流单独一个线程读。顺序不能反：先 readAllBytes 再 waitFor 的话，
+        // git 卡在网络上时 readAllBytes 会一直等流关闭，超时上限形同虚设。
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        Thread drain = new Thread(() -> {
+            try (var in = process.getInputStream()) {
+                in.transferTo(buffer);
+            } catch (IOException ignored) {
+                // 进程被强杀时读流会失败；输出不完整由超时分支和退出码兜底
+            }
+        });
+        drain.setDaemon(true);
+        drain.start();
         if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
             process.destroyForcibly();
             throw new IOException("git 命令超时（" + timeoutSeconds + "s）");
         }
+        drain.join(TimeUnit.SECONDS.toMillis(1));
+        byte[] output = buffer.toByteArray();
         String text = new String(output, StandardCharsets.UTF_8).trim();
         if (process.exitValue() != 0) {
             throw new IOException(text.isEmpty() ? "git 命令失败" : text);

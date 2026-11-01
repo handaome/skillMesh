@@ -65,6 +65,8 @@ skillmesh:
   # 磁盘小的地方把制品与扫描的限额调紧，扫描慢的地方给扫描器更多时间。
   artifact:
     max-bytes: ${SM_ARTIFACT_MAX_BYTES:52428800}
+    # 同时进行的下载数上限（设计文档 §4.1「下载并发限制」）。满了返回 429。
+    max-concurrent-downloads: ${SM_ARTIFACT_MAX_CONCURRENT_DOWNLOADS:8}
   scan:
     max-file-bytes: ${SM_SCAN_MAX_FILE_BYTES:20971520}
     max-total-bytes: ${SM_SCAN_MAX_TOTAL_BYTES:52428800}

@@ -1,8 +1,15 @@
 package com.skillmesh.api.audit;
 
 import com.skillmesh.api.auth.CurrentUser;
+import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.common.ErrorCodes;
+import com.skillmesh.api.org.AuthorizationService;
+import com.skillmesh.api.org.Role;
+import com.skillmesh.api.review.ReviewRepository;
+import com.skillmesh.api.skill.SkillEntity;
+import com.skillmesh.api.skill.SkillRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -35,9 +42,16 @@ public class AuditService {
     private static final int MAX_PAGE_SIZE = 200;
 
     private final AuditRepository repository;
+    private final SkillRepository skills;
+    private final AuthorizationService authorization;
+    private final ReviewRepository reviews;
 
-    public AuditService(AuditRepository repository) {
+    public AuditService(AuditRepository repository, SkillRepository skills,
+                        AuthorizationService authorization, ReviewRepository reviews) {
         this.repository = repository;
+        this.skills = skills;
+        this.authorization = authorization;
+        this.reviews = reviews;
     }
 
     /**
@@ -149,6 +163,39 @@ public class AuditService {
     }
 
     /**
+     * 能不能看这个 Skill 的审计流水（§2.5 权限矩阵「查看组织审计」一行）。
+     *
+     * 三种人：属主、组织里的 owner/admin、审过它某个版本的人。
+     * 其余的人——包括能看见这个 Skill 的团队成员——看不到它的流水。
+     *
+     * 与 {@link AuditVisible#WHERE} 是同一套口径：一处在 SQL 里筛，
+     * 一处在这里判「够不够格」，免得列表能看、单查却能绕过。
+     */
+    public boolean canSeeAudit(CurrentUser user, SkillEntity skill) {
+        if (user.id().equals(skill.getOwnerUserId())) {
+            return true;
+        }
+        UUID organizationId = skill.getOrganizationId();
+        if (organizationId != null) {
+            Role role = authorization.orgRole(user.id(), organizationId);
+            if (role == Role.owner || role == Role.admin) {
+                return true;
+            }
+        }
+        return reviews.existsByReviewerIdAndSkillId(user.id(), skill.getId());
+    }
+
+    /** 门槛没过就拒。资源可见但没权限看流水，说 403 不说 404。 */
+    public void requireAuditRight(CurrentUser user, UUID skillId) {
+        SkillEntity skill = skills.findById(skillId)
+            .orElseThrow(() -> ApiException.notFound("Skill"));
+        if (!canSeeAudit(user, skill)) {
+            throw new ApiException(403, ErrorCodes.FORBIDDEN,
+                "没有查看该 Skill 审计流水的权限");
+        }
+    }
+
+    /**
      * 我可见的 Skill 的流水。
      *
      * 可见性在 SQL 里判（与搜索共用同一份条件），不在内存里筛。
@@ -168,10 +215,11 @@ public class AuditService {
      * 某个 Skill 的流水，带游标翻页。
      */
     @Transactional(readOnly = true)
-    public CursorPage<AuditEventEntity> recentForSkill(UUID skillId, Integer limit, String cursor) {
+    public CursorPage<AuditEventEntity> recentForSkill(CurrentUser user, UUID skillId,
+            Integer limit, String cursor) {
         int size = limit == null ? DEFAULT_PAGE_SIZE : Math.clamp(limit, 1, MAX_PAGE_SIZE);
         CursorCodec.NumericCursor decoded = CursorCodec.decodeNumericOrEmpty(cursor);
-        List<AuditEventEntity> rows = repository.findForTargetAfterCursor("skill", skillId.toString(),
+        List<AuditEventEntity> rows = repository.findForSkillAfterCursor(skillId, user.id(),
             decoded.time(), decoded.id(), PageRequest.of(0, size + 1));
         return CursorPage.of(rows, size, AuditService::nextCursorOf);
     }

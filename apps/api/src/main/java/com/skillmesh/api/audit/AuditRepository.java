@@ -33,6 +33,7 @@ public interface AuditRepository extends JpaRepository<AuditEventEntity, Long> {
         join skills s on s.id::text = e.target_id
         where e.target_type = 'skill'
           and """ + VisibleSkills.WHERE + """
+          and """ + AuditVisible.WHERE + """
           and (cast(:action as text) is null or e.action = :action)
           and (cast(:cursorTime as timestamptz) is null
                or (e.occurred_at, e.id) < (cast(:cursorTime as timestamptz),
@@ -51,18 +52,23 @@ public interface AuditRepository extends JpaRepository<AuditEventEntity, Long> {
      *
      * 游标是 (occurred_at, id)：时间只到微秒，同一瞬间写下的两条事件
      * 顺序不定，少了 id 那一半，翻页会漏掉或重复。
+     *
+     * 权限条件与列表那条同一份（{@link AuditVisible#WHERE}）：单个查也要过门槛，
+     * 否则知道 skill_id 就能绕过列表直接拉流水。
      */
     @Query(value = """
         select e.* from audit_events e
-        where e.target_type = :targetType
-          and e.target_id = :targetId
+        join skills s on s.id::text = e.target_id
+        where e.target_type = 'skill'
+          and s.id = cast(:skillId as uuid)
+          and """ + AuditVisible.WHERE + """
           and (cast(:cursorTime as timestamptz) is null
                or (e.occurred_at, e.id) < (cast(:cursorTime as timestamptz),
                                           cast(:cursorId as bigint)))
         order by e.occurred_at desc, e.id desc
         """, nativeQuery = true)
-    List<AuditEventEntity> findForTargetAfterCursor(@Param("targetType") String targetType,
-                                                     @Param("targetId") String targetId,
+    List<AuditEventEntity> findForSkillAfterCursor(@Param("skillId") UUID skillId,
+                                                     @Param("owner") UUID owner,
                                                      @Param("cursorTime") OffsetDateTime cursorTime,
                                                      @Param("cursorId") Long cursorId,
                                                      Pageable pageable);

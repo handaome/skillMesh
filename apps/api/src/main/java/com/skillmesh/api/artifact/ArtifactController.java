@@ -58,10 +58,11 @@ public class ArtifactController {
         CurrentUser user = currentUserService.current(jwt);
         ArtifactEntity artifact = artifacts.require(artifactId);
         requireVisible(user, artifact);
-        recordDownload(user, artifactId);
 
         if ("stream".equals(disposition)) {
-            InputStream in = artifacts.open(artifact);
+            // 名额先拿到再留痕：拿不到就 429，不能记成一次成功的下载。
+            InputStream in = artifacts.openDownload(artifact);
+            recordDownload(user, artifactId);
             return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(artifact.getContentType()))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
@@ -69,6 +70,7 @@ public class ArtifactController {
                 .contentLength(artifact.getSizeBytes())
                 .body(new InputStreamResource(in));
         }
+        recordDownload(user, artifactId);
         DownloadInfo info = new DownloadInfo(artifacts.presignedDownload(artifact),
             artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType(),
             OffsetDateTime.now(ZoneOffset.UTC).plus(ArtifactService.DOWNLOAD_TTL));

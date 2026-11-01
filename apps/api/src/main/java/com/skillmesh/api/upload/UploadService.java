@@ -153,6 +153,11 @@ public class UploadService {
         if (!session.getActorUserId().equals(user.id())) {
             throw ApiException.notFound("上传会话");
         }
+        if (session.getStatus() == UploadStatus.completed) {
+            // 重试：已经转正过了，原样还回去（幂等：重试不重复做，也不该报错）。
+            // 上传完了但响应丢了的时候，客户端再调一次 complete 拿到的是同一个结果。
+            return completed(session);
+        }
         if (session.getStatus() != UploadStatus.created
             && session.getStatus() != UploadStatus.uploaded) {
             throw new ApiException(409, ErrorCodes.VERSION_CONFLICT,
@@ -285,6 +290,23 @@ public class UploadService {
         // 客户端要判断的是这版被服务端怎么处理了（扫描拦下 / 待审 / 已发布）。
         return new UploadSession(session.getId(), session.getPurpose(), UploadStatus.completed, null,
             session.getExpiresAt(), promoted.sha256(), null, version.getStatus());
+    }
+
+    /**
+     * 已经转正过的会话，重试时按现在的样子还回去。
+     *
+     * 校验过的摘要就是声明的那份（promote 与 completeSyncFile 都对过），
+     * 所以 verified_sha256 直接取会话上的期望摘要。
+     */
+    private UploadSession completed(UploadSessionEntity session) {
+        VersionStatus versionStatus = null;
+        if (session.getSkillVersionId() != null) {
+            versionStatus = versions.findById(session.getSkillVersionId())
+                .map(SkillVersionEntity::getStatus)
+                .orElse(null);
+        }
+        return new UploadSession(session.getId(), session.getPurpose(), UploadStatus.completed, null,
+            session.getExpiresAt(), session.getExpectedSha256(), null, versionStatus);
     }
 
     /**

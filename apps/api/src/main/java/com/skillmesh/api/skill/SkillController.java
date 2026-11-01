@@ -1,7 +1,9 @@
 package com.skillmesh.api.skill;
 
+import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.common.IdempotencyService;
 import com.skillmesh.api.skill.dto.BatchArchiveRequest;
 import com.skillmesh.api.skill.dto.BatchTagRequest;
 import com.skillmesh.api.skill.dto.CreateSkillRequest;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -30,16 +33,24 @@ public class SkillController {
 
     private final SkillService skills;
     private final CurrentUserService currentUserService;
+    private final IdempotencyService idempotency;
 
-    public SkillController(SkillService skills, CurrentUserService currentUserService) {
+    public SkillController(SkillService skills, CurrentUserService currentUserService,
+                           IdempotencyService idempotency) {
         this.skills = skills;
         this.currentUserService = currentUserService;
+        this.idempotency = idempotency;
     }
 
     @PostMapping
     public ResponseEntity<SkillResponse> create(@AuthenticationPrincipal Jwt jwt,
+                                                @RequestHeader(value = "Idempotency-Key",
+                                                    required = false) String key,
                                                 @Valid @RequestBody CreateSkillRequest req) {
-        SkillResponse created = skills.create(currentUserService.current(jwt), req);
+        CurrentUser user = currentUserService.current(jwt);
+        // 同一个键重试：把上次建好的 Skill 原样还回去，不再建一个。
+        SkillResponse created = idempotency.run(user, "POST /skills", key, req,
+            () -> skills.create(user, req), SkillResponse.class);
         return ResponseEntity.created(URI.create("/api/v1/skills/" + created.id())).body(created);
     }
 

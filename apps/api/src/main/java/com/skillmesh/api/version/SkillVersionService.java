@@ -9,6 +9,7 @@ import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.CursorCodec;
 import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.org.AuthorizationService;
+import com.skillmesh.api.org.Role;
 import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillRepository;
 import com.skillmesh.api.skill.SkillService;
@@ -272,13 +273,13 @@ public class SkillVersionService {
     /**
      * 撤回一个已发布版本（设计文档 §10）。
      *
-     * 只允许属主撤回自己的 Skill——没有组织角色体系之前，权限就这一条。
-     * 撤回不可逆：要恢复得发新版本。
+     * 属主能撤回自己的版本；组织里的 owner/admin 也能撤回（安全管理员那一档，
+     * 见 §2.5 权限矩阵）。撤回不可逆：要恢复得发新版本。
      */
     @Transactional
     public Map<String, Object> revoke(CurrentUser user, UUID skillId, String version, String reason) {
         SkillEntity skill = skillService.requireVisibleSkill(user, skillId);
-        auth.requireOwner(user, skill.getOwnerUserId(), "只有属主能撤回自己的版本");
+        requireRevokeRight(user, skill);
         SkillVersionEntity entity = versions.findBySkillIdAndVersionForUpdate(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
         if (entity.getStatus() == VersionStatus.revoked) {
@@ -303,6 +304,29 @@ public class SkillVersionService {
 
         return Map.of("skill_id", skillId.toString(), "version", version,
             "status", VersionStatus.revoked, "reason", reason == null ? "" : reason);
+    }
+
+    /**
+     * 谁能撤回这个 Skill 的版本。
+     *
+     * 属主随时能撤自己的。组织里的 owner/admin 也能撤——团队发布的版本
+     * 出了问题，得有人在组织内说得上话（§2.5 权限矩阵「撤回版本」一行）。
+     * 再往下（publisher 及以下）不行：撤回不可逆，不能交给发布权那一档。
+     */
+    private void requireRevokeRight(CurrentUser user, SkillEntity skill) {
+        UUID organizationId = skill.getOrganizationId();
+        Role orgRole = organizationId == null
+            ? null : auth.orgRole(user.id(), organizationId);
+        if (canRevoke(auth.isOwner(user, skill.getOwnerUserId()), orgRole)) {
+            return;
+        }
+        throw new ApiException(403, ErrorCodes.FORBIDDEN,
+            "只有属主或组织管理员能撤回版本");
+    }
+
+    /** 撤回权的判定。抽成纯函数是为了能直接测，不用拉起整个上下文。 */
+    static boolean canRevoke(boolean isOwner, Role orgRole) {
+        return isOwner || orgRole == Role.owner || orgRole == Role.admin;
     }
 
 }

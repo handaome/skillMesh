@@ -3,6 +3,7 @@ package com.skillmesh.api.invite;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.common.IdempotencyService;
 import com.skillmesh.api.invite.dto.AcceptInvitationResponse;
 import com.skillmesh.api.invite.dto.CreateInvitationRequest;
 import com.skillmesh.api.invite.dto.InvitationResponse;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,16 +34,20 @@ public class InvitationController {
 
     private final InvitationService invitations;
     private final CurrentUserService currentUserService;
+    private final IdempotencyService idempotency;
 
-    public InvitationController(InvitationService invitations, CurrentUserService currentUserService) {
+    public InvitationController(InvitationService invitations, CurrentUserService currentUserService,
+                                IdempotencyService idempotency) {
         this.invitations = invitations;
         this.currentUserService = currentUserService;
+        this.idempotency = idempotency;
     }
 
     @PostMapping("/organizations/{organizationId}/invitations")
     public ResponseEntity<InvitationResponse> create(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID organizationId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @Valid @RequestBody(required = false) CreateInvitationRequest req) {
         CurrentUser user = currentUserService.current(jwt);
         // 没给请求体 = 组织级邀请：team_role 留 null（服务层按「没给团队」判断，
@@ -50,19 +56,25 @@ public class InvitationController {
         // 会撞上自己刚加的规则。
         CreateInvitationRequest body = req == null
             ? new CreateInvitationRequest(null, Role.member, null, null) : req;
-        InvitationService.Created created = invitations.create(user, organizationId,
-            body.team_id(), body.org_role(), body.team_role(), body.subject());
-        InvitationEntity entity = created.invitation();
-        OrganizationEntity org = invitations.organizationOf(entity);
-        TeamEntity team = invitations.teamOf(entity);
-        return ResponseEntity.created(URI.create("/api/v1/invitations/" + created.id()))
-            .body(new InvitationResponse(entity.getId(),
-                org == null ? null : org.getSlug(),
-                org == null ? null : org.getName(),
-                team == null ? null : team.getSlug(),
-                team == null ? null : team.getName(),
-                entity.getOrgRole(), entity.getTeamRole(), entity.getExpiresAt(),
-                invitations.inviteUrl(created.token()), created.token()));
+        // 同一个键重试：把上次建好的邀请（含 token）原样还回去，不再发一张。
+        InvitationResponse response = idempotency.run(user,
+            "POST /organizations/" + organizationId + "/invitations", key, body,
+            () -> {
+                InvitationService.Created created = invitations.create(user, organizationId,
+                    body.team_id(), body.org_role(), body.team_role(), body.subject());
+                InvitationEntity entity = created.invitation();
+                OrganizationEntity org = invitations.organizationOf(entity);
+                TeamEntity team = invitations.teamOf(entity);
+                return new InvitationResponse(entity.getId(),
+                    org == null ? null : org.getSlug(),
+                    org == null ? null : org.getName(),
+                    team == null ? null : team.getSlug(),
+                    team == null ? null : team.getName(),
+                    entity.getOrgRole(), entity.getTeamRole(), entity.getExpiresAt(),
+                    invitations.inviteUrl(created.token()), created.token());
+            }, InvitationResponse.class);
+        return ResponseEntity.created(URI.create("/api/v1/invitations/" + response.id()))
+            .body(response);
     }
 
     @GetMapping("/organizations/{organizationId}/invitations")

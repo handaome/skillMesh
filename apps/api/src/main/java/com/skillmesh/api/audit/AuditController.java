@@ -54,8 +54,12 @@ public class AuditController {
                               @PathVariable UUID skillId,
                               @RequestParam(required = false) Integer limit,
                               @RequestParam(required = false) String cursor) {
-        skillService.requireVisibleSkill(currentUserService.current(jwt), skillId);
-        return audit.recentForSkill(skillId, limit, cursor)
+        CurrentUser user = currentUserService.current(jwt);
+        skillService.requireVisibleSkill(user, skillId);
+        // 看得见这个 Skill 不等于能翻它的流水：团队成员能看见团队 Skill，
+        // 但流水里有撤回记录、发布人这些该给属主与管理员看的东西。
+        audit.requireAuditRight(user, skillId);
+        return audit.recentForSkill(user, skillId, limit, cursor)
             .map(page -> page.stream().map(EventResponse::of).toList());
     }
 

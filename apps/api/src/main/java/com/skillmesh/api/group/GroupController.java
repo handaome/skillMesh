@@ -1,6 +1,8 @@
 package com.skillmesh.api.group;
 
+import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
+import com.skillmesh.api.common.IdempotencyService;
 import com.skillmesh.api.group.dto.GroupRequest;
 import com.skillmesh.api.group.dto.GroupResponse;
 import com.skillmesh.api.group.dto.UpdateGroupRequest;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -27,10 +30,13 @@ public class GroupController {
 
     private final GroupService groups;
     private final CurrentUserService currentUserService;
+    private final IdempotencyService idempotency;
 
-    public GroupController(GroupService groups, CurrentUserService currentUserService) {
+    public GroupController(GroupService groups, CurrentUserService currentUserService,
+                           IdempotencyService idempotency) {
         this.groups = groups;
         this.currentUserService = currentUserService;
+        this.idempotency = idempotency;
     }
 
     /** 我可见的集合。 */
@@ -41,8 +47,13 @@ public class GroupController {
 
     @PostMapping
     public ResponseEntity<GroupResponse> create(@AuthenticationPrincipal Jwt jwt,
+                                                @RequestHeader(value = "Idempotency-Key",
+                                                    required = false) String key,
                                                 @Valid @RequestBody GroupRequest req) {
-        GroupResponse created = groups.create(currentUserService.current(jwt), req);
+        CurrentUser user = currentUserService.current(jwt);
+        // 同一个键重试：把上次建好的集合原样还回去，不再建一个。
+        GroupResponse created = idempotency.run(user, "POST /groups", key, req,
+            () -> groups.create(user, req), GroupResponse.class);
         return ResponseEntity.created(URI.create("/api/v1/groups/" + created.id())).body(created);
     }
 

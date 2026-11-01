@@ -19,6 +19,7 @@ import com.skillmesh.api.source.dto.ImportFromGitBatchRequest;
 import com.skillmesh.api.source.dto.ImportFromGitBatchResponse;
 import com.skillmesh.api.source.dto.ImportFromGitRequest;
 import com.skillmesh.api.source.dto.ImportFromGitResponse;
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,12 +50,14 @@ public class GitSourceImportService {
     private final SkillService skillService;
     private final SourceRepository sourceRepository;
     private final AuditService audit;
+    private final GitHostPolicy policy;
     /** 每条一个独立事务：一条失败不该把已经导进来的也撤回去。 */
     private final TransactionTemplate transactions;
 
     public GitSourceImportService(SourceService sources, GitSourceUpdateService updates,
                                   GitArtifactPublisher publisher, SkillService skillService,
                                   SourceRepository sourceRepository, AuditService audit,
+                                  GitHostPolicy policy,
                                   PlatformTransactionManager transactionManager) {
         this.sources = sources;
         this.updates = updates;
@@ -62,8 +65,35 @@ public class GitSourceImportService {
         this.skillService = skillService;
         this.sourceRepository = sourceRepository;
         this.audit = audit;
+        this.policy = policy;
         this.transactions = new TransactionTemplate(transactionManager);
         this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    /**
+     * 过主机闸门，被拦下就留一笔安全审计（§4.3 GIT-002）。
+     *
+     * 拦下的是安全事件，不是普通的参数错误：有人在拿非白名单主机或内网地址
+     * 试服务端，这一笔要留下来查。审计里只记主机名——仓库地址可能带着凭据。
+     */
+    private void requireAllowedHost(CurrentUser user, String repositoryUrl) {
+        try {
+            policy.requireAllowed(repositoryUrl);
+        } catch (ApiException e) {
+            audit.record(user, "security.git_blocked", "repository", hostOf(repositoryUrl),
+                AuditOutcome.failure, Map.of("reason", e.getMessage()));
+            throw e;
+        }
+    }
+
+    /** 只留主机名。仓库地址里可能内嵌凭据，进审计流水前先摘掉。 */
+    private static String hostOf(String repositoryUrl) {
+        try {
+            String host = URI.create(repositoryUrl == null ? "" : repositoryUrl.trim()).getHost();
+            return host == null || host.isBlank() ? "unknown" : host;
+        } catch (IllegalArgumentException e) {
+            return "unknown";
+        }
     }
 
     /**
@@ -74,6 +104,7 @@ public class GitSourceImportService {
      */
     @Transactional
     public ImportFromGitResponse importSkill(CurrentUser user, ImportFromGitRequest req) {
+        requireAllowedHost(user, req.repositoryUrl());
         try (SourceService.Checkout checkout =
                  sources.checkout(req.repositoryUrl(), req.ref())) {
             Path skillDir = updates.locate(checkout.root(), req.path());
@@ -131,6 +162,7 @@ public class GitSourceImportService {
             throw new ApiException(400, ErrorCodes.VALIDATION_FAILED,
                 "批量导入的可见性只能是 private 或 public");
         }
+        requireAllowedHost(user, req.repositoryUrl());
         List<ImportFromGitBatchResponse.Imported> imported = new ArrayList<>();
         List<ImportFromGitBatchResponse.Failed> failed = new ArrayList<>();
         try (SourceService.Checkout checkout =

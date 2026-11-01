@@ -272,6 +272,14 @@ public class ReviewService {
         audit.record(user, approved ? "version.approve" : "version.reject", "skill", skillId,
             AuditOutcome.success, Map.of("version", version.getVersion(),
                 "comment", comment == null ? "" : comment));
+        if (approved) {
+            // 过审即发布：团队与组织可见的版本只有过审才发布。
+            // 流水里「谁把它发上去了」不能缺——否则发布记录只有个人直发那条，
+            // 团队发布的事在审计里查不到。
+            audit.record(user, "skill.publish", "skill", skillId,
+                AuditOutcome.success, Map.of("version", version.getVersion(),
+                    "published_by", user.id().toString()));
+        }
     }
 
     private SkillEntity requireSkill(CurrentUser user, UUID skillId) {

@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,20 +27,28 @@ public class ArtifactService {
     /** 制品大小上限的默认值（50 MiB）。运维可按环境调（设计文档 §14）。 */
     public static final long DEFAULT_MAX_ARTIFACT_BYTES = 52_428_800L;
 
+    /** 同时进行的下载数上限的默认值（设计文档 §4.1「下载并发限制」）。 */
+    public static final int DEFAULT_MAX_CONCURRENT_DOWNLOADS = 8;
+
     private final ArtifactStorage storage;
     private final ArtifactRepository artifacts;
     private final ObjectMapper json;
     /** 单个制品的大小上限。 */
     private final long maxArtifactBytes;
+    /** 下载并发名额。拿不到就拒，不再往上加。 */
+    private final Semaphore downloadSlots;
 
     public ArtifactService(ArtifactStorage storage, ArtifactRepository artifacts,
                            ObjectMapper json,
-                           @Value("${skillmesh.artifact.max-bytes:52428800}") long maxArtifactBytes) {
+                           @Value("${skillmesh.artifact.max-bytes:52428800}") long maxArtifactBytes,
+                           @Value("${skillmesh.artifact.max-concurrent-downloads:8}")
+                           int maxConcurrentDownloads) {
         this.storage = storage;
         this.artifacts = artifacts;
         this.json = json;
         this.maxArtifactBytes = maxArtifactBytes <= 0
             ? DEFAULT_MAX_ARTIFACT_BYTES : maxArtifactBytes;
+        this.downloadSlots = new Semaphore(Math.max(1, maxConcurrentDownloads));
         storage.ensureBucket();
     }
 
@@ -112,6 +121,8 @@ public class ArtifactService {
         // 它会返回一份空清单，于是 tar.gz、错误页都能被当成「空制品」发布出去，
         // 直到客户端安装时才炸（Go 的 archive/zip 是严格的）。
         ZipManifest.requireZip(bytes);
+        // 归档本身也要干净：不能有符号链接（能指向包外），不能是压缩炸弹。
+        ZipManifest.requireSafeArchive(bytes);
         // 同一份内容已经有正式对象就复用它，不往桶里再写一份。
         String key = store(actual, bytes);
         storage.delete(tempKey);
@@ -203,6 +214,28 @@ public class ArtifactService {
 
     public InputStream open(ArtifactEntity artifact) {
         return storage.get(artifact.getStorageKey());
+    }
+
+    /**
+     * 打开一个受并发限制的下载流。
+     *
+     * 拿不到名额就直接拒（429），不排队等：排队等下去只会占满
+     * Web 容器的工作线程，那时候连「拒绝」都发不出来了。
+     *
+     * 名额跟着流走——流关掉（响应写完、客户端断开）名额就还回来。
+     */
+    public InputStream openDownload(ArtifactEntity artifact) {
+        if (!downloadSlots.tryAcquire()) {
+            throw new ApiException(429, ErrorCodes.RATE_LIMITED,
+                "并发下载数已满，请稍后重试");
+        }
+        try {
+            return new ReleasingInputStream(
+                storage.get(artifact.getStorageKey()), downloadSlots);
+        } catch (RuntimeException e) {
+            downloadSlots.release();
+            throw e;
+        }
     }
 
     /**

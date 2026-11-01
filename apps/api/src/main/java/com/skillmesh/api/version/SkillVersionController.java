@@ -1,7 +1,9 @@
 package com.skillmesh.api.version;
 
+import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.CursorPage;
+import com.skillmesh.api.common.IdempotencyService;
 import com.skillmesh.api.version.dto.RevokeVersionRequest;
 import com.skillmesh.api.version.dto.SkillVersionResponse;
 import com.skillmesh.api.version.dto.CreateVersionRequest;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,23 +37,30 @@ public class SkillVersionController {
     private final VersionFileService versionFiles;
     private final VersionEditService versionEdits;
     private final CurrentUserService currentUserService;
+    private final IdempotencyService idempotency;
 
     public SkillVersionController(SkillVersionService versions,
                                   VersionFileService versionFiles,
                                   VersionEditService versionEdits,
-                                  CurrentUserService currentUserService) {
+                                  CurrentUserService currentUserService,
+                                  IdempotencyService idempotency) {
         this.versions = versions;
         this.versionFiles = versionFiles;
         this.versionEdits = versionEdits;
         this.currentUserService = currentUserService;
+        this.idempotency = idempotency;
     }
 
     @PostMapping("/skills/{skillId}/versions")
     public ResponseEntity<CreateVersionResponse> create(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID skillId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @Valid @RequestBody CreateVersionRequest req) {
-        CreateVersionResponse body = versions.create(currentUserService.current(jwt), skillId, req);
+        CurrentUser user = currentUserService.current(jwt);
+        // 作用域带 skillId：同一个键在不同 Skill 上不是同一次请求。
+        CreateVersionResponse body = idempotency.run(user, "POST /skills/" + skillId + "/versions",
+            key, req, () -> versions.create(user, skillId, req), CreateVersionResponse.class);
         return ResponseEntity.created(
             URI.create("/api/v1/skills/" + skillId + "/versions/" + body.versionId()))
             .body(body);

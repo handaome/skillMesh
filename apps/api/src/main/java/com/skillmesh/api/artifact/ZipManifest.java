@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,6 +18,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import org.apache.commons.compress.archivers.zip.UnixStat;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipFile;
+import org.apache.commons.compress.utils.SeekableInMemoryByteChannel;
 
 /**
  * 从真 zip 算逐文件清单（路径 + 每个文件的 sha256）。
@@ -41,6 +46,52 @@ public final class ZipManifest {
      * 扫描器按这个数拒，服务端就别先把这么大的东西读进堆里。
      */
     public static final long MAX_FILE_BYTES = 20L << 20;
+
+    /** 解压后总量与归档字节数的比值上限。超过就是压缩炸弹。 */
+    public static final long MAX_RATIO = 100;
+
+    /** 比值只在这个总量以上才判。小文件压缩比高是正常的，一段 1KB 的文本能压到几十字节。 */
+    private static final long RATIO_MIN_BYTES = 1L << 20;
+
+    /**
+     * 归档安全检查：符号链接与压缩炸弹。
+     *
+     * 符号链接能指向包外的路径，装到 Agent 目录时一解析就写出去了。
+     * 客户端安装器自己也拦（跟链接但不许跟出包外），这里是服务端那道闸——
+     * 绕过 CLI 直传 API 的上传同样要过。
+     *
+     * 压缩炸弹是另一种：包本身几 KB，解开几百 MB，把 CPU 和磁盘打满。
+     * 光卡总量不够，因为总量上限要等解压完才生效，而解压本身就要花时间。
+     *
+     * 读 central directory 而不是流式读：Go 的 zip writer 只把 unix 权限位写进
+     * central directory，本地文件头里没有，流式解析拿不到符号链接标记。
+     */
+    public static void requireSafeArchive(byte[] zip) {
+        long uncompressed = 0;
+        try (ZipFile archive = new ZipFile(new SeekableInMemoryByteChannel(zip), "UTF-8")) {
+            Enumeration<ZipArchiveEntry> entries = archive.getEntriesInPhysicalOrder();
+            while (entries.hasMoreElements()) {
+                ZipArchiveEntry entry = entries.nextElement();
+                int mode = entry.getUnixMode();
+                if ((mode & UnixStat.FILE_TYPE_FLAG) == UnixStat.LINK_FLAG) {
+                    throw new ApiException(422, ErrorCodes.VALIDATION_FAILED,
+                        "制品里不能有符号链接：" + entry.getName());
+                }
+                uncompressed += Math.max(0L, entry.getSize());
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new ApiException(422, ErrorCodes.VALIDATION_FAILED,
+                "读 zip 归档失败：" + e.getMessage());
+        }
+        long archiveBytes = Math.max(1, zip.length);
+        if (uncompressed > RATIO_MIN_BYTES && uncompressed / archiveBytes > MAX_RATIO) {
+            throw new ApiException(422, ErrorCodes.VALIDATION_FAILED,
+                "制品解压后是压缩前的 " + (uncompressed / archiveBytes) + " 倍，超出上限 "
+                    + MAX_RATIO + " 倍");
+        }
+    }
 
     private ZipManifest() {}
 

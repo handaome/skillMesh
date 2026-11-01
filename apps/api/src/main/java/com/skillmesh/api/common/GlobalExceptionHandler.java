@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -21,6 +22,8 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
     private static final String BASE = "https://skills.example.com/problems/";
+    /** 429 的 Retry-After：告诉客户端多久后再来。 */
+    private static final int RETRY_AFTER_SECONDS = 5;
 
     private final AuditService audit;
 
@@ -31,9 +34,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ApiException.class)
     ResponseEntity<Problem> handleApi(ApiException ex, HttpServletRequest req) {
         recordDenial(ex, req);
-        return ResponseEntity.status(ex.status()).body(Problem.of(
+        // 429 是「过会儿再来」，客户端得能看出来该不该重试。
+        boolean retryable = ex.status() == 429;
+        Problem body = Problem.of(
             BASE + ex.code().toLowerCase().replace('_', '-'),
-            ex.code(), ex.status(), ex.code(), ex.getMessage(), requestId(req), false));
+            ex.code(), ex.status(), ex.code(), ex.getMessage(), requestId(req), retryable);
+        if (!retryable) {
+            return ResponseEntity.status(ex.status()).body(body);
+        }
+        return ResponseEntity.status(ex.status())
+            .header(HttpHeaders.RETRY_AFTER, String.valueOf(RETRY_AFTER_SECONDS))
+            .body(body);
     }
 
     /**

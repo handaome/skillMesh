@@ -15,6 +15,13 @@ public final class ErrorCodes {
     public static final String INVALID_CREDENTIALS = "INVALID_CREDENTIALS";
     /** 用户名已被占用。 */
     public static final String USERNAME_TAKEN = "USERNAME_TAKEN";
+    /**
+     * 请求太频繁或并发下载数满了。
+     *
+     * 不是业务错误，是「过会儿再来」——所以它不进业务分支，
+     * 客户端按 HTTP 429 与 problem+json 的 retryable 字段处理就行。
+     */
+    public static final String RATE_LIMITED = "RATE_LIMITED";
     public static final String INTERNAL = "INTERNAL";
 
     private ErrorCodes() {}
