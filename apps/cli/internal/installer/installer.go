@@ -3,6 +3,7 @@
 package installer
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -79,6 +80,10 @@ func InstallAtomic(src, target string, requireSkillMd bool) error {
 // 目录也只会白占地方。
 func CopyTree(src, dst string) error {
 	return skillscan.WalkFollow(src, func(path string, fi os.FileInfo, err error) error {
+		if errors.Is(err, skillscan.ErrOutsideRoot) {
+			// 指向包外的链接：内容在包外，不装。
+			return nil
+		}
 		if err != nil {
 			return err
 		}

@@ -3,6 +3,7 @@ package skillscan
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,6 +39,10 @@ func DirHashes(dir string) ([]FileDigest, error) {
 	}
 	var files []FileDigest
 	err = WalkFollow(dir, func(path string, fi os.FileInfo, err error) error {
+		if errors.Is(err, ErrOutsideRoot) {
+			// 指向包外的链接：内容在包外，不进摘要——摘要的文件集必须与打包的一致。
+			return nil
+		}
 		if err != nil {
 			return err
 		}

@@ -546,6 +546,7 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 	if err != nil {
 		return failedResult(target, err.Error()), syncstate.Entry{}, nil
 	}
+	warnSkippedLinks(local.SkippedLinks)
 	localHash := ManifestDigest(local.Manifest)
 	slug, err := skillscan.SlugFromDirName(filepath.Base(target.Path))
 	if err != nil {

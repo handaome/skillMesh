@@ -237,6 +237,7 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 	if err != nil {
 		return publishResult{}, err
 	}
+	warnSkippedLinks(artifact.SkippedLinks)
 
 	skill, found, err := client.FindSkillBySlug(ctx, slug)
 	if err != nil {
@@ -341,6 +342,18 @@ func PublishOne(ctx context.Context, client *apiclient.Client, target PublishTar
 		return publishResult{}, fmt.Errorf(
 			"服务端没有返回版本状态（拿到 %q），无法确认这次发布的结果", session.VersionStatus)
 	}
+}
+
+// warnSkippedLinks 提示这次打包跳过了哪些指向包外的链接。
+//
+// 链接指向包外时内容不进包——包外的东西不该跟着上传。
+// 但用户得知道包里少了东西，不然只能对着文件清单猜。
+func warnSkippedLinks(skipped []string) {
+	if len(skipped) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "跳过 %d 个指向包外的链接（内容在包外，不进包）：%s\n",
+		len(skipped), strings.Join(skipped, "、"))
 }
 
 // createSkill 新建 Skill 元数据：可见性与归属按解析出来的范围填。

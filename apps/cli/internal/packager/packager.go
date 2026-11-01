@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,11 @@ type Artifact struct {
 	SizeBytes int64
 	// Manifest 是逐文件的清单。
 	Manifest []Entry
+	// SkippedLinks 是被跳过的、指向包根之外的链接。
+	//
+	// 链接指向包外时内容不进包——包外的东西不该跟着上传。
+	// 但用户得知道少了什么，所以把路径记下来报一声。
+	SkippedLinks []string
 }
 
 // Pack 把 dir 打成 zip。SKILL.md 放在包的根目录，
@@ -52,8 +58,16 @@ func Pack(dir string) (Artifact, error) {
 	var buf bytes.Buffer
 	writer := zip.NewWriter(&buf)
 	var manifest []Entry
+	var skippedLinks []string
 
 	walkErr := skillscan.WalkFollow(dir, func(path string, fi os.FileInfo, err error) error {
+		if errors.Is(err, skillscan.ErrOutsideRoot) {
+			// 指向包外的链接：内容在包外，不进包。记下来告诉用户少了什么。
+			if rel, relErr := filepath.Rel(dir, path); relErr == nil {
+				skippedLinks = append(skippedLinks, filepath.ToSlash(rel))
+			}
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -127,10 +141,11 @@ func Pack(dir string) (Artifact, error) {
 
 	sum := sha256.Sum256(buf.Bytes())
 	return Artifact{
-		Zip:       buf.Bytes(),
-		SHA256:    hex.EncodeToString(sum[:]),
-		SizeBytes: int64(buf.Len()),
-		Manifest:  manifest,
+		Zip:          buf.Bytes(),
+		SHA256:       hex.EncodeToString(sum[:]),
+		SizeBytes:    int64(buf.Len()),
+		Manifest:     manifest,
+		SkippedLinks: skippedLinks,
 	}, nil
 }
 

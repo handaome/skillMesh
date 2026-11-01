@@ -1,8 +1,10 @@
 package skillscan
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // maxWalkDepth 是遍历的深度上限。链接成环时靠它兜底收场。
@@ -10,6 +12,13 @@ const maxWalkDepth = 32
 
 // maxLinkDepth 是解析嵌套链接的层数上限。链接成环时靠它兜底收场。
 const maxLinkDepth = 8
+
+// ErrOutsideRoot 表示这个链接指向包根之外。
+//
+// 链接要跟（跟了链接的内容才算进同步模型），但不能跟出包外：
+// 包外的内容不该跟着上传——一个指向 ~/.ssh 的链接会把私钥传上云。
+// 收到这个错误的调用方自己决定怎么处理：跳过并报一声，还是直接忽略。
+var ErrOutsideRoot = errors.New("链接指向包根之外")
 
 // LinkTarget 取路径指向的真实目标；不是链接就返回 false。
 //
@@ -78,15 +87,28 @@ func WriteTarget(path string) string {
 //
 // 子目录用过 os.Stat 取到的 FileInfo 再决定要不要进去，所以链接目录能正常展开。
 // 回调返回 filepath.SkipDir 时跳过该目录，与 filepath.Walk 一致。
+//
+// 链接要跟，但不能跟出包外：
+//   越界的链接（指向包根之外）跳过，并把 ErrOutsideRoot 报给回调——
+//     包外的内容不进包，但要让用户知道少了东西；
+//   成环的链接（a → b、b → a）按「这个真实目录已经走过」跳过；
+//   断链跳过——一个坏链接不该让整次发布失败。
 func WalkFollow(root string, fn func(path string, info os.FileInfo, err error) error) error {
-	return walkFollow(root, 0, fn)
+	// 根目录本身可能就是链接：链接指向哪儿，根就在哪儿。
+	realRoot := ResolveLink(root)
+	info, err := os.Stat(root)
+	if err != nil {
+		return fn(root, nil, err)
+	}
+	return walkFollow(root, realRoot, realRoot, info, 0, map[string]bool{}, fn)
 }
 
-func walkFollow(path string, depth int, fn func(string, os.FileInfo, error) error) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fn(path, nil, err)
-	}
+// walkFollow 遍历一个目录。
+//
+// realPath 是这个目录解完链接后的真实路径；visited 记着已经走过的真实目录。
+func walkFollow(path, realRoot, realPath string, info os.FileInfo, depth int, visited map[string]bool,
+	fn func(string, os.FileInfo, error) error) error {
+
 	if err := fn(path, info, nil); err != nil {
 		if err == filepath.SkipDir {
 			return nil
@@ -100,14 +122,48 @@ func walkFollow(path string, depth int, fn func(string, os.FileInfo, error) erro
 		// 太深了多半是链接环，停下来比爆栈好。
 		return nil
 	}
+	if visited[realPath] {
+		// 这个真实目录已经走过：链接成环，或者是同一份内容的第二个入口。
+		// 再走一遍只会把同一批文件重复算进摘要。
+		return nil
+	}
+	visited[realPath] = true
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return fn(path, info, err)
 	}
 	for _, entry := range entries {
-		if err := walkFollow(filepath.Join(path, entry.Name()), depth+1, fn); err != nil {
+		child := filepath.Join(path, entry.Name())
+		childInfo, statErr := os.Stat(child)
+		if statErr != nil {
+			// 断链不算错：链接指向的目标没了，跳过就是。
+			// Lstat 也失败才是真的错（权限之类的），照旧报出去。
+			if _, lstatErr := os.Lstat(child); lstatErr == nil {
+				continue
+			}
+			return fn(child, nil, statErr)
+		}
+		// 子项的真实路径：父目录的真实路径加上这一项，再解一遍链接。
+		childReal := ResolveLink(filepath.Join(realPath, entry.Name()))
+		if !within(realRoot, childReal) {
+			// 越界的链接：内容在包外，不进包。报一声，让调用方告诉用户。
+			if err := fn(child, nil, ErrOutsideRoot); err != nil && err != filepath.SkipDir {
+				return err
+			}
+			continue
+		}
+		if err := walkFollow(child, realRoot, childReal, childInfo, depth+1, visited, fn); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// within 判断 path 是不是在 root 之内。
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
