@@ -9,6 +9,7 @@ import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.license.LicenseService;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.PathOrder;
@@ -72,6 +73,7 @@ public class SyncUploadService {
     private final ArtifactScanService scanService;
     private final ReviewService review;
     private final RecycleService recycle;
+    private final LicenseService licenses;
 
     public SyncUploadService(SyncChangesetRepository changesets,
                              UploadSessionRepository uploads, SkillRepository skills,
@@ -80,7 +82,7 @@ public class SyncUploadService {
                              ArtifactStorage storage, DeviceService devices,
                              AuditService audit, SigningService signing,
                              ArtifactScanService scanService, ReviewService review,
-                             RecycleService recycle) {
+                             RecycleService recycle, LicenseService licenses) {
         this.changesets = changesets;
         this.uploads = uploads;
         this.skills = skills;
@@ -94,6 +96,7 @@ public class SyncUploadService {
         this.scanService = scanService;
         this.review = review;
         this.recycle = recycle;
+        this.licenses = licenses;
     }
 
     /** 为变更集里的每个相对路径开一个上传会话。 */
@@ -245,6 +248,8 @@ public class SyncUploadService {
 
         // 同步路径与整包上传走同一道服务端扫描——绕开哪条都不该绕开它。
         ScanResult scan = scanService.scanAndRecord(version.getId(), zip);
+        // 客户端没给许可证时，服务端从制品里认一份补上（只是识别，不是判定）。
+        licenses.detectFromArtifact(version.getSkillId(), zip);
         // 团队与组织可见的版本要等人审，跟整包上传一个口径：
         // 走 sync commit 不能把审核队列绕过去。
         boolean needsReview = review.needsReview(skill.getId());

@@ -7,6 +7,7 @@ import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.common.Visibility;
 import com.skillmesh.api.scan.SkillFrontmatter;
+import com.skillmesh.api.license.LicenseDetector;
 import com.skillmesh.api.skill.LicenseStatus;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.skill.SlugRules;
@@ -78,6 +79,7 @@ public class GitSourceImportService {
             Path skillDir = updates.locate(checkout.root(), req.path());
             Map<?, ?> meta = SkillFrontmatter.read(skillDir);
 
+            String license = detectLicense(skillDir, checkout.root());
             var created = skillService.create(user, new CreateSkillRequest(
                 req.slug(), req.name(), req.description(), req.visibility(),
                 null, null, mergeTags(req.tags(), SkillFrontmatter.tags(meta)),
@@ -85,7 +87,8 @@ public class GitSourceImportService {
                 new SkillSourceInput("git", providerOf(req.repositoryUrl()),
                     req.repositoryUrl(), req.path(),
                     sources.refType(checkout.root(), req.ref()), req.ref(),
-                    checkout.commit(), null, LicenseStatus.detected)));
+                    checkout.commit(), license,
+                    license == null ? LicenseStatus.unknown : LicenseStatus.detected)));
 
             SourceEntity source = sourceRepository
                 .findBySkillIdOrderByCreatedAtDesc(created.id()).get(0);
@@ -147,6 +150,20 @@ public class GitSourceImportService {
         return new ImportFromGitBatchResponse(imported, failed);
     }
 
+    /**
+     * 认出这份 Skill 的许可证。
+     *
+     * 许可证通常在仓库根上，不在 Skill 目录里：两处都找。
+     * 认出来只是「这份内容看起来是哪一份」，能不能再分发仍然要人判断。
+     */
+    private String detectLicense(Path skillDir, Path checkoutRoot) {
+        String detected = LicenseDetector.detectInDirectory(skillDir);
+        if (detected == null) {
+            detected = LicenseDetector.detectInDirectory(checkoutRoot);
+        }
+        return detected;
+    }
+
     /** 导一个。名字与描述取 frontmatter，slug 从目录名推。 */
     private ImportFromGitBatchResponse.Imported importOne(CurrentUser user,
                                                            ImportFromGitBatchRequest req,
@@ -165,6 +182,7 @@ public class GitSourceImportService {
         }
         String slug = SlugRules.fromName(dirName);
 
+        String license = detectLicense(skillDir, checkout.root());
         var created = skillService.create(user, new CreateSkillRequest(
             slug, name, description, req.visibility(),
             null, null, mergeTags(req.tags(), SkillFrontmatter.tags(meta)),
@@ -172,7 +190,8 @@ public class GitSourceImportService {
             new SkillSourceInput("git", providerOf(req.repositoryUrl()),
                 req.repositoryUrl(), path,
                 sources.refType(checkout.root(), req.ref()), req.ref(),
-                checkout.commit(), null, LicenseStatus.detected)));
+                checkout.commit(), license,
+                license == null ? LicenseStatus.unknown : LicenseStatus.detected)));
 
         SourceEntity source = sourceRepository
             .findBySkillIdOrderByCreatedAtDesc(created.id()).get(0);

@@ -11,6 +11,7 @@ import com.skillmesh.api.artifact.ArtifactService;
 import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.license.LicenseService;
 import com.skillmesh.api.common.ErrorCodes;
 import com.skillmesh.api.scan.ArtifactScanService;
 import com.skillmesh.api.scan.ScanResult;
@@ -51,13 +52,14 @@ public class UploadService {
     private final SigningService signing;
     private final ReviewService review;
     private final RecycleService recycle;
+    private final LicenseService licenses;
     private final JdbcTemplate jdbc;
 
     public UploadService(UploadSessionRepository uploads, SkillVersionRepository versions,
                          SkillRepository skills, ArtifactService artifacts, ArtifactStorage storage,
                          ArtifactScanService scanService, AuditService audit,
                          SigningService signing, ReviewService review, RecycleService recycle,
-                         JdbcTemplate jdbc) {
+                         LicenseService licenses, JdbcTemplate jdbc) {
         this.uploads = uploads;
         this.versions = versions;
         this.skills = skills;
@@ -68,6 +70,7 @@ public class UploadService {
         this.signing = signing;
         this.review = review;
         this.recycle = recycle;
+        this.licenses = licenses;
         this.jdbc = jdbc;
     }
 
@@ -230,6 +233,8 @@ public class UploadService {
 
         version.setArtifactId(artifact.getId());
         ScanResult scan = scanService.scanAndRecord(version.getId(), content);
+        // 客户端没给许可证时，服务端从制品里认一份补上（只是识别，不是判定）。
+        licenses.detectFromArtifact(version.getSkillId(), content);
         // 个人与公开的版本扫描通过就发布；团队与组织可见的要等人审
         // （设计文档 §10.1 的 draft → pending_review → published）。
         boolean needsReview = review.needsReview(version.getSkillId());
