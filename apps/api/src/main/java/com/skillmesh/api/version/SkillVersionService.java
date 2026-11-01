@@ -274,7 +274,7 @@ public class SkillVersionService {
      * 撤回一个已发布版本（设计文档 §10）。
      *
      * 属主能撤回自己的版本；组织里的 owner/admin 也能撤回（安全管理员那一档，
-     * 见 §2.5 权限矩阵）。撤回不可逆：要恢复得发新版本。
+     * 见 §2.4 权限矩阵）。撤回不可逆：要恢复得发新版本。
      */
     @Transactional
     public Map<String, Object> revoke(CurrentUser user, UUID skillId, String version, String reason) {
@@ -310,7 +310,7 @@ public class SkillVersionService {
      * 谁能撤回这个 Skill 的版本。
      *
      * 属主随时能撤自己的。组织里的 owner/admin 也能撤——团队发布的版本
-     * 出了问题，得有人在组织内说得上话（§2.5 权限矩阵「撤回版本」一行）。
+     * 出了问题，得有人在组织内说得上话（§2.4 权限矩阵「撤回版本」一行）。
      * 再往下（publisher 及以下）不行：撤回不可逆，不能交给发布权那一档。
      */
     private void requireRevokeRight(CurrentUser user, SkillEntity skill) {

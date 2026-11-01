@@ -8,7 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
 
-/** 对应 OpenAPI 的 UploadSession。 */
+/** 对应契约的 UploadSession。 */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record UploadSession(
         UUID id,

@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** 对应 OpenAPI 的 Skill schema。 */
+/** 对应契约的 Skill schema。 */
 public record SkillResponse(
         UUID id,
         String slug,

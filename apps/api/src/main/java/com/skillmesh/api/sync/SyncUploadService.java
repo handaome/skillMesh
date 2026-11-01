@@ -49,7 +49,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 文件级同步上传与提交（详细设计 §2.4.2、§12）。
+ * 文件级同步上传与提交（详细设计 §2.3.2、§12）。
  *
  * 和整包上传是两条路：这里一个文件一个会话，全部传完后 commit，
  * 服务端按云端基线判断能不能提交——不能就转冲突，双方内容都留着。

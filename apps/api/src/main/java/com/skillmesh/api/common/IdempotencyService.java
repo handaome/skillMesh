@@ -20,7 +20,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class IdempotencyService {
 
-    /** 键长度的上下限：OpenAPI 里 Idempotency-Key 的 minLength / maxLength。 */
+    /** 键长度的上下限：契约里 Idempotency-Key 的 minLength / maxLength。 */
     private static final int MIN_KEY_LENGTH = 8;
     private static final int MAX_KEY_LENGTH = 128;
 

@@ -7,7 +7,7 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
 
-/** 对应 OpenAPI 的 CreateVersionResponse。 */
+/** 对应契约的 CreateVersionResponse。 */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CreateVersionResponse(
         @JsonProperty("version_id") UUID versionId,

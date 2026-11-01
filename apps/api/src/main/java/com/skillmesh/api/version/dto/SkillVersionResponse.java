@@ -7,7 +7,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
-/** 对应 OpenAPI 的 SkillVersion。 */
+/** 对应契约的 SkillVersion。 */
 public record SkillVersionResponse(
         UUID id,
         @JsonProperty("skill_id") UUID skillId,

@@ -1,4 +1,4 @@
-// 与 api-spec/openapi.yaml 的 schemas 对应，字段名保持 snake_case。
+// 与详细设计 §2.2 的接口清单对应，字段名保持 snake_case。
 export interface Skill {
   id: string
   slug: string

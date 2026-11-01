@@ -417,7 +417,7 @@ type SyncTarget struct {
 	// 增量上传靠它算出「哪些文件变了」：没变的文件不用重传（设计文档 §6.2）。
 	CloudFiles map[string]string
 	// ChangesetID 是这次同步在服务端登记的变更集。
-	// 增量上传用它开上传会话并提交（详细设计 §2.4.2）；空串表示没有变更集。
+	// 增量上传用它开上传会话并提交（详细设计 §2.3.2）；空串表示没有变更集。
 	ChangesetID string
 	// BaseFiles / BaseSnapshot 是上次同步时的逐文件摘要与内容副本。
 	// 这次同步没达成新共识时要原样带回去：基线只能前进，不能被写成本地当前内容。
@@ -639,7 +639,7 @@ func syncOne(ctx context.Context, client *apiclient.Client, target SyncTarget,
 		// 云端也判一次：别的设备可能在两次请求之间动过内容（详细设计 §3.6）。
 		var err error
 		changeset, err = confirmWithCloud(ctx, client, target, local, localHash, decision, options.DryRun)
-		// 变更集留着：增量上传要用它开上传会话并提交（详细设计 §2.4.2）。
+		// 变更集留着：增量上传要用它开上传会话并提交（详细设计 §2.3.2）。
 		// 冲突时也留着——用户要靠它指定要解决哪个冲突（--conflict）。
 		target.ChangesetID = changeset
 		if err != nil {

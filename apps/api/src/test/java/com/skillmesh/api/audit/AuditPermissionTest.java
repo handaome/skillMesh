@@ -15,7 +15,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
- * 谁能翻一个 Skill 的审计流水（§2.5 权限矩阵「查看组织审计」一行）。
+ * 谁能翻一个 Skill 的审计流水（§2.4 权限矩阵「查看组织审计」一行）。
  *
  * 看得见这个 Skill 不等于能看它的流水：团队成员能看见团队 Skill，
  * 但流水里有撤回记录、发布人这些该给属主与管理员看的东西。

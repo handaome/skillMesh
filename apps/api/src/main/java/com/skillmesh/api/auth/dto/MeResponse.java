@@ -6,7 +6,7 @@ import com.skillmesh.api.org.dto.OrgMembershipResponse;
 import java.util.List;
 import java.util.UUID;
 
-/** 对应 OpenAPI 的 MeResponse schema。 */
+/** 对应契约的 MeResponse schema。 */
 public record MeResponse(User user, List<OrgMembershipResponse> organizations) {
 
     /**

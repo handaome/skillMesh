@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** 对应 OpenAPI 的 CreateVersionRequest。 */
+/** 对应契约的 CreateVersionRequest。 */
 public record CreateVersionRequest(
         @NotBlank @Size(max = 128) String version,
         @NotBlank @Pattern(regexp = "stable|beta|dev") String channel,

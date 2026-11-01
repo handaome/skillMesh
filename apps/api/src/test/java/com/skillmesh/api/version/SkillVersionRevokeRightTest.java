@@ -6,7 +6,7 @@ import com.skillmesh.api.org.Role;
 import org.junit.jupiter.api.Test;
 
 /**
- * 谁能撤回版本（设计文档 §2.5 权限矩阵「撤回版本」一行）。
+ * 谁能撤回版本（详细设计 §2.4 权限矩阵「撤回版本」一行）。
  *
  * 撤回不可逆，所以边界要窄：属主，或组织里的 owner/admin；再往下一律不行。
  */

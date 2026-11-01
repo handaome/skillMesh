@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** 对应 OpenAPI 的 CreateSkillRequest。字段名用 snake_case 保持与契约一致。 */
+/** 对应契约的 CreateSkillRequest。字段名用 snake_case 保持与契约一致。 */
 public record CreateSkillRequest(
         @NotBlank @Pattern(regexp = "^[a-z0-9][a-z0-9-]{1,63}$") String slug,
         @NotBlank @Size(max = 120) String name,

@@ -65,7 +65,7 @@ public class SyncController {
         return sync.resolve(currentUserService.current(jwt), changesetId, resolution);
     }
 
-    /** 为变更集里的文件开上传会话（详细设计 §2.4.2 第 2 步）。 */
+    /** 为变更集里的文件开上传会话（详细设计 §2.3.2 第 2 步）。 */
     @PostMapping("/changesets/{changesetId}/uploads")
     public List<SyncUploadService.UploadSlot> openUploads(
             @AuthenticationPrincipal Jwt jwt,
@@ -74,7 +74,7 @@ public class SyncController {
         return syncUploads.openUploads(currentUserService.current(jwt), changesetId, files);
     }
 
-    /** 提交变更集：基线对得上就生成新版本，对不上转冲突（§2.4.2 第 4-6 步）。 */
+    /** 提交变更集：基线对得上就生成新版本，对不上转冲突（§2.3.2 第 4-6 步）。 */
     @PostMapping("/changesets/{changesetId}/commit")
     public Map<String, Object> commit(@AuthenticationPrincipal Jwt jwt,
                                       @PathVariable UUID changesetId,

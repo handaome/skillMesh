@@ -173,7 +173,7 @@ public class UploadService {
 
         if ("sync_file".equals(session.getPurpose())) {
             // 同步文件只校验，不转正成制品——等 changeset commit 时再打包
-            // （详细设计 §2.4.2 第 3 步）。
+            // （详细设计 §2.3.2 第 3 步）。
             return completeSyncFile(session, now);
         }
 

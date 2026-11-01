@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 对应 OpenAPI 的 SyncChangesetRequest。
+ * 对应契约的 SyncChangesetRequest。
  *
  * 客户端提交「我基于哪个基线、改成了什么」，服务端拿它和云端现状比，
  * 判定是正常同步还是冲突（设计文档 §6.3、§12）。

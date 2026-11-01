@@ -16,7 +16,7 @@ public interface ReviewRepository extends JpaRepository<ReviewEntity, UUID> {
     /**
      * 这个人是不是审过这个 Skill 的某个版本。
      *
-     * 审过的人有权看它的审计流水（§2.5 权限矩阵「查看组织审计」一行）：
+     * 审过的人有权看它的审计流水（§2.4 权限矩阵「查看组织审计」一行）：
      * 自己批过的那一版后来被谁撤了、为什么撤，他要看得见。
      */
     @Query("select count(r) > 0 from ReviewEntity r, SkillVersionEntity v "
