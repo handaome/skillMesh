@@ -155,7 +155,7 @@ erDiagram
         uuid artifact_id FK
         text changelog
         jsonb manifest_json
-        text status "draft|scanning|pending_review|published|rejected|revoked|yanked"
+        text status "draft|pending_review|published|rejected|revoked|yanked"
         uuid created_by FK
         uuid published_by FK
         timestamptz created_at

@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -117,12 +118,19 @@ class StatusVocabularyTest {
      *
      * 只认 IN 那种写法：蕴含式的约束（{@code CHECK (status <> 'published' OR ...)}）
      * 不是词表，里面那几串字是别的意思。
+     *
+     * 约束既可能写在建表语句里，也可能写在后面的 {@code ALTER TABLE ... ADD CONSTRAINT}
+     * 里（改词表就是这么加迁移的）——两种都认，后写的覆盖先写的：
+     * 迁移按版本号执行，最后一份才是当前约束。
      */
     private static Map<String, Set<String>> allowedValues() {
         Map<String, Set<String>> out = new LinkedHashMap<>();
         Pattern table = Pattern.compile("CREATE TABLE (\\w+) \\((.*?)\\n\\);", Pattern.DOTALL);
         Pattern check = Pattern.compile("CHECK \\((\\w+) IN \\(([^)]*)\\)\\)");
         Pattern literal = Pattern.compile("'([^']*)'");
+        Pattern alter = Pattern.compile(
+            "ALTER TABLE (\\w+) ADD CONSTRAINT \\w+\\s+CHECK \\((\\w+) IN \\(([^)]*)\\)\\)",
+            Pattern.DOTALL);
         for (Path file : migrationFiles()) {
             String sql = read(file);
             Matcher tables = table.matcher(sql);
@@ -137,23 +145,40 @@ class StatusVocabularyTest {
                     out.put(tables.group(1) + "." + checks.group(1), Set.copyOf(values));
                 }
             }
+            Matcher alters = alter.matcher(sql);
+            while (alters.find()) {
+                Set<String> values = new java.util.LinkedHashSet<>();
+                Matcher literals = literal.matcher(alters.group(3));
+                while (literals.find()) {
+                    values.add(literals.group(1));
+                }
+                out.put(alters.group(1) + "." + alters.group(2), Set.copyOf(values));
+            }
         }
         return out;
     }
 
-    /** 迁移文件：打包后它们在 classpath 的 db/migrations 下。 */
+    /** 迁移文件：打包后它们在 classpath 的 db/migrations 下。按版本号排序，不是文件名。 */
     private static List<Path> migrationFiles() {
         try {
             Path dir = Path.of(Objects.requireNonNull(
                 StatusVocabularyTest.class.getResource("/db/migrations"), "找不到迁移目录").toURI());
             try (Stream<Path> files = Files.list(dir)) {
-                return files.filter(p -> p.getFileName().toString().endsWith(".sql")).sorted().toList();
+                return files.filter(p -> p.getFileName().toString().endsWith(".sql"))
+                    .sorted(Comparator.comparingLong(StatusVocabularyTest::versionOf))
+                    .toList();
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         } catch (java.net.URISyntaxException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** 文件名里的版本号：{@code V13__xxx.sql} 是 13。取不到就按 0 排（最后）。 */
+    private static long versionOf(Path path) {
+        Matcher matcher = Pattern.compile("^V(\\d+)__").matcher(path.getFileName().toString());
+        return matcher.find() ? Long.parseLong(matcher.group(1)) : Long.MAX_VALUE;
     }
 
     private static String read(Path file) {

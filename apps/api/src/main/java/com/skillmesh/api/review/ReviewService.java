@@ -33,7 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * 发布审核（设计文档 §10.1：draft → scanning → pending_review → published）。
+ * 发布审核（设计文档 §10.1：draft → pending_review → published）。
  *
  * 个人与公开的 Skill 扫描通过即发布；团队与组织可见的版本停在 pending_review，
  * 由 reviewer 及以上角色放行——团队共享的东西不能谁都能直接发上去。

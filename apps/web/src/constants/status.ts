@@ -18,12 +18,11 @@ export const VISIBILITY_TEXT: Record<string, string> = {
 /**
  * 版本状态。
  *
- * 与服务端的状态枚举一一对应（draft / scanning / pending_review /
+ * 与服务端的状态枚举一一对应（draft / pending_review /
  * published / rejected / quarantined / revoked）。
  */
 export const VERSION_STATUS_TEXT: Record<string, string> = {
   draft: '草稿',
-  scanning: '扫描中',
   pending_review: '待审核',
   published: '已发布',
   rejected: '已拒绝',
@@ -52,7 +51,6 @@ export const SCAN_STATUS_TEXT: Record<string, string> = {
  */
 export const FILE_BROWSER_STATUS_TEXT: Record<string, string> = {
   draft: '草稿',
-  scanning: '扫描中',
   published: '已发布',
   pending_review: '已提交审核',
   rejected: '被服务端的制品扫描拦下',

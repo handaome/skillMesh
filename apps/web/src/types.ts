@@ -354,7 +354,7 @@ export interface PendingReview {
   submitted_at: string | null
   scan: ReviewScan
   source: ReviewSource
-  /** 版本自己的状态：draft / scanning / pending_review / published / rejected / quarantined。 */
+  /** 版本自己的状态：draft / pending_review / published / rejected / quarantined。 */
   status: string
   /** 我能不能做审核动作（放行或驳回）。服务端算的——审核权怎么判，前端 replicate 一遍就会漂。 */
   can_decide: boolean

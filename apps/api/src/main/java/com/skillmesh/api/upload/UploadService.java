@@ -231,7 +231,7 @@ public class UploadService {
         version.setArtifactId(artifact.getId());
         ScanResult scan = scanService.scanAndRecord(version.getId(), content);
         // 个人与公开的版本扫描通过就发布；团队与组织可见的要等人审
-        // （设计文档 §10.1 的 draft → scanning → pending_review → published）。
+        // （设计文档 §10.1 的 draft → pending_review → published）。
         boolean needsReview = review.needsReview(version.getSkillId());
         // 扫描命中阻断规则 -> quarantined（隔离，不是普通的拒绝）：
         // 「内容里有真凭据」与「审核者觉得不合适」是两回事，流水要能分开看
