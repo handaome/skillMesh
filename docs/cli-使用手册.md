@@ -109,6 +109,7 @@ skillmesh sync --resolve keep-cloud   # 冲突时保留云端并拉回
 skillmesh sync --resolve keep-both    # 本地备份一份，两边都留
 skillmesh sync --allow-delete         # 确认把「本地删掉的文件」也传播到云端
 skillmesh sync --propagate-delete     # 确认把「本地删掉的整个 Skill」也从云端删掉
+skillmesh sync --propagate-delete --force-delete   # 确认目录是真的被清空了，照传
 ```
 
 **本地删了文件不会静默传到云端**：同步发现「基线里有、本地没了、云端也没变」的文件时，这次上传会**停下**，报「待确认」并列出是哪些文件。确认要删就加 `--allow-delete` 再跑一次。
@@ -123,6 +124,8 @@ skillmesh sync --propagate-delete             # 真删（云端软删除，回�
 ```
 
 判定的是「本地确实删了」，不是「本地扫不到」——四条都满足才动云端：基线里记着这个 Skill 的云端 id、那个目录确实没了、本机别处没有同一份、路径还在本次扫描范围内。同一个 Skill 装在多个 Agent 目录下时，删掉一份不算删（别的目录里还装着它）；改了 Agent 目录导致老路径扫不到，也不算删。
+
+**目录整个「看不清」时既不删也不装**：网盘掉了、目录被搬走、权限变了——扫不到东西不等于你删了它。这种情况下同步不会往云端传删除（一次就能把整个目录的 Skill 从云端清掉），也不会把云端那份装回来（装进去的那份你根本看不见）。结果里会明说为什么没动。代价是「你真的把整个目录清空了」也传不上去：确认了就加 `--force-delete`，或者逐个 `skillmesh cloud delete <slug>`。
 
 云端那边是**软删除**：版本和制品都留着，回收期内 `skillmesh cloud restore <slug>` 能找回来。
 
@@ -713,6 +716,8 @@ skillmesh installations --check            # 巡检本机磁盘，把真实状�
 `--agent`/`--scope`/`--dry-run` 是全局参数，但每条命令仍有自己的默认值——不给时：`install`/`group install` 装到 `claude-code` 的 `user` 范围，`add` 有项目根时装到 `project`，`scan`/`sync` 用全部启用的 Agent。`install` 回滚旧版本时，没给 `--agent`/`--scope` 就沿用锁文件里上次装的那次。
 
 `--dry-run` 只在认它的命令上生效：`install`、`add`、`group install`、`sync`、`publish`、`share`、`update`、`fix-skill`。其余命令（比如 `uninstall`）收到 `--dry-run` 会在 stderr 提示「该命令暂不支持 --dry-run，会照常执行」——别把演练当成保护。
+
+`--dry-run` 的承诺是**什么都不改**：不写本地文件、不传云端、不改同步基线。`sync` 撞上冲突也一样——演练只说会怎么做（保留本地 / 保留云端 / 先按文件合并），不会真上传、真下载，合并结果也不写回本机。
 
 **项目根目录**：默认从当前目录向上找带 `.git` 或 `skillmesh.yaml` 的目录——在仓库的子目录里跑命令，锁文件和项目级安装目录跟着仓库走，不跟着当前子目录走。`--project` 可以直接指定：
 
