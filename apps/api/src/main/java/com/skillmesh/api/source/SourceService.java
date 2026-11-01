@@ -177,6 +177,14 @@ public class SourceService {
             if (!scanRoot.startsWith(root)) {
                 throw new ApiException(400, ErrorCodes.VALIDATION_FAILED, "子目录越界");
             }
+            // 指名的子目录自己就是 Skill 时，候选就是它一个。
+            // 导入与更新那边（locate）也是这个口径：路径指的是 Skill 目录本身。
+            // 这里若还往下扫，用户「选了 skills/other」会得到一份空清单。
+            if (Files.exists(scanRoot.resolve("SKILL.md"))) {
+                found.add(new Candidate(root.relativize(scanRoot).toString().replace('\\', '/'),
+                    scanRoot.getFileName().toString()));
+                return found;
+            }
         }
         final Path base = scanRoot;
         try (var stream = Files.walk(base, MAX_SCAN_DEPTH)) {

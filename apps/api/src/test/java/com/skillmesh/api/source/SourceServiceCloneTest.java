@@ -55,6 +55,23 @@ class SourceServiceCloneTest {
     }
 
     @Test
+    void 仓库里有多个Skill目录时列出候选并能按路径选一个() throws Exception {
+        assumeTrue(gitAvailable(), "本机没有 git，跳过");
+        String url = localBareRepo();
+        allowAnyUrl();
+
+        // 候选清单：两个 Skill 目录都要列出来，用户自己挑。
+        SourceService.ResolveResult all = sources.resolve(url, null, null);
+        assertThat(all.candidates()).extracting(SourceService.Candidate::path)
+            .contains("skills/probe", "skills/other");
+
+        // 用户明确选了其中一个：只看那个子目录下的 Skill。
+        SourceService.ResolveResult picked = sources.resolve(url, "skills/other", null);
+        assertThat(picked.candidates()).extracting(SourceService.Candidate::path)
+            .containsExactly("skills/other");
+    }
+
+    @Test
     void 检出目录本身就是仓库根() throws Exception {
         assumeTrue(gitAvailable(), "本机没有 git，跳过");
         String url = localBareRepo();
@@ -83,6 +100,10 @@ class SourceServiceCloneTest {
         git("init", "--quiet", src.toString());
         Files.createDirectories(src.resolve("skills/probe"));
         Files.writeString(src.resolve("skills/probe/SKILL.md"), "# probe\n",
+            StandardCharsets.UTF_8);
+        // 第二个 Skill 目录：仓库里有几个就要列几个，用户自己挑。
+        Files.createDirectories(src.resolve("skills/other"));
+        Files.writeString(src.resolve("skills/other/SKILL.md"), "# other\n",
             StandardCharsets.UTF_8);
         git("-C", src.toString(), "add", "-A");
         git("-C", src.toString(), "-c", "user.email=probe@example.com",
