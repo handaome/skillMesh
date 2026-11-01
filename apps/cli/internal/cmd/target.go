@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/handaome/skillmesh/apps/cli/internal/agent"
 	"github.com/handaome/skillmesh/apps/cli/internal/installer"
 	"github.com/handaome/skillmesh/apps/cli/internal/skillscan"
@@ -43,7 +45,10 @@ func CheckTarget(target, source string, replace bool) error {
 		if replace {
 			return nil
 		}
-		return &installer.TargetConflictError{TargetPath: target, Reason: installer.ReasonUnmanaged}
+		// 说清还能怎么办：光说「目标已被占用」，用户不知道加 --replace 就能过
+		// （设计文档 §4.3 INST-001：默认拒绝，并给出提示）。
+		return fmt.Errorf("%w（要覆盖加 --replace）",
+			&installer.TargetConflictError{TargetPath: target, Reason: installer.ReasonUnmanaged})
 	}
 	if marker == source || replace {
 		return nil
