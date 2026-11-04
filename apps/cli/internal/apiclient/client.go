@@ -163,11 +163,24 @@ func decodeProblem(resp *http.Response) error {
 			Problem: Problem{
 				Code:   "HTTP_" + strconv.Itoa(resp.StatusCode),
 				Status: resp.StatusCode,
-				Detail: strings.TrimSpace(string(raw)),
+				Detail: briefBody(raw),
 			},
 		}
 	}
 	return &ProblemError{HTTPStatus: resp.StatusCode, Problem: p}
+}
+
+// briefBody 把错误体压成一行短文本。
+//
+// 反向代理挡下来的错误是 HTML 错误页，原样打印会把终端冲垮，
+// 排障要看的是哪一句，不是整页标签。
+func briefBody(raw []byte) string {
+	text := strings.Join(strings.Fields(string(raw)), " ")
+	runes := []rune(text)
+	if len(runes) > 200 {
+		return string(runes[:200]) + "…"
+	}
+	return text
 }
 
 func (c *Client) Me(ctx context.Context) (MeResponse, error) {

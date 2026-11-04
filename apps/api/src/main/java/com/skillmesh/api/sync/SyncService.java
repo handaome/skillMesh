@@ -23,7 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 同步变更集（详细设计 §12、§6.3）。
  *
  * 客户端负责算差异，服务端负责回答「你基于这个基线的提交，现在还成立吗」。
- * 云端已经被别的设备动过就判冲突，不自动覆盖——这正是 §6.3 要的那条线。
+ * 两边都偏离基线、且内容不同才判冲突，不自动覆盖——这正是 §6.3 要的那条线。
  */
 @Service
 public class SyncService {
@@ -131,11 +131,28 @@ public class SyncService {
      * 冲突判定：基线为空（第一次同步）不冲突；云端为空（云端还没有内容）也不冲突；
      * 否则只要云端和基线不一样，就说明别的设备动过了。
      */
+    /**
+     * 冲突判定：本地与云端都偏离了共同基线、而且两边内容不同，才算冲突。
+     *
+     * 只有云端偏离基线（本地没动）是「云端领先」，该做的动作是拉取；
+     * 只有本地偏离基线（云端没动）是「本地领先」，正常上传。
+     * 两边都动过、动出来的东西还不一样，才是真冲突，交给人定夺。
+     *
+     * 基线为空（第一次同步，双方没有共同祖先）时分不清谁先谁后，
+     * 按「有分歧即冲突」处理，避免盲目覆盖云端已有的内容。
+     */
     static boolean isConflict(String base, String local, String cloud) {
-        if (cloud == null || cloud.isBlank() || local.equals(cloud)) {
+        if (cloud == null || cloud.isBlank() || sameDigest(local, cloud)) {
             return false;
         }
-        return base == null || base.isBlank() || !base.equals(cloud);
+        return !sameDigest(base, local) && !sameDigest(base, cloud);
+    }
+
+    /** 摘要比较：空值与空值算一样（基线还没记上时按「没有共同祖先」处理）。 */
+    private static boolean sameDigest(String left, String right) {
+        String a = left == null ? "" : left;
+        String b = right == null ? "" : right;
+        return a.equals(b);
     }
 
     /** 云端最新已发布版本的内容摘要（对「路径 + 文件摘要」排序后哈希，与 CLI 同口径）。 */
@@ -172,7 +189,7 @@ public class SyncService {
             state.setLastErrorMessage("");
         } else {
             state.setLastErrorCode("SYNC_CONFLICT");
-            state.setLastErrorMessage("云端已被其他设备修改，需要人工确认");
+            state.setLastErrorMessage("云端与本地都改过且内容不同，需要人工确认");
         }
         states.save(state);
     }
@@ -197,7 +214,7 @@ public class SyncService {
         }
         String cloud = String.valueOf(changeset.getSummaryJson().getOrDefault("cloud_hash", ""));
         String message = changeset.getStatus() == ChangesetStatus.conflict
-            ? "云端已被其他设备修改，这次提交不会自动覆盖" : "已受理";
+            ? "云端与本地都改过且内容不同" : "已受理";
         return new SyncChangesetResponse(changeset.getId(), changeset.getSkillId(),
             changeset.getStatus(), cloud, message, items, changeset.getCreatedAt());
     }

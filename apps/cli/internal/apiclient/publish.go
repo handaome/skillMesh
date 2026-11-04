@@ -212,7 +212,14 @@ func (c *Client) putArtifactOnce(ctx context.Context, target UploadTarget,
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(response.Body)
-		return false, fmt.Errorf("上传制品失败（HTTP %d）：%s", response.StatusCode, string(body))
+		if response.StatusCode == http.StatusRequestEntityTooLarge {
+			// 反向代理挡在前面，请求体没到服务端。nginx 的 client_max_body_size
+			// 默认只有 1m，Skill 包稍大一点就撞上，报的还是代理自己的 HTML 错误页。
+			return false, fmt.Errorf("上传制品失败（HTTP 413）：本次包 %d 字节，超过服务端上限"+
+				"（反向代理的 client_max_body_size），调大后重试", len(data))
+		}
+		return false, fmt.Errorf("上传制品失败（HTTP %d）：%s",
+			response.StatusCode, briefBody(body))
 	}
 	_, _ = io.Copy(io.Discard, response.Body)
 	return false, nil
