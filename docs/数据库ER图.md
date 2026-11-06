@@ -418,6 +418,37 @@ erDiagram
 - `request_digest` 用来认出「同一个键配了不同的请求体」，这种情况要报冲突，不能照做。
 - `response_body` 为空 = 认领了还没做完；上一次失败时这一行会被删掉，重试才能重来。
 
+## 六、调用统计
+
+哪个 Skill 真的被用起来、用了多少次。客户端在 Agent 真调用了 Skill 时上报一行。
+
+```mermaid
+erDiagram
+    skill_call_records {
+        bigint id PK
+        varchar(64) event_id UK "客户端幂等键"
+        timestamptz occurred_at
+        uuid actor_user_id FK
+        uuid skill_id FK "对不上云端时为空"
+        uuid organization_id FK
+        varchar(128) skill_name
+        text agent
+        varchar(512) project_path
+        varchar(1000) args_preview "参数开头一段"
+        timestamptz created_at
+    }
+
+    users ||--o{ skill_call_records : "上报者"
+    organizations ||--o{ skill_call_records : "所属组织"
+    skills ||--o{ skill_call_records : "对应的 Skill"
+```
+
+要点：
+
+- `event_id` 是客户端给的幂等键，重复上报按它去重——网络抖动重发不会把一次调用算成两次。
+- `skill_id` 可能为空：本地装的 Skill 不一定发到过云端，匹配不上就只按 `skill_name` 统计。
+- `args_preview` 只留参数开头一段，也不做全文检索——调用参数里可能夹着文件内容。
+
 ## 关系总览
 
 ```mermaid
@@ -448,6 +479,9 @@ flowchart LR
     subgraph 幂等
         IK[idempotency_keys]
     end
+    subgraph 调用统计
+        SC[skill_call_records]
+    end
 
     U --> O
     U --> T
@@ -474,6 +508,9 @@ flowchart LR
     O --> AE
     D --> AE
     U --> IK
+    U --> SC
+    O --> SC
+    S --> SC
 ```
 
 ## 维护

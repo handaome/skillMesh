@@ -2,7 +2,7 @@ import { ensureFresh, loadMe, logout, session } from './auth/session'
 import type { OrgMembership } from './auth/session'
 import { API_BASE } from './constants/api'
 import router from './router'
-import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, OrgPermissions, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill, ImportedBatch, Installation, InstallationPatch, Device } from './types'
+import type { Skill, SkillPage, SkillVersion, VersionPage, VersionFiles, VersionFileContent, EditFileResult, Team, Member, OrgPermissions, InvitationPage, CreatedInvitation, InvitationSummary, AcceptedInvitation, PendingReview, PendingReviewPage, ReviewDetail, AuditEventPage, RecycleFile, DeletedSkillPage, TagCount, BatchDecideResult, BatchSkillResult, Group, UserAccount, SkillSource, SourceUpdateCheck, SourceUpdateResult, ResolvedSource, ImportedSkill, ImportedBatch, Installation, InstallationPatch, Device, SkillUsageStat, SkillUsageEventPage, SkillUsageSummary } from './types'
 import { authHeaders } from './utils/auth'
 
 /** 服务端错误。按 code 分支，不解析 detail 文本（详细设计 §2.1）。 */
@@ -690,4 +690,33 @@ export function registerDevice(body: {
  */
 export function revokeDevice(id: string): Promise<void> {
   return request<void>(`/devices/${id}`, 'DELETE')
+}
+
+/**
+ * Skill 调用统计：哪些 Skill 真的在用、用了多少次、多少人用。
+ */
+export function listSkillUsageStats(days?: number, skill?: string): Promise<SkillUsageStat[]> {
+  const params = new URLSearchParams({ limit: '200' })
+  if (days) params.set('days', String(days))
+  if (skill) params.set('skill', skill)
+  return request<SkillUsageStat[]>(`/skill-usage/stats?${params}`, 'GET')
+}
+
+/**
+ * 统计窗口的汇总：总调用次数、涉及多少个 Skill、涉及多少人。
+ */
+export function listSkillUsageSummary(days?: number, skill?: string): Promise<SkillUsageSummary> {
+  const params = new URLSearchParams()
+  if (days) params.set('days', String(days))
+  if (skill) params.set('skill', skill)
+  return request<SkillUsageSummary>(`/skill-usage/summary?${params}`, 'GET')
+}
+
+/**
+ * 最近的 Skill 调用流水，按游标往下翻。
+ */
+export function listSkillUsageEvents(cursor?: string, limit?: number): Promise<SkillUsageEventPage> {
+  const params = new URLSearchParams({ limit: String(limit ?? 50) })
+  if (cursor) params.set('cursor', cursor)
+  return request<SkillUsageEventPage>(`/skill-usage/events?${params}`, 'GET')
 }

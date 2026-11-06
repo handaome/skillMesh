@@ -99,6 +99,7 @@ func newRootCmd() *cobra.Command {
 		newLogsCmd(), newSelfInstallCmd(),
 		newWatchCmd(), newShareCmd(),
 		newFixSkillCmd(), newStatusCmd(), newLockCmd(),
+		newUsageCmd(),
 	)
 	hideAdvancedCommands(root)
 	return root

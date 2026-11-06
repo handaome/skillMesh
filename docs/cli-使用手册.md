@@ -910,3 +910,79 @@ sync:
 ```
 
 `sync` 与 `watch` 都会扫 `extra_dirs` 里的目录——放了目录，变更一样会被同步。
+
+## Skill 调用统计
+
+「发布了多少个 Skill」和「有多少 Skill 真被用起来」是两回事。这一节统计后者：
+哪个 Skill 被调用了多少次、谁在用、最近什么时候用的。
+
+### 装上
+
+```bash
+./skillmesh.exe usage hook install     # 装 hook
+./skillmesh.exe usage hook uninstall   # 卸掉
+```
+
+`install` 做三件事：
+
+1. 把 CLI 发布到固定路径 `<配置目录>/bin/skillmesh`（Windows 带 `.exe`），带版本标记；
+2. 把 hook 脚本写到 `~/.claude/tools/skill-usage.cjs`；
+3. 在 `~/.claude/settings.json` 里注册 `PreToolUse -> Skill`。
+
+装完重启 Claude Code 会话才生效。重复执行是幂等的：脚本会更新，注册项不会重复加。
+`uninstall` 只撤自己那一条注册，你别的 hook 不动。
+
+### 数据怎么流动
+
+每次真调用了 Skill，Claude Code 就触发一次 hook：
+
+- hook 往本机日志追加一行：`~/.claude/skill-usage/usage.jsonl`；
+- hook 同时调一次 `skillmesh usage push`，实时上报到云端。
+
+上报交给 CLI 发，不让 hook 自己联网：登录态、令牌续期、重试队列，CLI 已经有一套，
+重写一遍只会多一处会漂移的认证逻辑。发哪些字段由 CLI 决定，代码在仓库里看得见：
+Skill 名、项目路径、参数摘要、Agent 名。调用参数里可能夹着文件内容——介意的话
+把 hook 脚本里的 `--args` 去掉即可。
+
+推不出去的不丢，存进本机队列：
+
+```bash
+./skillmesh.exe usage flush     # 把队列里的补报上去
+```
+
+`usage watch` 盯着同一个日志往云端推，用途是补录历史（hook 装之前的调用）和做兜底：
+
+```bash
+./skillmesh.exe usage watch          # 常驻，每 30 秒查一次
+./skillmesh.exe usage watch --once   # 扫一遍就退出（补录历史用）
+```
+
+### 换一台机器
+
+新机器三步，不用到处找脚本文件——脚本随 CLI 走：
+
+```bash
+skillmesh login                  # 1. 装好 CLI 后先登录
+skillmesh usage hook install     # 2. 装 hook（顺带把 CLI 发布到固定路径）
+# 3. 重启 Claude Code 会话
+```
+
+### 命令
+
+```bash
+./skillmesh.exe usage stats                     # 各 Skill 调了多少次
+./skillmesh.exe usage stats --days 7 --skill ver
+./skillmesh.exe usage list --limit 20           # 调用流水
+./skillmesh.exe usage push --skill verify       # 手工报一条
+./skillmesh.exe usage flush                     # 把上报失败的补报上去
+```
+
+### 坑
+
+- **要登录**：`watch` / `push` / `stats` 用的是同一套登录态，没登录先 `skillmesh login`。
+- **hook 和 watch 不会重复计数**：两条路径用同一个幂等键（优先取工具调用 id），
+  服务端按它去重。网络抖动重发、或者 hook 报完 watch 又读到同一条，都只算一次。
+- **重复上报不要紧**：每条记录带一个幂等键（`event_id`），服务端按它去重——网络抖动重发不会把一次调用算成两次。
+- **推失败的会重试**：游标只在全部推成功时才前进，推失败的记录留在日志里，下一轮再推。
+- **统计口径**：概览里的「涉及人数」是全局去重的（一个人用了多个 Skill 只算一个），不是各 Skill 的人数相加。
+- **本地 Skill 名对不上云端**：没发到过云端的 Skill 只有名字，统计里按名字归类，不挂到具体 Skill 上。

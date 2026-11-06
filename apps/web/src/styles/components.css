@@ -139,6 +139,26 @@
 }
 .sm-panel-head .sm-meta { color: var(--faint); font-size: var(--fs-small); }
 
+/* ---------- 统计卡片 ---------- */
+/* 一排数字：概览用。数字是大字，标签是它上面那行小字注解——
+   数字才是主角。卡片仍是 sm-panel：靠 1px 边跟别处分开，不加阴影。 */
+.sm-stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+/* 卡片在栅格里并排：面板之间那条竖向间距是给上下堆叠用的，这里要去掉。 */
+.sm-stat-row > .sm-panel + .sm-panel { margin-top: 0; }
+.sm-stat { padding: 14px 16px; }
+.sm-stat-label { margin: 0; color: var(--muted); font-size: var(--fs-small); }
+.sm-stat-value {
+  margin: 4px 0 0;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
 /* ---------- 页面标题行 ---------- */
 /* 标题在左，动作在右。标题是名词，不是问候。 */
 .sm-title-row {

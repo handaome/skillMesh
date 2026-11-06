@@ -543,3 +543,56 @@ export interface UserAccount {
   role: string
   created_at: string
 }
+
+/**
+ * 一个 Skill 的调用统计。
+ *
+ * 回答「这个 Skill 到底有没有人在用」：窗口内被调用了几次、多少人用过、
+ * 最近一次是什么时候。
+ */
+export interface SkillUsageStat {
+  /** Skill 名（本地 skill 的名字，可能带命名空间前缀）。 */
+  skill: string
+  /** 统计窗口内的调用次数。 */
+  call_count: number
+  /** 统计窗口内用过它的人数（按这个 Skill 单独去重）。 */
+  user_count: number
+  /** 最近一次调用的时间。ISO 串，带时区。 */
+  last_used_at: string
+}
+
+/**
+ * 统计窗口的汇总。
+ *
+ * 人数是全局去重的：一个人用了多个 Skill 只算一个，
+ * 不能把各 Skill 的人数相加当人头。
+ */
+export interface SkillUsageSummary {
+  /** 窗口内的总调用次数。 */
+  total_calls: number
+  /** 窗口内被调用过的 Skill 数。 */
+  skill_count: number
+  /** 窗口内用过 Skill 的人数（全局去重）。 */
+  user_count: number
+}
+
+/**
+ * 一次 Skill 调用的流水。
+ *
+ * 记的是「哪一次」：什么时候、在哪个项目、带什么参数、由哪个 Agent 发起。
+ */
+export interface SkillUsageEvent {
+  /** 调用发生的时间。ISO 串，带时区。 */
+  occurred_at: string
+  /** 被调用的 Skill 名。 */
+  skill: string
+  /** 调用所在的项目目录。 */
+  project: string
+  /** 调用参数的摘要。服务端只留开头一段，可能很长。 */
+  args_preview: string
+  /** 发起调用的 Agent（claude-code 之类）。 */
+  agent: string
+}
+
+/** 调用流水的一页。与别的游标分页一个口径。 */
+export type SkillUsageEventPage = Page<SkillUsageEvent>
