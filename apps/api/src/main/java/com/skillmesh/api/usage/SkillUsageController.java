@@ -6,7 +6,9 @@ import com.skillmesh.api.auth.CurrentUserService;
 import com.skillmesh.api.common.CursorPage;
 import com.skillmesh.api.usage.dto.ReportSkillUsageRequest;
 import jakarta.validation.Valid;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -82,8 +84,10 @@ public class SkillUsageController {
             @JsonProperty("last_used_at") OffsetDateTime lastUsedAt) {
 
         static StatResponse of(SkillCallRecordRepository.SkillUsageStatRow row) {
+            // 统计行里的时间是 Instant（原生 SQL 的 max() 返回值），这里补回时区。
+            Instant lastUsedAt = row.getLastUsedAt();
             return new StatResponse(row.getSkill(), row.getCallCount(), row.getUserCount(),
-                row.getLastUsedAt());
+                lastUsedAt == null ? null : lastUsedAt.atOffset(ZoneOffset.UTC));
         }
     }
 

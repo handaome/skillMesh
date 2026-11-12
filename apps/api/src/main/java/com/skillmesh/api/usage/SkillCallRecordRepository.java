@@ -1,6 +1,7 @@
 package com.skillmesh.api.usage;
 
 import com.skillmesh.api.skill.VisibleSkills;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -122,7 +123,14 @@ public interface SkillCallRecordRepository extends JpaRepository<SkillCallRecord
 
         long getUserCount();
 
-        OffsetDateTime getLastUsedAt();
+        /**
+         * 最近一次调用的时间。
+         *
+         * 用 Instant 而不是 OffsetDateTime：原生 SQL 里 max(timestamptz) 的返回值
+         * 驱动给的是 Instant，接口投影不会把 Instant 转成 OffsetDateTime——
+         * 声明成 OffsetDateTime 会在读这一列时炸掉（读一行就 500）。
+         */
+        Instant getLastUsedAt();
     }
 
     /** 匹配到的云端 Skill。 */

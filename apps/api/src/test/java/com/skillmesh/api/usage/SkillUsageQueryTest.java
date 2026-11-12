@@ -2,6 +2,9 @@ package com.skillmesh.api.usage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.skillmesh.api.auth.UserEntity;
+import com.skillmesh.api.auth.UserRepository;
+import com.skillmesh.api.auth.UserStatus;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -25,6 +28,9 @@ class SkillUsageQueryTest {
 
     @Autowired
     private SkillCallRecordRepository repository;
+
+    @Autowired
+    private UserRepository users;
 
     @Test
     void 统计查询能跑通() {
@@ -55,5 +61,45 @@ class SkillUsageQueryTest {
 
         assertThat(first).isEqualTo(1);
         assertThat(second).isZero();
+    }
+
+    /**
+     * 统计行要真的能读出来。
+     *
+     * 只断言「没报错」不够：库里没数据时查询返回空，读那一列的转换根本不会执行。
+     * 上次就漏在这里——原生 SQL 里 max(timestamptz) 的返回值驱动给的是 Instant，
+     * 投影声明成 OffsetDateTime 会报「Cannot project Instant to OffsetDateTime」，
+     * 线上表现是接口一读就 500，测试却一直是绿的。
+     */
+    @Test
+    void 统计行读得出来() {
+        UUID owner = 建一个用户();
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        repository.insertIgnore("test-" + UUID.randomUUID(), now, owner, null, null,
+            "usage-test-skill", "claude-code", "/tmp/proj", "参数片段");
+
+        var rows = repository.stats(owner, now.minusDays(30), "%", 10);
+
+        assertThat(rows).hasSize(1);
+        SkillCallRecordRepository.SkillUsageStatRow row = rows.get(0);
+        assertThat(row.getSkill()).isEqualTo("usage-test-skill");
+        assertThat(row.getCallCount()).isEqualTo(1);
+        assertThat(row.getUserCount()).isEqualTo(1);
+        assertThat(row.getLastUsedAt()).isNotNull();
+    }
+
+    /** 建一个上报者：统计的可见性靠 actor_user_id 匹配本人，没有这行数据看不见。 */
+    private UUID 建一个用户() {
+        UUID id = UUID.randomUUID();
+        UserEntity entity = new UserEntity();
+        entity.setId(id);
+        entity.setOidcIssuer("https://probe.local");
+        entity.setOidcSubject("usage-probe-" + id);
+        entity.setDisplayName("统计探针用户");
+        entity.setStatus(UserStatus.active);
+        entity.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        entity.setUpdatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+        users.saveAndFlush(entity);
+        return id;
     }
 }
