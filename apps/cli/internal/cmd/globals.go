@@ -16,6 +16,12 @@ var (
 // dryRunAnnotation 标记「这个命令认 --dry-run」。
 const dryRunAnnotation = "skillmesh/dry-run"
 
+// defaultAgent 是用户没给 --agent 时装到哪个 Agent。
+//
+// 不是一份 Agent 清单：config.yaml 的 agents 段是开放的（见 agent.Names），
+// 这里只是「没指定时的默认落点」。
+const defaultAgent = "claude-code"
+
 // supportsDryRun 声明这个命令支持 --dry-run。
 //
 // 不声明的命令收到 --dry-run 会提示一句「照常执行」：

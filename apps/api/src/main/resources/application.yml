@@ -61,6 +61,13 @@ skillmesh:
     refresh-token-days: ${SM_REFRESH_TOKEN_DAYS:30}
   web:
     base-url: ${SM_WEB_BASE_URL:http://127.0.0.1:5174}
+  # 制品签名（设计文档 §10 制品完整性：可对发布清单签名并在客户端验证）。
+  # 不配私钥就不签——空着比签一个验不了的强。
+  # 私钥是 PKCS#8 的 base64，公钥是原始 32 字节的 base64，key-id 跟着公钥走。
+  signing:
+    private-key: ${SM_SIGNING_PRIVATE_KEY:}
+    public-key: ${SM_SIGNING_PUBLIC_KEY:}
+    key-id: ${SM_SIGNING_KEY_ID:local-dev}
   # 下面的限额都能按环境调（设计文档 §14「设置制品大小、文件数、扫描时间和 API 请求频率限制」）。
   # 磁盘小的地方把制品与扫描的限额调紧，扫描慢的地方给扫描器更多时间。
   artifact:

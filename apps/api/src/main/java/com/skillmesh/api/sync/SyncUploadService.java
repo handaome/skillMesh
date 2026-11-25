@@ -30,6 +30,7 @@ import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.VersionOrder;
 import com.skillmesh.api.version.VersionStatus;
+import com.skillmesh.api.version.VersionStatusResolver;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.time.OffsetDateTime;
@@ -253,23 +254,18 @@ public class SyncUploadService {
         // 团队与组织可见的版本要等人审，跟整包上传一个口径：
         // 走 sync commit 不能把审核队列绕过去。
         boolean needsReview = review.needsReview(skill.getId());
+        // 状态与它该有的时间戳一起落，规则与整包上传共用一份：
         // 扫描命中阻断规则 -> quarantined（隔离），与审核拒绝的 rejected 分开
         // （设计文档 §10.1）。
-        version.setStatus(scan.blocked() ? VersionStatus.quarantined
-            : needsReview ? VersionStatus.pending_review : VersionStatus.published);
+        VersionStatusResolver.applyPublishDecision(version, scan.blocked(), needsReview,
+            user.id(), now);
         if (version.getStatus() == VersionStatus.published) {
-            version.setPublishedBy(user.id());
-            version.setPublishedAt(now);
             // latest_version 取版本号较大者：发一版旧的不能把 latest 顶回去。
             if (VersionOrder.isGreater(version.getVersion(), skill.getLatestVersion())) {
                 skill.setLatestVersion(version.getVersion());
             }
             skill.setUpdatedAt(now);
             skills.save(skill);
-        }
-        if (version.getStatus() == VersionStatus.pending_review) {
-            // 队列里的 submitted_at 是进队列这一刻，不是建版本那一刻。
-            version.setSubmittedAt(now);
         }
         versions.save(version);
 

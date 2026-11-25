@@ -28,104 +28,9 @@ func newInstallCmd() *cobra.Command {
 			"给 Git 地址时配 --path 指到仓库里的子目录。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 本地 zip：没签名、没走过服务端扫描，不进注册中心，
-			// 只装到本机，来源写进锁文件（详细设计 §7.1 的来源分级）。
-			if file != "" {
-				if len(args) > 0 {
-					return fmt.Errorf("--file 与 skill-id 不能同时用")
-				}
-				root, cleanup, err := extractToTemp(file)
-				if err != nil {
-					return err
-				}
-				defer cleanup()
-				return installFromDir(localInstallOptions{
-					Root: root, Source: "local:" + file, SourceType: "local",
-					Provider: "local", Scope: scopeOr("user"),
-					Agents:       agentNamesOr("claude-code"),
-					UpdatePolicy: "manual", Replace: replace, DryRun: globalDryRun,
-				})
-			}
-			if len(args) == 0 {
-				return fmt.Errorf("要给 skill-id、仓库地址，或用 --file 指定本地 zip")
-			}
-			// Git 地址：直接从仓库装（设计文档 §3.5「支持来源类型」第三项）。
-			if looksLikeGitURL(args[0]) {
-				repo, err := gitx.NormalizeURL(args[0])
-				if err != nil {
-					return err
-				}
-				return installFromGit(cmd.Context(), gitInstallOptions{
-					Repository: repo, Ref: ref, Path: path,
-					Scope: scopeOr("user"), Agents: agentNamesOr("claude-code"),
-					Replace: replace, DryRun: globalDryRun,
-				})
-			}
-			client, err := newClient(cmd.Context())
-			if err != nil {
-				return err
-			}
-			projectRoot := projectRootDir()
-			lock, err := lockfile.Load(projectRoot)
-			if err != nil {
-				return err
-			}
-			fromLock, hasLock := lock.Find(args[0])
-			// 参数可以是 Skill ID，也可以是锁文件里记的名字：
-			// 后者支持 `install <名字> --version <旧版本>` 回滚，
-			// 这样就不用再记一个 rollback 命令。
-			skillID, agents, targetScope := args[0], agentNamesOr("claude-code"), scopeOr("user")
-			if hasLock && fromLock.SourceID != "" {
-				skillID = fromLock.SourceID
-				// 没显式给 --agent / --scope 时，沿用上次装的那次。
-				if !cmd.Flags().Changed("agent") && len(fromLock.Agents) > 0 {
-					agents = fromLock.Agents
-				}
-				if !cmd.Flags().Changed("scope") && fromLock.Scope != "" {
-					targetScope = fromLock.Scope
-				}
-			} else if hasLock && fromLock.Repository != "" {
-				// 已登记的本地来源：按锁文件里记的仓库、ref 与子目录重装一份。
-				// 锁文件记的就是上次解析到的那个版本，重装不会跑到别处去。
-				return installFromGit(cmd.Context(), gitInstallOptions{
-					Repository: fromLock.Repository, Ref: fromLock.Ref, Path: fromLock.Path,
-					Scope: scopeOr(fromLock.Scope), Agents: agentNamesOr("claude-code"),
-					Replace: replace, DryRun: globalDryRun,
-				})
-			}
-
-			versions, err := client.Versions(cmd.Context(), skillID)
-			if err != nil {
-				return err
-			}
-			// 不指定版本时装「注册中心口径的最新」：优先用注册中心给的
-			// latest_version，拿不到就按版本号取最大的。
-			latest := ""
-			if version == "" && !(locked && hasLock) {
-				latest = registryLatestVersion(cmd.Context(), client, skillID)
-			}
-			target, err := SelectVersion(versions, version, locked, fromLock, hasLock, latest)
-			if err != nil {
-				return err
-			}
-			// 装之前先摊开服务端扫描结论：内容没问题也该让人看见风险。
-			printVersionRisks(target)
-
-			data, err := client.DownloadArtifact(cmd.Context(), target.Artifact.ID)
-			if err != nil {
-				return err
-			}
-			if globalDryRun {
-				fmt.Printf("演练：将从 %s@%s 安装 %d 字节到 %v\n",
-					skillID, target.Version, len(data), agents)
-				return nil
-			}
-			return installArtifact(cmd.Context(), client, projectRoot, installRequest{
-				SkillID: skillID,
-				Version: target,
-				Agents:  agents,
-				Scope:   targetScope,
-				Replace: replace,
+			return runInstall(cmd, args, installOptions{
+				Version: version, File: file, Path: path, Ref: ref,
+				Locked: locked, Replace: replace,
 			})
 		},
 	}
@@ -137,6 +42,153 @@ func newInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&locked, "locked", false, "严格按锁文件校验，不符则失败")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
 	return supportsDryRun(cmd)
+}
+
+// installOptions 是 install 命令的全部参数。
+type installOptions struct {
+	Version string
+	File    string
+	Path    string
+	Ref     string
+	Locked  bool
+	Replace bool
+}
+
+// runInstall 按来源分流：本地 zip、Git 仓库、注册中心。
+func runInstall(cmd *cobra.Command, args []string, opts installOptions) error {
+	// 本地 zip：没签名、没走过服务端扫描，不进注册中心，
+	// 只装到本机，来源写进锁文件（详细设计 §7.1 的来源分级）。
+	if opts.File != "" {
+		if len(args) > 0 {
+			return fmt.Errorf("--file 与 skill-id 不能同时用")
+		}
+		return installFromLocalZip(opts)
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("要给 skill-id、仓库地址，或用 --file 指定本地 zip")
+	}
+	// Git 地址：直接从仓库装（设计文档 §3.5「支持来源类型」第三项）。
+	if repo, ok := gitRepoURL(args[0]); ok {
+		return installFromGit(cmd.Context(), gitInstallOptions{
+			Repository: repo, Ref: opts.Ref, Path: opts.Path,
+			Scope: scopeOr("user"), Agents: agentNamesOr(defaultAgent),
+			Replace: opts.Replace, DryRun: globalDryRun,
+		})
+	}
+	return installFromRegistry(cmd, args[0], opts)
+}
+
+// installFromLocalZip 装本地 zip：解到临时目录，按本地来源登记进锁文件。
+func installFromLocalZip(opts installOptions) error {
+	root, cleanup, err := extractToTemp(opts.File)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	return installFromDir(localInstallOptions{
+		Root: root, Source: "local:" + opts.File, SourceType: "local",
+		Provider: "local", Scope: scopeOr("user"),
+		Agents:       agentNamesOr(defaultAgent),
+		UpdatePolicy: policyManual, Replace: opts.Replace, DryRun: globalDryRun,
+	})
+}
+
+// installSource 是这次安装解析出来的来源。
+type installSource struct {
+	SkillID string
+	Agents  []string
+	Scope   string
+	// Git 非空表示按锁文件里登记的本地来源重装，不走注册中心。
+	Git      *gitInstallOptions
+	FromLock lockfile.LockedSkill
+	HasLock  bool
+}
+
+// resolveInstallSource 决定装哪个 Skill、用哪些 Agent 与 scope。
+//
+// 参数可以是 Skill ID，也可以是锁文件里记的名字：
+// 后者支持 `install <名字> --version <旧版本>` 回滚，
+// 这样就不用再记一个 rollback 命令。
+func resolveInstallSource(cmd *cobra.Command, lock lockfile.Lock, name string) installSource {
+	src := installSource{
+		SkillID: name, Agents: agentNamesOr(defaultAgent), Scope: scopeOr("user"),
+	}
+	fromLock, hasLock := lock.Find(name)
+	src.FromLock, src.HasLock = fromLock, hasLock
+	if !hasLock {
+		return src
+	}
+	// 先认注册中心 id，再认仓库地址：一条记录两个都写了时以注册中心 id 为准。
+	if fromLock.SourceID != "" {
+		src.SkillID = fromLock.SourceID
+		// 没显式给 --agent / --scope 时，沿用上次装的那次。
+		if !cmd.Flags().Changed("agent") && len(fromLock.Agents) > 0 {
+			src.Agents = fromLock.Agents
+		}
+		if !cmd.Flags().Changed("scope") && fromLock.Scope != "" {
+			src.Scope = fromLock.Scope
+		}
+		return src
+	}
+	if fromLock.Repository != "" {
+		// 已登记的本地来源：按锁文件里记的仓库、ref 与子目录重装一份。
+		// 锁文件记的就是上次解析到的那个版本，重装不会跑到别处去。
+		src.Git = &gitInstallOptions{
+			Repository: fromLock.Repository, Ref: fromLock.Ref, Path: fromLock.Path,
+			Scope: scopeOr(fromLock.Scope), Agents: agentNamesOr(defaultAgent),
+		}
+	}
+	return src
+}
+
+// installFromRegistry 从注册中心安装：选版本、下载制品、装到各 Agent 目录。
+func installFromRegistry(cmd *cobra.Command, name string, opts installOptions) error {
+	ctx := cmd.Context()
+	client, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
+	projectRoot := projectRootDir()
+	lock, err := lockfile.Load(projectRoot)
+	if err != nil {
+		return err
+	}
+	src := resolveInstallSource(cmd, lock, name)
+	if src.Git != nil {
+		src.Git.Replace = opts.Replace
+		src.Git.DryRun = globalDryRun
+		return installFromGit(ctx, *src.Git)
+	}
+	versions, err := client.Versions(ctx, src.SkillID)
+	if err != nil {
+		return err
+	}
+	// 不指定版本时装「注册中心口径的最新」：优先用注册中心给的
+	// latest_version，拿不到就按版本号取最大的。
+	latest := ""
+	if opts.Version == "" && !(opts.Locked && src.HasLock) {
+		latest = registryLatestVersion(ctx, client, src.SkillID)
+	}
+	target, err := SelectVersion(versions, opts.Version, opts.Locked,
+		src.FromLock, src.HasLock, latest)
+	if err != nil {
+		return err
+	}
+	// 装之前先摊开服务端扫描结论：内容没问题也该让人看见风险。
+	printVersionRisks(target)
+	// 演练不下载制品：字节数用服务端记的大小，别为看一眼大小把整包拉下来。
+	if globalDryRun {
+		fmt.Printf("演练：将从 %s@%s 安装 %d 字节到 %v\n",
+			src.SkillID, target.Version, target.Artifact.SizeBytes, src.Agents)
+		return nil
+	}
+	return installArtifact(ctx, client, projectRoot, lock, installRequest{
+		SkillID: src.SkillID,
+		Version: target,
+		Agents:  src.Agents,
+		Scope:   src.Scope,
+		Replace: opts.Replace,
+	})
 }
 
 // gitInstallOptions 是「从 Git 仓库装」这一路的参数。
@@ -168,19 +220,24 @@ func installFromGit(ctx context.Context, opts gitInstallOptions) error {
 	return installFromDir(localInstallOptions{
 		Root: root, Source: opts.Repository, SourceType: "git",
 		Repository: opts.Repository, Provider: providerOf(opts.Repository),
-		RefType: RefTypeOf(opts.Ref), Ref: opts.Ref, Commit: commit,
+		// RefType 不在这里给：clone 之后才知道取到的是分支还是标签，
+		// 交给 installFromDir 按仓库实际状态判定（设计文档 §7.1）。
+		Ref: opts.Ref, Commit: commit,
 		Subpath: opts.Path, Scope: opts.Scope, Agents: opts.Agents,
-		UpdatePolicy: "manual", Replace: opts.Replace, DryRun: opts.DryRun,
+		UpdatePolicy: policyManual, Replace: opts.Replace, DryRun: opts.DryRun,
 	})
 }
 
-// looksLikeGitURL 判断这个参数是不是仓库地址。
+// gitRepoURL 判断这个参数是不是仓库地址，顺手把地址规范化好。
 //
 // 靠 NormalizeURL 判：简写（owner/repo）、本地路径、非法协议它都拒绝，
-// 能过的就是远程仓库地址。
-func looksLikeGitURL(raw string) bool {
-	_, err := gitx.NormalizeURL(raw)
-	return err == nil
+// 能过的就是远程仓库地址。规范化只做一次，调用方拿到的就是能直接 clone 的地址。
+func gitRepoURL(raw string) (string, bool) {
+	repo, err := gitx.NormalizeURL(raw)
+	if err != nil {
+		return "", false
+	}
+	return repo, true
 }
 
 // installRequest 是一次注册中心安装的全部参数。
@@ -201,42 +258,37 @@ type artifactReport struct {
 
 // fetchArtifact 下载并解出可安装的目录：结构校验与验签都在这里做完。
 //
-// 返回的目录在 cleanup 调用前有效。install 与 restore 走同一条路——
-// 装进去的东西必须是服务端那份，验不过就不能进 Agent 目录。
+// 目录解在 work 指向的临时目录里，调用方负责清掉它（清空路径是空操作）。
+// install 与 restore 走同一条路——装进去的东西必须是服务端那份，
+// 验不过就不能进 Agent 目录。
 func fetchArtifact(ctx context.Context, client *apiclient.Client,
-	version apiclient.SkillVersion) (string, func(), artifactReport, error) {
+	version apiclient.SkillVersion) (skillDir string, work string, report artifactReport, err error) {
 
-	noop := func() {}
 	data, err := client.DownloadArtifact(ctx, version.Artifact.ID)
 	if err != nil {
-		return "", noop, artifactReport{}, err
+		return "", "", artifactReport{}, err
 	}
-	work, err := os.MkdirTemp("", "skillmesh-install-*")
+	work, err = os.MkdirTemp("", "skillmesh-install-*")
 	if err != nil {
-		return "", noop, artifactReport{}, err
+		return "", "", artifactReport{}, err
 	}
-	cleanup := func() { os.RemoveAll(work) }
-
-	skillDir, err := installer.ExtractZip(data, work)
+	skillDir, err = installer.ExtractZip(data, work)
 	if err != nil {
-		cleanup()
-		return "", noop, artifactReport{}, err
+		return "", work, artifactReport{}, err
 	}
 	if err := skillscan.ValidateDir(skillDir, skillscan.DefaultLimits); err != nil {
-		cleanup()
-		return "", noop, artifactReport{}, err
+		return "", work, artifactReport{}, err
 	}
 	verdict, err := VerifyArtifact(ctx, client, version, skillDir)
 	if err != nil {
-		cleanup()
-		return "", noop, artifactReport{}, err
+		return "", work, artifactReport{}, err
 	}
-	report := artifactReport{
+	report = artifactReport{
 		Verdict: verdict,
 		License: skillscan.LicenseLine(skillDir),
 		Risks:   riskText(skillDir),
 	}
-	return skillDir, cleanup, report, nil
+	return skillDir, work, report, nil
 }
 
 // installIntoAgent 把已校验的目录装进一个 Agent 目录：落盘、打标记、登记安装。
@@ -279,14 +331,21 @@ func installIntoAgent(ctx context.Context, client *apiclient.Client, skillDir st
 
 // installArtifact 下载指定版本、校验、原子装进各 Agent 目录并写锁文件。
 // install 和 rollback 走同一条路——回滚就是装一个更早的不可变版本。
+//
+// lock 由调用方读好传进来（lockfile.Load）：判这次安装算升级还是回滚、
+// 装完把它写回去，用的是同一份锁状态，不用读第二遍。
 func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot string,
-	req installRequest) error {
+	lock lockfile.Lock, req installRequest) error {
 
-	skillDir, cleanup, report, err := fetchArtifact(ctx, client, req.Version)
+	// 审计动作要在动锁文件之前定：升级、回滚还是普通安装，
+	// 看的是「装之前锁文件里记的是哪一版」（设计文档 §9.1、§10）。
+	action := installAuditAction(lock, req.SkillID, req.Version.Version)
+
+	skillDir, work, report, err := fetchArtifact(ctx, client, req.Version)
+	defer os.RemoveAll(work)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 	fmt.Printf("%s 验签：%s\n", req.Version.Version, report.Verdict)
 	fmt.Println(report.License)
 	if report.Risks != "" {
@@ -308,7 +367,7 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 		}
 		installedPaths[agentName] = path
 	}
-	if err := RecordInstall(InstallRecord{
+	if err := writeInstall(lock, InstallRecord{
 		ProjectRoot:   projectRoot,
 		Name:          name,
 		SkillID:       req.SkillID,
@@ -320,12 +379,31 @@ func installArtifact(ctx context.Context, client *apiclient.Client, projectRoot 
 	}); err != nil {
 		return err
 	}
-	// 上报安装完成：服务端只记自己知道的特权动作，本地发生了什么它看不见。
+	// 上报安装结果：服务端只记自己知道的特权动作，本地发生了什么它看不见。
 	// 上报失败不该影响安装结果——东西已经装好了。
-	_ = client.ReportAuditEvent(ctx, "install.completed", req.SkillID, "success",
+	_ = client.ReportAuditEvent(ctx, action, req.SkillID, "success",
 		map[string]string{"name": name, "version": req.Version.Version})
 	fmt.Printf("锁文件 %s\n", lockfile.FileName)
 	return nil
+}
+
+// installAuditAction 判这次安装该报哪条审计动作。
+//
+// 锁文件里记着上一版：版本号更大是升级，更小是回滚（设计文档 §9.1「回滚也必须写
+// 审计日志」、§10 审计要记「升级」）。一律报 install.completed，升级与回滚就都
+// 混成一条流水，事后查不出来。
+func installAuditAction(lock lockfile.Lock, skillID, version string) string {
+	if skillID == "" {
+		return "install.completed"
+	}
+	previous, ok := lock.FindBySourceID(skillID)
+	if !ok || previous.Version == "" || previous.Version == version {
+		return "install.completed"
+	}
+	if VersionGreater(version, previous.Version) {
+		return "install.upgraded"
+	}
+	return "install.rolled_back"
 }
 
 // reportInstallation 把这次安装登记到注册中心：回答「我在哪些机器上装了什么」。
@@ -383,6 +461,14 @@ func RecordInstall(record InstallRecord) error {
 	if err != nil {
 		return err
 	}
+	return writeInstall(lock, record)
+}
+
+// writeInstall 把一次安装写进已经读好的锁文件。
+//
+// 读锁文件只做一次：装之前要拿它判升级还是回滚，装完又要写它。
+// 分成两个函数，读的那次和写的那次就能共用同一份内存里的锁。
+func writeInstall(lock lockfile.Lock, record InstallRecord) error {
 	entry := lockfile.LockedSkill{
 		Name:          record.Name,
 		SourceID:      record.SkillID,

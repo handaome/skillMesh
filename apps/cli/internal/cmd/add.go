@@ -30,10 +30,10 @@ func NewAddCmd() *cobra.Command {
 			"只想看会装什么，加 --dry-run。",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !contains([]string{"manual", "notify", "auto_safe"}, updatePolicy) {
-				return fmt.Errorf("--update-policy 只能是 manual / notify / auto_safe")
+			if !contains(storedPolicies, updatePolicy) {
+				return fmt.Errorf("--update-policy 只能是 %s", strings.Join(storedPolicies, " / "))
 			}
-			if refType != "" && !contains([]string{"branch", "tag", "commit", "default"}, refType) {
+			if refType != "" && !contains(validRefTypes, refType) {
 				return fmt.Errorf("--ref-type 只能是 branch / tag / commit / default")
 			}
 			// --name 是本机上的别名，一个名字只对得上一个 Skill。
@@ -57,7 +57,7 @@ func NewAddCmd() *cobra.Command {
 				return installFromDir(localInstallOptions{
 					Root: root, Source: "local:" + root, SourceType: "local",
 					Provider: "local", Subpath: subpath, All: all, Scope: scopeOr(""),
-					Agents: agentNamesOr("claude-code"), UpdatePolicy: updatePolicy,
+					Agents: agentNamesOr(defaultAgent), UpdatePolicy: updatePolicy,
 					Replace: replace, DryRun: globalDryRun, Alias: alias,
 				})
 			}
@@ -91,7 +91,7 @@ func NewAddCmd() *cobra.Command {
 				Repository: repo, Provider: providerOf(repo),
 				RefType: refType, Ref: ref, Commit: commit,
 				Subpath: subpath, All: all, Scope: scopeOr(""),
-				Agents:       agentNamesOr("claude-code"),
+				Agents:       agentNamesOr(defaultAgent),
 				UpdatePolicy: updatePolicy, Replace: replace, DryRun: globalDryRun,
 				Alias: alias,
 			})
@@ -108,7 +108,7 @@ func NewAddCmd() *cobra.Command {
 		"本机上的别名：只改安装目录与锁文件里的名字，不改上游 SKILL.md")
 	cmd.Flags().BoolVar(&all, "all", false, "安装仓库里的全部 Skill")
 	cmd.Flags().BoolVar(&replace, "replace", false, "覆盖不受 SkillMesh 管理的同名目录")
-	cmd.Flags().StringVar(&updatePolicy, "update-policy", "notify",
+	cmd.Flags().StringVar(&updatePolicy, "update-policy", policyNotify,
 		"更新策略：manual（不动）/ notify（默认，只提示）/ auto_safe（无本地改动时自动更新）")
 	// --install 现在是默认行为，留着只为兼容旧脚本（写 --install 不报错）。
 	// 藏起来：帮助里只该出现 --dry-run 这一个「装不装」的开关。
@@ -339,24 +339,26 @@ func InstalledDigest(target string) string {
 func RefTypeOf(ref string) string {
 	switch {
 	case ref == "":
-		return "default"
+		return gitx.RefDefault
 	case len(ref) == 40:
-		return "commit"
+		return gitx.RefCommit
 	default:
-		return "branch"
+		return gitx.RefBranch
 	}
 }
 
 // RefTypeOfInRepo 在已克隆的仓库里判定 ref 类型。
-// clone --branch <tag> 会把 tag ref 一起带下来，所以本地查得到。
+//
+// 浅克隆不落本地 refs/tags/，查本地 ref 问不出来；git 把这次取到的是
+// 分支还是标签写在 .git/FETCH_HEAD 里，问它才有答案。
 func RefTypeOfInRepo(repoDir, ref string) string {
 	if ref == "" || len(ref) == 40 {
 		return RefTypeOf(ref)
 	}
-	if gitx.HasTag(repoDir, ref) {
-		return "tag"
+	if gitx.FetchKind(repoDir) == gitx.RefTag {
+		return gitx.RefTag
 	}
-	return "branch"
+	return gitx.RefBranch
 }
 
 // RefTypeOrDetect 用用户显式指定的类型，没指定就自己判断。

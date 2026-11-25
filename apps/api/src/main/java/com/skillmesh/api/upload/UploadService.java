@@ -21,6 +21,7 @@ import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.PublishedDigest;
 import com.skillmesh.api.version.VersionOrder;
 import com.skillmesh.api.version.VersionStatus;
+import com.skillmesh.api.version.VersionStatusResolver;
 import com.skillmesh.api.version.dto.UploadSession;
 import java.io.IOException;
 import java.io.InputStream;
@@ -243,19 +244,12 @@ public class UploadService {
         // 个人与公开的版本扫描通过就发布；团队与组织可见的要等人审
         // （设计文档 §10.1 的 draft → pending_review → published）。
         boolean needsReview = review.needsReview(version.getSkillId());
+        // 状态与它该有的时间戳一起落，规则只有一份，上传与同步提交同一口径：
         // 扫描命中阻断规则 -> quarantined（隔离，不是普通的拒绝）：
         // 「内容里有真凭据」与「审核者觉得不合适」是两回事，流水要能分开看
         // （设计文档 §10.1：扫描失败或审核拒绝进入 rejected/quarantined）。
-        version.setStatus(scan.blocked() ? VersionStatus.quarantined
-            : needsReview ? VersionStatus.pending_review : VersionStatus.published);
-        if (version.getStatus() == VersionStatus.published) {
-            version.setPublishedBy(user.id());
-            version.setPublishedAt(now);
-        }
-        if (version.getStatus() == VersionStatus.pending_review) {
-            // 队列里的 submitted_at 是进队列这一刻，不是建版本那一刻。
-            version.setSubmittedAt(now);
-        }
+        VersionStatusResolver.applyPublishDecision(version, scan.blocked(), needsReview,
+            user.id(), now);
         versions.save(version);
 
         if (version.getStatus() == VersionStatus.published) {

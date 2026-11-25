@@ -11,7 +11,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Value;
@@ -107,17 +109,80 @@ public class SourceService {
     /** 查远端某个 ref 指向的 commit，不带完整内容。 */
     public UpdateCheck checkUpdates(String repositoryUrl, String ref) {
         GitHostPolicy.Allowed allowed = policy.allow(repositoryUrl);
+        String name = ref == null ? "" : ref.trim();
         try {
-            String head = run(List.of("git", "ls-remote", allowed.url(),
-                ref == null || ref.isBlank() ? "HEAD" : ref), pin(allowed));
-            String commit = head.isBlank() ? "" : head.split("\\s+")[0];
-            return new UpdateCheck(commit, repositoryUrl, ref == null ? "" : ref);
+            if (name.isEmpty()) {
+                String head = run(List.of("git", "ls-remote", allowed.url(), "HEAD"),
+                    pin(allowed));
+                return new UpdateCheck(firstField(head), repositoryUrl, "");
+            }
+            // 注解 tag 有两个对象：tag 自己与它指向的 commit。
+            // ls-remote 默认只给 tag 对象的 SHA，跟已解析的 commit 永远不相等，
+            // 检查更新就会一直报「有新版」。要剥开的 refs/tags/<tag>^{}。
+            String out = run(List.of("git", "ls-remote", allowed.url(), name,
+                "refs/heads/" + name, "refs/tags/" + name,
+                "refs/tags/" + name + "^{}"), pin(allowed));
+            return new UpdateCheck(remoteCommit(out, name), repositoryUrl, name);
         } catch (IOException e) {
             throw new ApiException(502, ErrorCodes.INTERNAL, "查询远端失败：" + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ApiException(504, ErrorCodes.INTERNAL, "查询远端超时");
         }
+    }
+
+    /**
+     * 从 ls-remote 的输出里取这个 ref 指向的 commit。
+     *
+     * 顺序跟 git 自己解析同名 ref 的顺序一致：先标签再分支。
+     * 标签优先取剥开的 {@code refs/tags/<tag>^{}}——那是它指向的 commit；
+     * 轻量标签只有一个对象，剥不开就用标签本身。
+     *
+     * <p>这四步的顺序与 CLI 那份必须一样：
+     * {@code apps/cli/internal/gitx/git.go} 的 {@code LsRemote} 按同样的顺序找 commit。
+     * 两边各写一份是因为服务端与 CLI 不在同一个进程里；改一处就得改另一处。
+     */
+    private static String remoteCommit(String lsRemoteOutput, String name) {
+        Map<String, String> refs = new LinkedHashMap<>();
+        for (String line : lsRemoteOutput.split("\\R")) {
+            String[] fields = fields(line);
+            if (fields.length == 2 && fields[0].length() == 40) {
+                refs.put(fields[1], fields[0]);
+            }
+        }
+        String peeled = refs.get("refs/tags/" + name + "^{}");
+        if (peeled != null) {
+            return peeled;
+        }
+        String tag = refs.get("refs/tags/" + name);
+        if (tag != null) {
+            return tag;
+        }
+        String branch = refs.get("refs/heads/" + name);
+        if (branch != null) {
+            return branch;
+        }
+        for (Map.Entry<String, String> entry : refs.entrySet()) {
+            if (entry.getKey().equals(name)) {
+                return entry.getValue();
+            }
+        }
+        return "";
+    }
+
+    /** 拆一行命令输出成字段：SHA 与 ref 名之间是空白。 */
+    private static String[] fields(String line) {
+        String trimmed = line == null ? "" : line.trim();
+        if (trimmed.isEmpty()) {
+            return new String[0];
+        }
+        return trimmed.split("\\s+");
+    }
+
+    /** 取一行输出里的第一个字段（ls-remote 的 SHA）。 */
+    private static String firstField(String line) {
+        String[] fields = fields(line);
+        return fields.length == 0 ? "" : fields[0];
     }
 
     private String clone(GitHostPolicy.Allowed allowed, String ref, Path target)

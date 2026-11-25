@@ -113,13 +113,13 @@ func restoreOne(ctx context.Context, client *apiclient.Client, skill apiclient.S
 		result.Why = err.Error()
 		return result
 	}
-	skillDir, cleanup, report, err := fetchArtifact(ctx, client, target)
+	skillDir, work, report, err := fetchArtifact(ctx, client, target)
+	defer os.RemoveAll(work)
 	if err != nil {
 		result.State = restoreFailed
 		result.Why = err.Error()
 		return result
 	}
-	defer cleanup()
 	result.Risks = report.Risks
 
 	name, err := skillDirName(skillDir)
@@ -129,61 +129,28 @@ func restoreOne(ctx context.Context, client *apiclient.Client, skill apiclient.S
 		return result
 	}
 	remoteDigest := InstalledDigest(skillDir)
-	source := "skillmesh:" + skill.ID
 
 	installed := 0
 	var notes []string
+	job := restoreJob{
+		skill:    skill,
+		version:  target,
+		skillDir: skillDir,
+		name:     name,
+		digest:   remoteDigest,
+	}
 	for _, agentName := range options.Agents {
-		installPath, err := installTargetOf(agentName, options.Scope, options.ProjectRoot,
-			skillDir, name)
+		action, note, done, err := restoreToAgent(ctx, client, job, agentName, options)
 		if err != nil {
 			result.State = restoreFailed
 			result.Why = err.Error()
 			return result
 		}
-		exists := false
-		if _, err := os.Stat(installPath); err == nil {
-			exists = true
+		result.State = mergeRestoreState(result.State, action)
+		notes = append(notes, note)
+		if done {
+			installed++
 		}
-		localDigest := localDigestOf(installPath)
-		switch decideRestore(exists, localDigest, remoteDigest,
-			installer.MarkerOf(installPath), source, options.Replace) {
-		case restoreDoSame:
-			result.State = mergeRestoreState(result.State, restoreSame)
-			notes = append(notes, agentName+"：内容与云端一致")
-			// 基线照样记：本地已经是这份了，下一次 sync 该知道它跟云端一致。
-			recordRestoreBaseline(options.State, skill.ID, name, agentName,
-				installPath, target.Version)
-			continue
-		case restoreDoSkip:
-			result.State = mergeRestoreState(result.State, restoreSkip)
-			notes = append(notes, agentName+"：本地有同名目录，不受 SkillMesh 管理，没覆盖")
-			continue
-		}
-		// 本地改过、基线还停在上次同步：这是 sync 该报的冲突，
-		// 这里直接覆盖等于替用户丢改动。宁可跳过，让人去 sync 里定夺。
-		if entry, ok := options.State.Find(name, agentName); ok &&
-			entry.BaseHash != "" && localDigest != "" && entry.BaseHash != localDigest {
-			result.State = mergeRestoreState(result.State, restoreSkip)
-			notes = append(notes, agentName+"：本地有未同步的改动，用 skillmesh sync 处理")
-			continue
-		}
-		if _, err := installIntoAgent(ctx, client, skillDir, installRequest{
-			SkillID: skill.ID,
-			Version: target,
-			Agents:  []string{agentName},
-			Scope:   options.Scope,
-			Replace: options.Replace,
-		}, agentName, options.ProjectRoot); err != nil {
-			result.State = restoreFailed
-			result.Why = err.Error()
-			return result
-		}
-		installed++
-		result.State = mergeRestoreState(result.State, restoreDone)
-		notes = append(notes, agentName+"："+installPath)
-		recordRestoreBaseline(options.State, skill.ID, name, agentName,
-			installPath, target.Version)
 	}
 	result.Why = strings.Join(notes, "；")
 	if installed == 0 {
@@ -203,6 +170,61 @@ func restoreOne(ctx context.Context, client *apiclient.Client, skill apiclient.S
 	_ = client.ReportAuditEvent(ctx, "install.completed", skill.ID, "success",
 		map[string]string{"name": name, "version": target.Version})
 	return result
+}
+
+// restoreJob 是恢复一个 Skill 时各处都要用的那几样东西。
+type restoreJob struct {
+	skill    apiclient.Skill
+	version  apiclient.SkillVersion
+	skillDir string
+	name     string
+	digest   string
+}
+
+// restoreToAgent 把一份内容恢复到某一个 Agent 目录。
+//
+// 返回这次的动作、给人看的一句话，以及内容是不是真装上了。
+func restoreToAgent(ctx context.Context, client *apiclient.Client, job restoreJob,
+	agentName string, options restoreOptions) (string, string, bool, error) {
+
+	installPath, err := installTargetOf(agentName, options.Scope, options.ProjectRoot,
+		job.skillDir, job.name)
+	if err != nil {
+		return restoreFailed, err.Error(), false, err
+	}
+	exists := false
+	if _, err := os.Stat(installPath); err == nil {
+		exists = true
+	}
+	localDigest := localDigestOf(installPath)
+	switch decideRestore(exists, localDigest, job.digest,
+		installer.MarkerOf(installPath), "skillmesh:"+job.skill.ID, options.Replace) {
+	case restoreDoSame:
+		// 基线照样记：本地已经是这份了，下一次 sync 该知道它跟云端一致。
+		recordRestoreBaseline(options.State, job.skill.ID, job.name, agentName,
+			installPath, job.version.Version)
+		return restoreSame, agentName + "：内容与云端一致", false, nil
+	case restoreDoSkip:
+		return restoreSkip, agentName + "：本地有同名目录，不受 SkillMesh 管理，没覆盖", false, nil
+	}
+	// 本地改过、基线还停在上次同步：这是 sync 该报的冲突，
+	// 这里直接覆盖等于替用户丢改动。宁可跳过，让人去 sync 里定夺。
+	if entry, ok := options.State.Find(job.name, agentName); ok &&
+		entry.BaseHash != "" && localDigest != "" && entry.BaseHash != localDigest {
+		return restoreSkip, agentName + "：本地有未同步的改动，用 skillmesh sync 处理", false, nil
+	}
+	if _, err := installIntoAgent(ctx, client, job.skillDir, installRequest{
+		SkillID: job.skill.ID,
+		Version: job.version,
+		Agents:  []string{agentName},
+		Scope:   options.Scope,
+		Replace: options.Replace,
+	}, agentName, options.ProjectRoot); err != nil {
+		return restoreFailed, err.Error(), false, err
+	}
+	recordRestoreBaseline(options.State, job.skill.ID, job.name, agentName,
+		installPath, job.version.Version)
+	return restoreDone, agentName + "：" + installPath, true, nil
 }
 
 // mergeRestoreState 汇总多个 Agent 的结果：失败最要紧，其次是装好了。

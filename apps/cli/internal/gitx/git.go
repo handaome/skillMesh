@@ -5,8 +5,19 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+)
+
+// ref 类型的词表。锁文件记的 ref_type、远端解析出的 kind 都是这几个值，
+// 比较它们的地方一律用这里的常量，别各处自己写字符串。
+const (
+	RefBranch  = "branch"
+	RefTag     = "tag"
+	RefCommit  = "commit"
+	RefDefault = "default"
 )
 
 // NormalizeURL 规范化仓库地址，拒绝危险协议与内嵌凭据
@@ -115,26 +126,71 @@ func Clone(ctx context.Context, repo, ref, dest string) (string, error) {
 }
 
 // LsRemote 只取远端 ref 指向的 commit，不下载内容（详细设计 §3.7 检查更新路径）。
-func LsRemote(ctx context.Context, repo, ref string) (string, error) {
+//
+// 注解 tag 有两个对象：tag 自己与它指向的 commit。ls-remote 只给 tag 对象的 SHA，
+// 拿它跟本地记的 commit 比，永远不相等——检查更新就会一直报「有新版」，
+// 真去更新时按那个 SHA 去 clone 还会失败。所以 tag 要取剥开的
+// refs/tags/<tag>^{}，那才是 commit（轻量 tag 只有一个对象，剥不开也一样能用）。
+//
+// 返回的 kind 是这个 ref 的类型（branch / tag / default）：
+// 锁文件要记它（设计文档 §7.1 的 ref_type），固定到 tag 的来源才不会被误当成
+// 会漂移的分支。
+func LsRemote(ctx context.Context, repo, ref string) (string, string, error) {
 	args := []string{"ls-remote"}
 	if ref == "" {
 		args = append(args, repo, "HEAD")
 	} else {
-		args = append(args, repo, ref, ref)
+		args = append(args, repo, ref,
+			"refs/heads/"+ref, "refs/tags/"+ref, "refs/tags/"+ref+"^{}")
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", GitError(args, err, string(out))
+		return "", "", GitError(args, err, string(out))
 	}
+	refs := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && len(fields[0]) == 40 {
-			return fields[0], nil
+			refs[fields[1]] = fields[0]
 		}
 	}
-	return "", fmt.Errorf("远端未找到 ref: %s", ref)
+	if ref == "" {
+		if sha, ok := refs["HEAD"]; ok {
+			return sha, RefDefault, nil
+		}
+		return "", "", fmt.Errorf("远端未找到 ref: %s", ref)
+	}
+	// 顺序跟 git 自己解析 <name> 的顺序一致：先 tag 再 branch。
+	//
+	// 这四步的顺序与服务端那份必须一样：apps/api 的 SourceService.remoteCommit
+	// 按同样的顺序找 commit（剥开的 tag → 轻量 tag → branch → 完整 ref 名）。
+	// 两边各写一份是因为 CLI 与服务端不在同一个进程里；改一处就得改另一处。
+	if sha, ok := refs["refs/tags/"+ref+"^{}"]; ok {
+		return sha, RefTag, nil
+	}
+	if sha, ok := refs["refs/tags/"+ref]; ok {
+		return sha, RefTag, nil
+	}
+	if sha, ok := refs["refs/heads/"+ref]; ok {
+		return sha, RefBranch, nil
+	}
+	// 完整 ref（refs/pull/1/head 之类）只能按查到的原样用。
+	for name, sha := range refs {
+		if name == ref {
+			return sha, kindOfRefName(name), nil
+		}
+	}
+	return "", "", fmt.Errorf("远端未找到 ref: %s", ref)
+}
+
+// kindOfRefName 按 ref 的名字判断类型。
+func kindOfRefName(name string) string {
+	if strings.HasPrefix(name, "refs/tags/") {
+		return RefTag
+	}
+	return RefBranch
 }
 
 func parentOf(path string) string {
@@ -144,12 +200,24 @@ func parentOf(path string) string {
 	return "."
 }
 
-// HasTag 报本地克隆里有没有这个 tag。
+// FetchKind 看这次取到的是分支还是标签。
 //
-// clone --branch <tag> 会把 tag ref 一并带下来，所以查本地就够——
-// 不用再问一次远端（省一次网络往返）。
-func HasTag(repoDir, tag string) bool {
-	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--verify", "--quiet", "refs/tags/"+tag)
-	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
-	return cmd.Run() == nil
+// git 把取到的东西写在 .git/FETCH_HEAD 里：分支写 branch 'main'，
+// 标签写 tag 'v1.0.0'。浅克隆不落本地 refs/tags/，查本地 ref 查不出来——
+// 问 FETCH_HEAD 才有答案（服务端判来源类型用的也是这一行）。
+//
+// 取到的既不是分支也不是标签（按 commit sha 取的）时返回空串。
+func FetchKind(repoDir string) string {
+	data, err := os.ReadFile(filepath.Join(repoDir, ".git", "FETCH_HEAD"))
+	if err != nil {
+		return ""
+	}
+	head := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)[0]
+	switch {
+	case strings.Contains(head, "tag '"):
+		return RefTag
+	case strings.Contains(head, "branch '"):
+		return RefBranch
+	}
+	return ""
 }

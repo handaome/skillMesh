@@ -3,6 +3,7 @@
 package lockfile
 
 import (
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -22,12 +23,12 @@ type Lock struct {
 
 // LockedSkill 是一次解析的结果。CI 用 --locked 校验它没漂移。
 type LockedSkill struct {
-	Name           string   `yaml:"name"`
-	SourceID       string   `yaml:"source_id,omitempty"`
-	Repository     string   `yaml:"repository"`
+	Name       string `yaml:"name"`
+	SourceID   string `yaml:"source_id,omitempty"`
+	Repository string `yaml:"repository"`
 	// SourceType 是来源类型：git（留空也算 git）/ local。
 	// 本地来源没有仓库地址，来源信息靠它和 Path 认。
-	SourceType    string   `yaml:"source_type,omitempty"`
+	SourceType     string   `yaml:"source_type,omitempty"`
 	Provider       string   `yaml:"provider,omitempty"`
 	Path           string   `yaml:"path"`
 	RefType        string   `yaml:"ref_type"`
@@ -59,11 +60,29 @@ func Path(projectRoot string) string {
 	return filepath.Join(projectRoot, FileName)
 }
 
+// Load 读锁文件。
+//
+// 文件不存在时返回一份空锁（version: 1）。文件存在但没写 version 的老文件
+// 也按 version: 1 算：版本号缺失不代表里面的内容不能用。
 func Load(projectRoot string) (Lock, error) {
-	return statefile.Load(Path(projectRoot), FileName, Lock{Version: 1})
+	lock, err := statefile.Load(Path(projectRoot), FileName, Lock{Version: 1})
+	if err != nil {
+		return lock, err
+	}
+	if lock.Version == 0 {
+		lock.Version = 1
+	}
+	return lock, nil
 }
 
+// Save 写锁文件。
+//
+// 没读过的锁（零值）不能写：写出去就是一份空锁文件，把用户装过的记录抹了。
+// Load 读出来的锁 version 至少是 1，所以这里的 version == 0 只可能是零值锁。
 func (l Lock) Save(projectRoot string) error {
+	if l.Version == 0 {
+		return fmt.Errorf("锁文件还没读出来，不能写入")
+	}
 	l.Version = 1
 	if l.ResolvedAt == "" {
 		l.ResolvedAt = time.Now().UTC().Format(time.RFC3339)

@@ -94,6 +94,25 @@ class SourceServiceCloneTest {
         }
     }
 
+    /**
+     * 注解 tag 有两个对象：tag 自己与它指向的 commit。
+     *
+     * ls-remote 默认只给 tag 对象的 SHA，跟已解析的 commit 永远不相等——
+     * 检查更新就会一直报「有新版」。要的是剥开的那个 commit。
+     */
+    @Test
+    void 检查更新时注解标签要解析成它指向的提交() throws Exception {
+        assumeTrue(gitAvailable(), "本机没有 git，跳过");
+        String url = localBareRepo();
+        allowAnyUrl();
+
+        SourceService.UpdateCheck remote = sources.checkUpdates(url, "v2.0.0");
+
+        try (SourceService.Checkout checkout = sources.checkout(url, "v2.0.0")) {
+            assertThat(remote.commit()).isEqualTo(checkout.commit());
+        }
+    }
+
     /** 造一个带 SKILL.md 的本地裸仓库，返回它的 file:// 地址。 */
     private String localBareRepo() throws Exception {        Path work = Files.createTempDirectory("skillmesh-git-fixture-");
         Path src = work.resolve("src");
@@ -111,6 +130,10 @@ class SourceServiceCloneTest {
         Path bare = work.resolve("bare.git");
         git("clone", "--quiet", "--bare", src.toString(), bare.toString());
         git("-C", bare.toString(), "tag", "v1.0.0");
+        // 注解标签：它有两个对象（标签本身 + 它指向的提交），
+        // 检查更新时容易只拿到标签自己那个。
+        git("-C", bare.toString(), "-c", "user.email=probe@example.com",
+            "-c", "user.name=probe", "tag", "-a", "v2.0.0", "-m", "release");
         return bare.toUri().toString();
     }
 

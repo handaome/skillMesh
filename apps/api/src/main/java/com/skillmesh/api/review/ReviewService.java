@@ -19,6 +19,7 @@ import com.skillmesh.api.version.SkillVersionEntity;
 import com.skillmesh.api.version.SkillVersionRepository;
 import com.skillmesh.api.version.VersionOrder;
 import com.skillmesh.api.version.VersionStatus;
+import com.skillmesh.api.version.VersionStatusResolver;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -140,9 +141,8 @@ public class ReviewService {
         // 送审不是审核结论，不占 skill_reviews 的名额（那是审核动作的）：
         // 占了名额，驳回之后提交人就再也送不回去，这一版就永久卡死了。
         if (entity.getStatus() != VersionStatus.pending_review) {
-            entity.setStatus(VersionStatus.pending_review);
             // 队列里的 submitted_at 是这次进队列的时间，不是建版本的时间。
-            entity.setSubmittedAt(OffsetDateTime.now(ZoneOffset.UTC));
+            VersionStatusResolver.submitForReview(entity, OffsetDateTime.now(ZoneOffset.UTC));
             versions.save(entity);
         }
         audit.record(user, "version.submit", "skill", skillId, AuditOutcome.success,
@@ -190,9 +190,7 @@ public class ReviewService {
         }
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         if (approved) {
-            entity.setStatus(VersionStatus.published);
-            entity.setPublishedBy(user.id());
-            entity.setPublishedAt(now);
+            VersionStatusResolver.publish(entity, user.id(), now);
             // 锁住这一行再改 latest_version：并发过审时后写的会把先写的顶掉，
             // latest 就退回了旧版本。锁的顺序与上传收尾一致（先版本行、后 Skill 行）。
             skills.findByIdForUpdate(skillId).ifPresent(locked -> {

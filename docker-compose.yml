@@ -45,18 +45,46 @@ services:
       SM_MINIO_ACCESS_KEY: ${SM_MINIO_ACCESS_KEY}
       SM_MINIO_SECRET_KEY: ${SM_MINIO_SECRET_KEY}
       SM_MINIO_BUCKET: ${SM_MINIO_BUCKET:-skillmesh-artifacts}
+      # 上传临时对象几天后由对象存储清掉（会话过期了对象不会自己消失）。
+      SM_MINIO_TEMP_EXPIRE_DAYS: ${SM_MINIO_TEMP_EXPIRE_DAYS:-1}
       # 内置账号的令牌签名密钥：固定下来，不配就是每次启动随机生成，
       # 重启后所有已登录的令牌都失效。
       SM_JWT_SECRET: ${SM_JWT_SECRET}
       # 能不能自助注册。关掉就只能由管理员建号。
       SM_ALLOW_REGISTER: ${SM_ALLOW_REGISTER:-true}
+      # 外部 IdP（可选）。留空就只走内置账号。
+      SM_OIDC_ISSUER: ${SM_OIDC_ISSUER:-}
+      SM_OIDC_CLIENT_ID: ${SM_OIDC_CLIENT_ID:-skillmesh-cli}
+      # 网页端地址：邀请链接拼的是它。
+      SM_WEB_BASE_URL: ${SM_WEB_BASE_URL:-http://127.0.0.1:5174}
       # 限流（次/分钟）。0 表示关闭；首次同步大量 Skill 时默认值可能不够。
       SM_RATE_LIMIT_READ: ${SM_RATE_LIMIT_READ:-600}
       SM_RATE_LIMIT_WRITE: ${SM_RATE_LIMIT_WRITE:-300}
       SM_RATE_LIMIT_WINDOW: ${SM_RATE_LIMIT_WINDOW:-60}
+      # 制品与扫描的限额。磁盘小的地方调紧。
+      SM_ARTIFACT_MAX_BYTES: ${SM_ARTIFACT_MAX_BYTES:-52428800}
+      SM_ARTIFACT_MAX_CONCURRENT_DOWNLOADS: ${SM_ARTIFACT_MAX_CONCURRENT_DOWNLOADS:-8}
+      SM_SCAN_MAX_FILE_BYTES: ${SM_SCAN_MAX_FILE_BYTES:-20971520}
+      SM_SCAN_MAX_TOTAL_BYTES: ${SM_SCAN_MAX_TOTAL_BYTES:-52428800}
+      SM_SCAN_MAX_FILES: ${SM_SCAN_MAX_FILES:-5000}
+      SM_SCAN_TIMEOUT_MS: ${SM_SCAN_TIMEOUT_MS:-30000}
+      # Git 主机白名单与超时：私有仓库要在这里放开主机名。
+      SM_GIT_ALLOWED_HOSTS: ${SM_GIT_ALLOWED_HOSTS:-github.com,gitlab.com,gitee.com}
+      SM_GIT_TIMEOUT_SECONDS: ${SM_GIT_TIMEOUT_SECONDS:-30}
+      SM_GIT_MAX_CONCURRENT: ${SM_GIT_MAX_CONCURRENT:-4}
       # 服务端拉 Git 用的代理。容器所在网络访问不了 GitHub 时配一个，
       # 例如 http://host.docker.internal:7890。留空就走容器自身的环境变量。
       SM_GIT_PROXY: ${SM_GIT_PROXY:-}
+      # 制品签名（可选）。配了私钥才签，公钥要一起配。
+      SM_SIGNING_PRIVATE_KEY: ${SM_SIGNING_PRIVATE_KEY:-}
+      SM_SIGNING_PUBLIC_KEY: ${SM_SIGNING_PUBLIC_KEY:-}
+      SM_SIGNING_KEY_ID: ${SM_SIGNING_KEY_ID:-local-dev}
+      # 备份（可选）。留空就不做备份；定时备份只在单个实例上打开。
+      SM_BACKUP_DIR: ${SM_BACKUP_DIR:-}
+      SM_BACKUP_SCHEDULE_ENABLED: ${SM_BACKUP_SCHEDULE_ENABLED:-false}
+      SM_BACKUP_INTERVAL_MS: ${SM_BACKUP_INTERVAL_MS:-3600000}
+      SM_BACKUP_INITIAL_DELAY_MS: ${SM_BACKUP_INITIAL_DELAY_MS:-600000}
+      SM_BACKUP_KEEP: ${SM_BACKUP_KEEP:-24}
       # 容器里要听 0.0.0.0：nginx 在另一个容器里，API 绑 127.0.0.1 它连不上。
       # 宿主机侧仍然只映射到 127.0.0.1，不对外暴露。
       SERVER_ADDRESS: 0.0.0.0

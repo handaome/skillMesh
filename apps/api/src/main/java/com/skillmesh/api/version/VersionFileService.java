@@ -6,6 +6,7 @@ import com.skillmesh.api.artifact.ArtifactRepository;
 import com.skillmesh.api.artifact.ZipManifest;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.common.ApiException;
+import com.skillmesh.api.skill.SkillEntity;
 import com.skillmesh.api.skill.SkillService;
 import com.skillmesh.api.version.dto.VersionFileContentResponse;
 import com.skillmesh.api.version.dto.VersionFilesResponse;
@@ -29,13 +30,16 @@ public class VersionFileService {
     private final SkillVersionRepository versions;
     private final ArtifactRepository artifacts;
     private final ArtifactFileService files;
+    private final ArtifactAccessPolicy accessPolicy;
 
     public VersionFileService(SkillService skillService, SkillVersionRepository versions,
-                              ArtifactRepository artifacts, ArtifactFileService files) {
+                              ArtifactRepository artifacts, ArtifactFileService files,
+                              ArtifactAccessPolicy accessPolicy) {
         this.skillService = skillService;
         this.versions = versions;
         this.artifacts = artifacts;
         this.files = files;
+        this.accessPolicy = accessPolicy;
     }
 
     /** 某版本的文件清单。 */
@@ -84,15 +88,18 @@ public class VersionFileService {
      * 取版本的制品，顺便把权限过一遍。
      *
      * 看不见 Skill 就 404，不泄露它存不存在；版本不存在或还没上传制品同样 404。
+     * 版本状态也要看：撤回、隔离、驳回的版本不该再被浏览——
+     * 在线看文件和下载制品是同一扇门（设计文档 §10.1）。
      */
     private ArtifactEntity artifactOf(CurrentUser user, UUID skillId, String version) {
-        skillService.requireVisibleSkill(user, skillId);
+        SkillEntity skill = skillService.requireVisibleSkill(user, skillId);
         SkillVersionEntity entity = versions.findBySkillIdAndVersion(skillId, version)
             .orElseThrow(() -> ApiException.notFound("版本"));
         if (entity.getArtifactId() == null) {
             // 版本还没上传制品：没有文件可看。
             throw ApiException.notFound("版本 " + version + " 的制品");
         }
+        accessPolicy.requireVersionContent(user, entity, skill);
         return artifacts.findById(entity.getArtifactId())
             .orElseThrow(() -> ApiException.notFound("制品"));
     }

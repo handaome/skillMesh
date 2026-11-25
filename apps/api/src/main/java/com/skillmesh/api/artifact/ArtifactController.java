@@ -5,15 +5,10 @@ import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.audit.AuditService;
 import com.skillmesh.api.auth.CurrentUser;
 import com.skillmesh.api.auth.CurrentUserService;
-import com.skillmesh.api.common.ApiException;
-import com.skillmesh.api.skill.SkillEntity;
-import com.skillmesh.api.skill.SkillRepository;
-import com.skillmesh.api.skill.SkillService;
+import com.skillmesh.api.version.ArtifactAccessPolicy;
 import com.skillmesh.api.version.SkillVersionEntity;
-import com.skillmesh.api.version.SkillVersionRepository;
 import java.io.InputStream;
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.Map;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -34,21 +29,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class ArtifactController {
 
     private final ArtifactService artifacts;
-    private final SkillVersionRepository versions;
-    private final SkillRepository skills;
     private final CurrentUserService currentUserService;
     private final AuditService audit;
-    private final SkillService skillsService;
+    private final ArtifactAccessPolicy accessPolicy;
 
-    public ArtifactController(ArtifactService artifacts, SkillVersionRepository versions,
-                              SkillRepository skills, CurrentUserService currentUserService,
-                              AuditService audit, SkillService skillsService) {
+    public ArtifactController(ArtifactService artifacts, CurrentUserService currentUserService,
+                              AuditService audit, ArtifactAccessPolicy accessPolicy) {
         this.artifacts = artifacts;
-        this.versions = versions;
-        this.skills = skills;
         this.currentUserService = currentUserService;
         this.audit = audit;
-        this.skillsService = skillsService;
+        this.accessPolicy = accessPolicy;
     }
 
     @GetMapping("/{artifactId}/download")
@@ -56,13 +46,16 @@ public class ArtifactController {
                                       @PathVariable UUID artifactId,
                                       @RequestParam(defaultValue = "redirect") String disposition) {
         CurrentUser user = currentUserService.current(jwt);
-        ArtifactEntity artifact = artifacts.require(artifactId);
-        requireVisible(user, artifact);
+        // 版本状态也要看：撤回与隔离的版本，制品不该再被取走
+        // （设计文档 §10.1）。判在服务层，这里只管调。
+        // 门禁把这张制品和放行它的那一版都查出来了，直接接着用，别再查一遍。
+        ArtifactAccessPolicy.DownloadGrant grant = accessPolicy.requireDownloadable(user, artifactId);
+        ArtifactEntity artifact = grant.artifact();
 
         if ("stream".equals(disposition)) {
             // 名额先拿到再留痕：拿不到就 429，不能记成一次成功的下载。
             InputStream in = artifacts.openDownload(artifact);
-            recordDownload(user, artifactId);
+            recordDownload(user, grant.version());
             return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(artifact.getContentType()))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
@@ -70,7 +63,7 @@ public class ArtifactController {
                 .contentLength(artifact.getSizeBytes())
                 .body(new InputStreamResource(in));
         }
-        recordDownload(user, artifactId);
+        recordDownload(user, grant.version());
         DownloadInfo info = new DownloadInfo(artifacts.presignedDownload(artifact),
             artifact.getSha256(), artifact.getSizeBytes(), artifact.getContentType(),
             OffsetDateTime.now(ZoneOffset.UTC).plus(ArtifactService.DOWNLOAD_TTL));
@@ -78,31 +71,14 @@ public class ArtifactController {
     }
 
     /**
-     * 制品只要被任何一个调用者可见的版本引用就允许下载。
-     * 同一份内容可能被多个版本引用（内容寻址，sha256 唯一），
-     * 所以要遍历全部引用者，不能只看第一个。
+     * 下载留痕：谁在什么时候取走了哪份制品、属于哪个版本。
+     *
+     * 记的是门禁放行的那一版——同一份内容被多个版本引用时，
+     * 「第一个引用它的版本」未必是这次真正授权下载的那一版。
      */
-    private void requireVisible(CurrentUser user, ArtifactEntity artifact) {
-        List<SkillVersionEntity> referencing = versions.findByArtifactId(artifact.getId());
-        if (referencing.isEmpty()) {
-            throw ApiException.notFound("Artifact");
-        }
-        for (SkillVersionEntity version : referencing) {
-            SkillEntity skill = skills.findById(version.getSkillId()).orElse(null);
-            if (skill != null && skillsService.canView(user, skill)) {
-                return;
-            }
-        }
-        throw ApiException.notFound("Artifact");
-    }
-
-    /** 下载留痕：谁在什么时候取走了哪份制品。 */
-    private void recordDownload(CurrentUser user, UUID artifactId) {
-        for (SkillVersionEntity version : versions.findByArtifactId(artifactId)) {
-            audit.record(user, "artifact.download", "skill", version.getSkillId(), AuditOutcome.success,
-                Map.of("version", version.getVersion(), "artifact_id", artifactId.toString()));
-            return;
-        }
+    private void recordDownload(CurrentUser user, SkillVersionEntity version) {
+        audit.record(user, "artifact.download", "skill", version.getSkillId(), AuditOutcome.success,
+            Map.of("version", version.getVersion(), "artifact_id", version.getArtifactId().toString()));
     }
 
     private static String fileName(ArtifactEntity artifact) {

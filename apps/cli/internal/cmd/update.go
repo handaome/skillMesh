@@ -38,6 +38,9 @@ type UpdateInfo struct {
 	// TargetPaths 是锁文件里记的安装路径（Agent 名 -> 路径）。
 	// 更新要覆盖的就是这个位置：按配置重算可能算到别处去。
 	TargetPaths map[string]string
+	// RefType 是这个 ref 的类型（branch / tag / commit / default）。
+	// 固定到 tag 的来源不该跟着漂：更新后要照实记下来。
+	RefType string
 }
 
 // LsRemote 包一层是为了测试能替换它，统计同一个仓库被查了几次。
@@ -47,7 +50,7 @@ var LsRemote = gitx.LsRemote
 func autoSafe(lock lockfile.Lock) int {
 	count := 0
 	for _, entry := range lock.Skills {
-		if entry.UpdatePolicy == "auto_safe" && entry.Repository != "" {
+		if entry.UpdatePolicy == policyAutoSafe && entry.Repository != "" {
 			count++
 		}
 	}
@@ -60,12 +63,12 @@ func policyOf(lock lockfile.Lock, name string) string {
 	for _, entry := range lock.Skills {
 		if entry.Name == name {
 			if entry.UpdatePolicy == "" {
-				return "notify"
+				return policyNotify
 			}
 			return entry.UpdatePolicy
 		}
 	}
-	return "notify"
+	return policyNotify
 }
 
 // FilterByPolicy 按更新策略筛更新项（设计文档 §7.2）。
@@ -85,7 +88,7 @@ func FilterByPolicy(lock lockfile.Lock, updates []UpdateInfo, want string) []Upd
 
 // FilterAutoSafe 只保留 auto_safe 的来源，其余交给用户显式处理。
 func FilterAutoSafe(lock lockfile.Lock, updates []UpdateInfo) []UpdateInfo {
-	return FilterByPolicy(lock, updates, "auto_safe")
+	return FilterByPolicy(lock, updates, policyAutoSafe)
 }
 
 // CheckUpdates 只调 git ls-remote，不下载内容（详细设计 §3.7）。
@@ -105,32 +108,36 @@ func CheckUpdatesBackground(ctx context.Context, lock lockfile.Lock) ([]UpdateIn
 }
 
 func checkUpdates(ctx context.Context, lock lockfile.Lock, skipManual bool) ([]UpdateInfo, error) {
-	remoteCache := map[string]string{}
+	remoteCache := map[string]remoteRef{}
 	var updates []UpdateInfo
 	for _, skill := range lock.Skills {
 		if skill.Repository == "" {
 			continue
 		}
-		// 固定到 commit 的来源不跟随分支：它只在显式指定目标时才动
-		// （设计文档 §3.7「固定到 commit/tag 的来源不会静默跟随分支」）。
-		// 顺带躲开了一个坑：ls-remote 按 ref 名匹配，commit sha 匹配不到。
-		if skill.RefType == "commit" {
+		// 固定到 commit 或 tag 的来源不自动漂移：版本只由用户明确升级才变
+		// （设计文档 §3.3.5、详细设计 §3.7）。
+		if pinnedRefType(skill.RefType) {
 			continue
 		}
-		if skipManual && policyOf(lock, skill.Name) == "manual" {
+		if skipManual && policyOf(lock, skill.Name) == policyManual {
 			continue
 		}
 		key := skill.Repository + "\x00" + skill.Ref
 		remote, cached := remoteCache[key]
 		if !cached {
-			var err error
-			remote, err = LsRemote(ctx, skill.Repository, skill.Ref)
+			commit, kind, err := LsRemote(ctx, skill.Repository, skill.Ref)
 			if err != nil {
 				return nil, fmt.Errorf("检查 %s 失败: %w", skill.Name, err)
 			}
+			remote = remoteRef{commit: commit, kind: kind}
 			remoteCache[key] = remote
 		}
-		if remote != skill.ResolvedCommit {
+		// 锁文件里记的 ref 类型可能是旧的（早期只按名字形状猜，tag 记成了 branch）。
+		// 远端现在把这个 ref 解析成 tag，就按固定来源对待，不跟着它漂。
+		if remote.kind == gitx.RefTag {
+			continue
+		}
+		if remote.commit != skill.ResolvedCommit {
 			updates = append(updates, UpdateInfo{
 				Name:          skill.Name,
 				Repository:    skill.Repository,
@@ -141,21 +148,22 @@ func checkUpdates(ctx context.Context, lock lockfile.Lock, skipManual bool) ([]U
 				SkillID:       skill.SourceID,
 				Agents:        skill.Agents,
 				LocalCommit:   skill.ResolvedCommit,
-				RemoteCommit:  remote,
+				RemoteCommit:  remote.commit,
 				UpdatePolicy:  skill.UpdatePolicy,
 				Provider:      skill.Provider,
 				TargetPaths:   skill.TargetPaths,
+				RefType:       remote.kind,
 			})
 		}
 	}
 	return updates, nil
 }
 
-// updatePolicies 是 --policy 允许的取值（设计文档 §3.7）。
-//
-// auto_safe 是 auto-safe 的下划线写法：配置里的 sync.default_update_policy
-// 用的是下划线，命令行两种都收。
-var updatePolicies = []string{"manual", "notify", "auto-safe", "auto_safe"}
+// remoteRef 是远端某个 ref 解析出来的结果：它指向的 commit 与它的类型。
+type remoteRef struct {
+	commit string
+	kind   string
+}
 
 func NewUpdateCmd() *cobra.Command {
 	var checkOnly, all, auto, saveLocalChanges bool
@@ -223,14 +231,14 @@ func NewUpdateCmd() *cobra.Command {
 			// 那就该在确认没本地改动后自动更新（设计文档 §7.2）。
 			targeted := auto || all || name != ""
 			switch policy {
-			case "auto-safe", "auto_safe":
+			case policyAutoSafeAlias, policyAutoSafe:
 				// 这次就按「无本地改动才升级」的策略来（设计文档 §3.7）。
 				targeted = true
-			case "manual":
+			case policyManual:
 				// manual 不执行自动升级：只报。
 				fmt.Println("策略是 manual：不自动升级。")
 				return nil
-			case "notify":
+			case policyNotify:
 				// notify 也只提示——表已经打出来了，不动手。
 				fmt.Println("策略是 notify：只提示，不自动升级。")
 				return nil
@@ -239,12 +247,34 @@ func NewUpdateCmd() *cobra.Command {
 				fmt.Println("加 --all 应用全部更新，或指定 skill 名称只更新它。")
 				return nil
 			}
-			// 只给了 --auto 时，只动 auto_safe 的来源；手动指定的名字/--all 照旧全量
+			// 只给了 --auto 时，只动 auto_safe 的来源
 			selected := updates
 			if auto && policy == "" {
 				selected = FilterAutoSafe(lock, updates)
 				if len(selected) == 0 {
 					fmt.Println("没有标记 auto_safe 的来源，跳过。")
+					return nil
+				}
+			}
+			// 标了 manual 的来源只有点名才动：批量升级不算用户主动操作
+			// （设计文档 §7.2「manual | 不自动检查或应用，用户主动操作」）。
+			// 后台巡检本来就不碰 manual，前台的批量升级也得守同一条线。
+			if name == "" {
+				kept := make([]UpdateInfo, 0, len(selected))
+				var manual []string
+				for _, update := range selected {
+					if policyOf(lock, update.Name) == policyManual {
+						manual = append(manual, update.Name)
+						continue
+					}
+					kept = append(kept, update)
+				}
+				selected = kept
+				if len(manual) > 0 {
+					fmt.Printf("跳过标了 manual 的来源：%s\n", strings.Join(manual, "、"))
+					fmt.Println("要更新它们就点名：skillmesh update <名字>")
+				}
+				if len(selected) == 0 {
 					return nil
 				}
 			}
@@ -289,13 +319,20 @@ func updateToTarget(ctx context.Context, projectRoot string, lock *lockfile.Lock
 		}
 		commit := toCommit
 		ref := skill.Ref
+		refType := skill.RefType
 		if commit == "" {
-			resolved, err := LsRemote(ctx, skill.Repository, toVersion)
+			resolved, kind, err := LsRemote(ctx, skill.Repository, toVersion)
 			if err != nil {
 				return fmt.Errorf("解析 %s 的 %s 失败: %w", skill.Repository, toVersion, err)
 			}
 			commit = resolved
 			ref = toVersion
+			refType = kind
+		} else {
+			// 明确指到某个 commit：来源就此钉死在这个 commit 上，
+			// 不再跟分支走（设计文档 §3.3.5）。
+			ref = toCommit
+			refType = gitx.RefCommit
 		}
 		update := UpdateInfo{
 			Name:          skill.Name,
@@ -311,6 +348,7 @@ func updateToTarget(ctx context.Context, projectRoot string, lock *lockfile.Lock
 			UpdatePolicy:  skill.UpdatePolicy,
 			Provider:      skill.Provider,
 			TargetPaths:   skill.TargetPaths,
+			RefType:       refType,
 		}
 		work, err := os.MkdirTemp("", "skillmesh-update-*")
 		if err != nil {
@@ -609,7 +647,12 @@ func ApplyOne(ctx context.Context, root, projectRoot string, lock *lockfile.Lock
 	}
 	entry.Repository = update.Repository
 	entry.Path = update.Path
-	entry.RefType = RefTypeOf(update.Ref)
+	// ref_type 要照实记：固定到 tag 的来源记成 branch，
+	// 下次检查更新就会把它当成会漂移的分支（设计文档 §7.1）。
+	entry.RefType = update.RefType
+	if entry.RefType == "" {
+		entry.RefType = RefTypeOf(update.Ref)
+	}
 	entry.Ref = update.Ref
 	entry.ResolvedCommit = commit
 	entry.Scope = scopeOf(update.Scope, projectRoot)

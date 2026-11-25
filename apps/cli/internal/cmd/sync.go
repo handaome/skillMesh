@@ -140,7 +140,7 @@ func newSyncCmd() *cobra.Command {
 			if len(results) == 0 && err == nil {
 				if options.OnlyExisting {
 					fmt.Println("没有「已经收编过」的 Skill；首次发现的留在本地，" +
-						"去掉 --skip-new 才会备份。")
+						"去掉 --only-existing 才会备份。")
 					return nil
 				}
 				fmt.Println("授权目录里没有找到含 SKILL.md 的目录。")
@@ -155,6 +155,12 @@ func newSyncCmd() *cobra.Command {
 			if !options.DryRun {
 				if client, clientErr := newClient(cmd.Context()); clientErr == nil {
 					reportArtifactHealth(cmd.Context(), client)
+					// 撤回提示：装着的版本被撤回了，下次同步要说一声。
+					// 撤回改变可用状态但保留记录，本地内容也不删——
+					// 用不用由用户自己定（设计文档 §10）。
+					if lock, lockErr := lockfile.Load(projectRootDir()); lockErr == nil {
+						warnRevoked(cmd.Context(), client, lock)
+					}
 				}
 			}
 			return reportErr

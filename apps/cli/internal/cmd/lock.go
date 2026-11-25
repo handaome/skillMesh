@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/handaome/skillmesh/apps/cli/internal/gitx"
 	"github.com/handaome/skillmesh/apps/cli/internal/lockfile"
 	"github.com/spf13/cobra"
 )
@@ -42,9 +43,19 @@ func newLockRefreshCmd() *cobra.Command {
 				if entry.Repository == "" {
 					continue
 				}
-				remote, err := LsRemote(cmd.Context(), entry.Repository, entry.Ref)
+				// 固定到 commit 或 tag 的来源不会漂移：它记的 commit 就是终点，
+				// 版本只由用户明确升级才变（设计文档 §3.3.5）。
+				if pinnedRefType(entry.RefType) {
+					continue
+				}
+				remote, kind, err := LsRemote(cmd.Context(), entry.Repository, entry.Ref)
 				if err != nil {
 					fmt.Printf("%s 解析失败: %v\n", entry.Name, err)
+					continue
+				}
+				// 锁文件里记的 ref 类型可能是旧的（早期只按名字形状猜，tag 记成了 branch）。
+				// 远端现在把这个 ref 解析成 tag，就按固定来源对待，不跟着它漂。
+				if kind == gitx.RefTag {
 					continue
 				}
 				if remote == entry.ResolvedCommit {

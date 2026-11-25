@@ -269,7 +269,7 @@ func newGroupInstallCmd() *cobra.Command {
 			installed, failed := 0, 0
 			for _, member := range group.Members {
 				if err := installGroupMember(cmd.Context(), client, projectRoot, member,
-					agentNamesOr("claude-code"), scopeOr("user"), replace); err != nil {
+					agentNamesOr(defaultAgent), scopeOr("user"), replace); err != nil {
 					failed++
 					notice("装 %s 失败：%s\n", member.Slug, err)
 					continue
@@ -296,6 +296,13 @@ func newGroupInstallCmd() *cobra.Command {
 func installGroupMember(ctx context.Context, client *apiclient.Client, projectRoot string,
 	member apiclient.GroupMember, agentNames []string, scope string, replace bool) error {
 
+	// 每个成员单独读一次锁文件：上一个成员刚写进去的记录，
+	// 这个成员要看得见（也得让它自己的写回落在最新的一份上）。
+	lock, err := lockfile.Load(projectRoot)
+	if err != nil {
+		return err
+	}
+
 	versions, err := client.Versions(ctx, member.ID)
 	if err != nil {
 		return err
@@ -305,7 +312,7 @@ func installGroupMember(ctx context.Context, client *apiclient.Client, projectRo
 	if err != nil {
 		return err
 	}
-	return installArtifact(ctx, client, projectRoot, installRequest{
+	return installArtifact(ctx, client, projectRoot, lock, installRequest{
 		SkillID: member.ID,
 		Version: target,
 		Scope:   scope,

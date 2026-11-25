@@ -74,7 +74,8 @@ skillmesh fix-skill <目录> --dry-run  # 先看会改成什么
   但 `--purge` 是真删，找不回来。
 - `skillmesh cloud delete <slug>` —— 云端软删除。
 - `skillmesh publish ... --org/--team` —— 进入审核队列。
-- `skillmesh rollback <name> --to <version>` —— 换版本。
+- `skillmesh install <name> --version <version>` —— 换版本（仅注册中心来源）。
+  Git 来源回退到指定 tag 用 `skillmesh update <name> --to <tag>`。
 
 ## 红线
 

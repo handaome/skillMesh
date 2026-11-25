@@ -488,7 +488,7 @@ func applyAutoSafeUpdates(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if autoSafe(lock) == 0 && countByPolicy(lock, "notify") == 0 {
+	if autoSafe(lock) == 0 && countByPolicy(lock, policyNotify) == 0 {
 		return nil
 	}
 	updates, err := CheckUpdatesBackground(ctx, lock)
@@ -496,7 +496,7 @@ func applyAutoSafeUpdates(ctx context.Context) error {
 		return err
 	}
 	// notify：只报差异，让用户自己决定。
-	for _, update := range FilterByPolicy(lock, updates, "notify") {
+	for _, update := range FilterByPolicy(lock, updates, policyNotify) {
 		logf("%s 有新版本可用（本地 %s → 远端 %s）：skillmesh update %s",
 			update.Name, short(update.LocalCommit), short(update.RemoteCommit), update.Name)
 	}
@@ -505,7 +505,13 @@ func applyAutoSafeUpdates(ctx context.Context) error {
 		return nil
 	}
 	// 后台自动更新不碰本地改动：没有人在旁边确认，留一份补丁也没人看。
-	return applyUpdates(ctx, projectRoot, &lock, selected, false, false)
+	if err := applyUpdates(ctx, projectRoot, &lock, selected, false, false); err != nil {
+		return err
+	}
+	// 锁文件必须落盘：installed_hash 与 resolved_commit 停在旧值的话，
+	// 下一轮巡检会认为「本地有改动」，同一版被反复判成冲突——
+	// auto_safe 就只能成功一次。
+	return lock.Save(projectRoot)
 }
 
 // countByPolicy 数一数有多少个来源声明了某个更新策略。

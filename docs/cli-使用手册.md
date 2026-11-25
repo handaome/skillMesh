@@ -595,6 +595,18 @@ Git 来源的跑 `skillmesh update`，本地导入的（没有 Git 来源的）�
 不传给服务端）；`publish` 才把它发到云端。私有仓库走这条路——服务端拉不到，
 来源只是给本机更新用的。
 
+### 固定到标签或 commit 的来源不会自己漂
+
+`add --ref <tag>` 装进来的来源是**钉死**的：`update` 不再查它、也不会把它往前挪。
+要升版本得自己点名：
+
+```bash
+./skillmesh.exe update <name> --to v1.2.0     # 升到某个标签
+./skillmesh.exe update <name> --to-commit <sha>
+```
+
+不钉死就让它跟着分支走——不给 `--ref`，默认跟仓库的默认分支。
+
 ### 更新前先看差异，本地改过就不覆盖
 
 ```bash
