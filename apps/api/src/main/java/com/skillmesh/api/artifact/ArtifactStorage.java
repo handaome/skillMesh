@@ -11,12 +11,9 @@ import io.minio.RemoveObjectArgs;
 import io.minio.SetBucketLifecycleArgs;
 import io.minio.StatObjectArgs;
 import io.minio.errors.ErrorResponseException;
-import io.minio.http.Method;
-import io.minio.messages.Expiration;
+import io.minio.Http.Method;
+import io.minio.messages.Filter;
 import io.minio.messages.LifecycleConfiguration;
-import io.minio.messages.LifecycleRule;
-import io.minio.messages.ResponseDate;
-import io.minio.messages.RuleFilter;
 import io.minio.messages.Status;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -70,7 +67,7 @@ public class ArtifactStorage {
      * 部署方自己配的规则不动：只补我们缺的那几条，别用我们的覆盖人家的。
      */
     private void ensureTempLifecycle() {
-        List<LifecycleRule> rules = new ArrayList<>();
+        List<LifecycleConfiguration.Rule> rules = new ArrayList<>();
         try {
             LifecycleConfiguration current = client.getBucketLifecycle(
                 GetBucketLifecycleArgs.builder().bucket(bucket).build());
@@ -84,7 +81,7 @@ public class ArtifactStorage {
                 return;
             }
         }
-        List<LifecycleRule> wanted = new ArrayList<>();
+        List<LifecycleConfiguration.Rule> wanted = new ArrayList<>();
         if (!hasRule(rules, "expire-temp-objects")) {
             wanted.add(expireRule("tmp/", "expire-temp-objects"));
         }
@@ -94,7 +91,7 @@ public class ArtifactStorage {
         if (wanted.isEmpty()) {
             return;
         }
-        List<LifecycleRule> all = new ArrayList<>(rules);
+        List<LifecycleConfiguration.Rule> all = new ArrayList<>(rules);
         all.addAll(wanted);
         try {
             client.setBucketLifecycle(SetBucketLifecycleArgs.builder()
@@ -108,8 +105,8 @@ public class ArtifactStorage {
     }
 
     /** 规则在不在：按 id 认，认不出就当没有。 */
-    private boolean hasRule(List<LifecycleRule> rules, String id) {
-        for (LifecycleRule rule : rules) {
+    private boolean hasRule(List<LifecycleConfiguration.Rule> rules, String id) {
+        for (LifecycleConfiguration.Rule rule : rules) {
             if (id.equals(rule.id())) {
                 return true;
             }
@@ -118,10 +115,10 @@ public class ArtifactStorage {
     }
 
     /** 一条「过期某个前缀下对象」的规则。 */
-    private LifecycleRule expireRule(String prefix, String id) {
-        return new LifecycleRule(Status.ENABLED, null,
-            new Expiration((ResponseDate) null, tempExpireDays, null),
-            new RuleFilter(prefix), id, null, null, null);
+    private LifecycleConfiguration.Rule expireRule(String prefix, String id) {
+        return new LifecycleConfiguration.Rule(Status.ENABLED, null,
+            new LifecycleConfiguration.Expiration((io.minio.Time.S3Time) null, tempExpireDays, null, null),
+            new Filter(prefix), id, null, null, null);
     }
 
     /** bucket 上还没有生命周期配置时，对象存储是这么说的。 */
@@ -156,7 +153,7 @@ public class ArtifactStorage {
         try (ByteArrayInputStream in = new ByteArrayInputStream(data)) {
             client.putObject(PutObjectArgs.builder()
                 .bucket(bucket).object(key)
-                .stream(in, data.length, -1)
+                .stream(in, (long) data.length, -1L)
                 .contentType(contentType)
                 .build());
         } catch (Exception e) {
@@ -174,7 +171,7 @@ public class ArtifactStorage {
         try {
             client.putObject(PutObjectArgs.builder()
                 .bucket(bucket).object(key)
-                .stream(in, size, -1)
+                .stream(in, size, -1L)
                 .contentType(contentType)
                 .build());
         } catch (Exception e) {

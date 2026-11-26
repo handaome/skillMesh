@@ -7,7 +7,7 @@
   <parent>
     <groupId>org.springframework.boot</groupId>
     <artifactId>spring-boot-starter-parent</artifactId>
-    <version>3.5.3</version>
+    <version>4.2.0</version>
     <relativePath/>
   </parent>
 
@@ -25,8 +25,9 @@
   </licenses>
 
   <properties>
-    <java.version>21</java.version>
-    <minio.version>8.5.17</minio.version>
+    <java.version>25</java.version>
+    <minio.version>9.0.4</minio.version>
+    <okhttp.version>5.5.1</okhttp.version>
     <surefire.argLine>-Xmx768m -XX:MaxMetaspaceSize=384m -Dfile.encoding=UTF-8 -Djdk.net.URLClassPath.disableClassPathURLCheck=true</surefire.argLine>
   </properties>
 
@@ -65,6 +66,21 @@
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-database-postgresql</artifactId>
     </dependency>
+    <!-- Spring Boot 4 把自动配置拆进独立模块，Flyway 的自动配置在 spring-boot-flyway 里；
+         只引 flyway-core，迁移不会自动跑。 -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-flyway</artifactId>
+    </dependency>
+
+    <!-- MinIO SDK 9 依赖 okhttp 5，而 okhttp 5 是 Kotlin 多平台发布：okhttp 坐标只是
+         元数据，真正有类的在 okhttp-jvm。不显式引它，MinioClient.Builder 解析重载时
+         会报「找不到 okhttp3.HttpUrl」。Spring Boot 不管理 okhttp 的版本。 -->
+    <dependency>
+      <groupId>com.squareup.okhttp3</groupId>
+      <artifactId>okhttp-jvm</artifactId>
+      <version>${okhttp.version}</version>
+    </dependency>
 
     <dependency>
       <groupId>org.postgresql</groupId>
@@ -86,12 +102,17 @@
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-compress</artifactId>
-      <version>1.27.1</version>
+      <version>1.28.0</version>
     </dependency>
 
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webmvc-test</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>

@@ -1,7 +1,7 @@
 package com.skillmesh.api.common;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.skillmesh.api.auth.CurrentUser;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -136,7 +136,7 @@ public class IdempotencyService {
     private String write(Object value) {
         try {
             return json.writeValueAsString(value);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new ApiException(500, ErrorCodes.INTERNAL, "序列化请求体失败");
         }
     }
@@ -144,7 +144,7 @@ public class IdempotencyService {
     private <T> T read(String body, Class<T> type) {
         try {
             return json.readValue(body, type);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new ApiException(500, ErrorCodes.INTERNAL, "读取上次的响应失败");
         }
     }

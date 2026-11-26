@@ -1,6 +1,6 @@
 package com.skillmesh.api.backup;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.skillmesh.api.backup.BackupService.Manifest;
 import com.skillmesh.api.backup.BackupService.ObjectBackup;
 import com.skillmesh.api.backup.BackupService.TableBackup;
@@ -467,7 +467,7 @@ public class BackupRestoreService {
             try (InputStream in = Files.newInputStream(file)) {
                 minio.putObject(PutObjectArgs.builder()
                     .bucket(bucket).object(object.key())
-                    .stream(in, Files.size(file), -1)
+                    .stream(in, Files.size(file), -1L)
                     .contentType("application/octet-stream")
                     .build());
             }

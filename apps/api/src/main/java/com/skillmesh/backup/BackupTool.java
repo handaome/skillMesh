@@ -1,19 +1,25 @@
 package com.skillmesh.backup;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.skillmesh.api.backup.BackupRestoreService;
 import com.skillmesh.api.backup.BackupService;
 import com.skillmesh.api.config.MinioClients;
 import io.minio.MinioClient;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
+import org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration;
+import org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration;
+import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration;
+import org.springframework.boot.security.autoconfigure.SecurityAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
@@ -52,6 +58,14 @@ public class BackupTool {
         // Flyway 不参与：备份要能在一个迁移历史对不上的库上跑。
         System.setProperty("spring.flyway.enabled", "false");
         System.setProperty("spring.main.banner-mode", "off");
+        // 命令行工具：不启动 Web 容器（8080 上可能正跑着服务）、不跑 JPA 校验。
+        System.setProperty("spring.main.web-application-type", "none");
+        // Windows 上 System.out 默认走系统 ANSI 代码页（GBK），中文出来是乱码。
+        // 这个工具的输出全是给人看的，按 UTF-8 写。
+        System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.out), true,
+            StandardCharsets.UTF_8));
+        System.setErr(new PrintStream(new FileOutputStream(FileDescriptor.err), true,
+            StandardCharsets.UTF_8));
         try (ConfigurableApplicationContext ctx = SpringApplication.run(BackupTool.Config.class)) {
             if (restore) {
                 BackupRestoreService restores = ctx.getBean(BackupRestoreService.class);
@@ -83,8 +97,9 @@ public class BackupTool {
      * 「排除 Flyway」带进主应用，主应用于是不建表。
      */
     @Configuration(proxyBeanMethods = false)
-    @EnableAutoConfiguration(exclude = {FlywayAutoConfiguration.class})
-    @Import({BackupService.class, BackupRestoreService.class})
+    @EnableAutoConfiguration(exclude = {FlywayAutoConfiguration.class,
+        HibernateJpaAutoConfiguration.class, DataJpaRepositoriesAutoConfiguration.class,
+        SecurityAutoConfiguration.class})
     static class Config {
 
         @Bean

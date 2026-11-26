@@ -1,6 +1,6 @@
 package com.skillmesh.api.backup;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.skillmesh.api.common.ContentDigest;
 import io.minio.GetObjectArgs;
 import io.minio.ListObjectsArgs;

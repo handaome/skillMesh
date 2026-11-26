@@ -16,7 +16,7 @@ Agent Skill 的协作与分发平台。中心化管理、客户端拉取、本�
 ## 目录结构
 
 ```text
-apps/api/     Spring Boot 3.5 · Java 21 · JPA · Flyway · PostgreSQL · MinIO SDK · 内置账号（可选外接 OIDC）
+apps/api/     Spring Boot 4.2 · Java 25 · JPA · Flyway · PostgreSQL · MinIO SDK · 内置账号（可选外接 OIDC）
 apps/cli/     Go · cobra · 用户名密码登录 / OIDC 授权码+PKCE · 调系统 git
 apps/web/     Vue 3 · Vite · TypeScript
 infra/        本机服务的准备/启动/停止脚本
@@ -28,9 +28,9 @@ docker-compose.yml/ PostgreSQL + MinIO + API + 前端的容器编排
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| JDK | 21 | Spring Boot 3.5.3 要求 |
-| Go | 1.24+ | 用系统 go 即可 |
-| Node / pnpm | 24 / 10 | 前端 |
+| JDK | 25 | Spring Boot 4.2 要求 |
+| Go | 1.27+ | 用系统 go 即可 |
+| Node / pnpm | 26 / 10.34.9 | 前端 |
 | git | 2.x | CLI 通过系统 git 解析来源 |
 | Docker | 24+ | 只在走 compose 路线时需要 |
 
@@ -73,7 +73,7 @@ cd apps/api && ./mvnw spring-boot:run -Dspring-boot.run.profiles=local
 
 ### 4. 构建 CLI
 
-需要 Go 1.26+。
+需要 Go 1.27+。
 
 ```bash
 # Linux / macOS

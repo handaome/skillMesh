@@ -2,7 +2,7 @@ package com.skillmesh.api.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.skillmesh.api.auth.UserStatus;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpInputMessage;
-import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 
 /**
  * 枚举取值不对时，错误提示要指向对的字段。
@@ -25,11 +25,11 @@ import org.springframework.http.converter.json.MappingJackson2HttpMessageConvert
  */
 class EnumValueErrorMessageTest {
 
-    private final ObjectMapper json = new ObjectMapper();
+    private final JsonMapper json = JsonMapper.builder().build();
 
     /** 让 Jackson 真读一遍，拿到它抛的那条异常链。 */
     private Throwable readFailure(Class<?> type, String body) {
-        MappingJackson2HttpMessageConverter converter = new MappingJackson2HttpMessageConverter(json);
+        JacksonJsonHttpMessageConverter converter = new JacksonJsonHttpMessageConverter(json);
         HttpInputMessage message = new HttpInputMessage() {
             @Override
             public InputStream getBody() {

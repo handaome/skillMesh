@@ -1,6 +1,6 @@
 # 数据库 ER 图
 
-SkillMesh 的数据库是 PostgreSQL 18，22 张表。表结构只有一份权威定义 —— Flyway 迁移
+SkillMesh 的数据库是 PostgreSQL 19，22 张表。表结构只有一份权威定义 —— Flyway 迁移
 [`apps/api/src/main/resources/db/migrations/V1__init.sql`](../apps/api/src/main/resources/db/migrations/V1__init.sql)；
 本文是它的图形化视图，**改了迁移脚本就得同步改这里**。
 

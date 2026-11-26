@@ -50,7 +50,7 @@ class BackupObjectRestoreTest {
         String key = "probe/backup-object-" + UUID.randomUUID() + ".txt";
         byte[] content = CONTENT.getBytes(StandardCharsets.UTF_8);
         minio.putObject(PutObjectArgs.builder().bucket(bucket).object(key)
-            .stream(new ByteArrayInputStream(content), content.length, -1)
+            .stream(new ByteArrayInputStream(content), (long) content.length, -1L)
             .contentType("text/plain").build());
         Path dir = Files.createTempDirectory("skillmesh-backup-objects-");
         try {

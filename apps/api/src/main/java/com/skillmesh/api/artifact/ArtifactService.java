@@ -1,6 +1,6 @@
 package com.skillmesh.api.artifact;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.skillmesh.api.common.ApiException;
 import com.skillmesh.api.common.ContentDigest;
 import com.skillmesh.api.common.ErrorCodes;

@@ -2,7 +2,7 @@ package com.skillmesh.api.common;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.skillmesh.api.audit.AuditOutcome;
 import com.skillmesh.api.auth.UserStatus;
 import com.skillmesh.api.group.GroupStatus;

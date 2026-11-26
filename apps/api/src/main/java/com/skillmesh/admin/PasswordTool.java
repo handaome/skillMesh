@@ -14,10 +14,10 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
-import org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration;
-import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
-import org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration;
-import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
+import org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration;
+import org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration;
+import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration;
+import org.springframework.boot.security.autoconfigure.SecurityAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -236,7 +236,7 @@ public class PasswordTool {
      */
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration(exclude = {FlywayAutoConfiguration.class,
-        HibernateJpaAutoConfiguration.class, JpaRepositoriesAutoConfiguration.class,
+        HibernateJpaAutoConfiguration.class, DataJpaRepositoriesAutoConfiguration.class,
         SecurityAutoConfiguration.class})
     static class Config {
     }

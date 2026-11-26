@@ -17,6 +17,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 API_DIR="$ROOT/apps/api"
 
+set -a
+[ -f "$ROOT/.env" ] && . "$ROOT/.env"
+set +a
+
 cd "$API_DIR"
 
 if [ ! -d target/classes ]; then
@@ -26,21 +30,16 @@ fi
 
 # classpath 交给 Maven 解析：版本跟着 pom 走，不用手挑 jar
 # （手挑容易挑到别的大版本，加载错类，症状还很难看懂）。
-CP_FILE="target/runtime-classpath.txt"
-if [ ! -f "$CP_FILE" ] || [ pom.xml -nt "$CP_FILE" ]; then
-  # 离线优先：插件自己的依赖未必缓存过，缺了就联网取一次（取过之后一直能离线跑）。
-  if ! ./mvnw -o -q dependency:build-classpath \
-       -Dmdep.outputFile="$CP_FILE" -DincludeScope=runtime > "$CP_FILE.log" 2>&1; then
-    ./mvnw -q dependency:build-classpath \
-      -Dmdep.outputFile="$CP_FILE" -DincludeScope=runtime
-  fi
-  rm -f "$CP_FILE.log"
-fi
+# shellcheck source=lib/toolkit.sh
+. "$ROOT/infra/scripts/lib/toolkit.sh"
 
-# classpath 分隔符：Windows 用 ;，其余平台用 :
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) SEP=';' ;;
-  *) SEP=':' ;;
-esac
+# Maven 仓库位置：优先 MAVEN_REPO（写在根目录 .env 里），其次默认 ~/.m2/repository。
+M2="${MAVEN_REPO:-}"
+[ -n "$M2" ] || M2="$HOME/.m2/repository"
 
-exec java -cp "target/classes$SEP$(cat "$CP_FILE")" com.skillmesh.admin.PasswordTool "$@"
+# 编译产物是 pom 里 <java.version> 那个版本编出来的，用低版本 JRE 跑只会抛
+# UnsupportedClassVersionError——先挑 JDK，版本不够就直说。
+JAVA_BIN=$(tool_pick_java "$(tool_required_java pom.xml)")
+CP=$(tool_runtime_classpath "$M2")
+
+exec "$JAVA_BIN" -cp "$CP" com.skillmesh.admin.PasswordTool "$@"

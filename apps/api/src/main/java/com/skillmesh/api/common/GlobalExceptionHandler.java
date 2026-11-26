@@ -112,37 +112,37 @@ public class GlobalExceptionHandler {
         Throwable cause = ex;
         // 找两层：Spring 包一层，Jackson 再包一层。
         for (int i = 0; i < 3 && cause != null; i++) {
-            if (cause instanceof com.fasterxml.jackson.databind.exc.ValueInstantiationException
-                || cause instanceof com.fasterxml.jackson.databind.exc.InvalidFormatException) {
+            if (cause instanceof tools.jackson.databind.exc.ValueInstantiationException
+                || cause instanceof tools.jackson.databind.exc.InvalidFormatException) {
                 break;
             }
             cause = cause.getCause();
         }
-        if (!(cause instanceof com.fasterxml.jackson.databind.JsonMappingException mapping)) {
+        if (!(cause instanceof tools.jackson.databind.DatabindException mapping)) {
             return null;
         }
         String name = null;
-        for (com.fasterxml.jackson.databind.JsonMappingException.Reference ref : mapping.getPath()) {
-            if (ref.getFieldName() != null) {
-                name = ref.getFieldName();
+        for (tools.jackson.core.JacksonException.Reference ref : mapping.getPath()) {
+            if (ref.getPropertyName() != null) {
+                name = ref.getPropertyName();
             }
         }
         if (name == null) {
             return null;
         }
-        if (cause instanceof com.fasterxml.jackson.databind.exc.InvalidFormatException invalid) {
+        if (cause instanceof tools.jackson.databind.exc.InvalidFormatException invalid) {
             // Jackson 那条提示是英文的，还带着 Java 类名。自己拼一条中文的：
             // 哪个字段、收到了什么值、能取哪些。
             return name + " 的取值不对：" + invalid.getValue()
                 + "（可用：" + acceptedValues(invalid) + "）";
         }
-        String reason = cause.getCause() == null ? mapping.getOriginalMessage() : cause.getCause().getMessage();
+        String reason = cause.getCause() == null ? mapping.getMessage() : cause.getCause().getMessage();
         return name + " 的取值不对" + (reason == null || reason.isBlank() ? "" : "：" + reason);
     }
 
     /** 这个枚举有哪些可选值，按常量名排。取不到就说见文档，不硬凑。 */
     private static String acceptedValues(
-            com.fasterxml.jackson.databind.exc.InvalidFormatException invalid) {
+            tools.jackson.databind.exc.InvalidFormatException invalid) {
         Class<?> raw = invalid.getTargetType();
         Object[] constants = raw == null ? null : raw.getEnumConstants();
         if (constants == null) {
